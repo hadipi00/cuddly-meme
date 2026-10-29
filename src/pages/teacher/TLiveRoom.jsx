@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
 import LiveRoom from '../../components/LiveRoom'
@@ -6,6 +6,7 @@ import { teacherClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { DAYS, faNum } from '../../utils/format'
 import { useNow, fmtDuration } from '../../hooks/useClassStatus'
+import { req } from '../../services/http'
 
 /**
  * برگزاری کلاس زنده — نمای مدرس.
@@ -16,7 +17,21 @@ export default function TLiveRoom() {
  const { toast, liveSessions, endLive } = useApp()
  const [active, setActive] = useState(null)
  const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
+ const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
  const now = useNow(1000)
+
+ /* کلاس‌های این مدرس از بک‌اند واقعی — در قطعی سرور همان دموی قبلی */
+ useEffect(() => {
+ let alive = true
+ req('/me/teaching').then((r) => {
+ if (!alive || !r.classes?.length) return
+ setMyClasses(r.classes.map((c) => ({
+ id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start,
+ dur: c.dur, students: c.enrolled, room: c.room, desc: c.desc, icon: c.icon, color: c.color,
+ })))
+ }).catch(() => {})
+ return () => { alive = false }
+ }, [])
 
  if (active) return <LiveRoom variant="teacher" classInfo={active} />
 
@@ -36,7 +51,7 @@ export default function TLiveRoom() {
  </div>
 
  <div className="grids g2 mb24">
- {teacherClasses.map((c) => {
+ {myClasses.map((c) => {
  const live = isLive(c)
  const elapsed = live ? now - liveSessions[c.liveId].startedAt : 0
  return (

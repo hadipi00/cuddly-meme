@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BellRing } from 'lucide-react'
 import LiveRoom from '../../components/LiveRoom'
@@ -6,6 +7,7 @@ import { liveClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { DAYS, faNum } from '../../utils/format'
 import { useNow, nextOccurrence, splitDuration, fmtDuration } from '../../hooks/useClassStatus'
+import { req } from '../../services/http'
 
 /**
  * ورود دانش‌آموز به کلاس زنده:
@@ -18,7 +20,22 @@ export default function SLiveRoom() {
  const nav = useNavigate()
  const { liveSessions, toast } = useApp()
  const now = useNow(1000)
- const cls = liveClasses.find((l) => l.id === classId)
+ const [cls, setCls] = useState(() => liveClasses.find((l) => l.id === classId))
+
+ /* اطلاعات کلاس از بک‌اند واقعی (کلاس‌های جدید ساخته‌شده توسط مدرس هم پشتیبانی می‌شود) */
+ useEffect(() => {
+ let alive = true
+ req(`/classes/${classId}`).then((r) => {
+ if (!alive || !r.class) return
+ const c = r.class
+ setCls({
+ id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
+ teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,
+ dur: c.dur, price: c.price, cap: c.cap, enrolled: c.enrolled, room: c.room,
+ })
+ }).catch(() => {})
+ return () => { alive = false }
+ }, [classId])
 
  if (!cls) {
  return (

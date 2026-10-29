@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Radio } from 'lucide-react'
 import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
@@ -6,27 +6,45 @@ import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
 import { Modal } from '../components/Modal'
-import { liveClasses, teachers } from '../data/mock'
+import { liveClasses } from '../data/mock'
 import { useApp } from '../store/AppContext'
 import { DAYS, faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
 import { useNow, nextOccurrence, splitDuration, todayIdx } from '../hooks/useClassStatus'
+import { req } from '../services/http'
 
 const dayLabel = (d) => DAYS[d]
 
 export default function LiveClasses() {
- const { addToCart, toast, user } = useApp()
+ const { addToCart, toast, user, liveSessions } = useApp()
  const nav = useNavigate()
  const now = useNow(1000)
  const tIdx = todayIdx()
  const [day, setDay] = useState('همه')
  const [detail, setDetail] = useState(null)
+ const [baseList, setBaseList] = useState(liveClasses) // fallback: دمو
+
+ /* لیست واقعی کلاس‌ها از سرور — شامل کلاس‌های جدید ساخته‌شده توسط مدرس‌ها */
+ useEffect(() => {
+ let alive = true
+ req('/classes').then((r) => {
+ if (!alive || !r.classes?.length) return
+ setBaseList(r.classes.map((c) => ({
+ id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
+ teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,
+ dur: c.dur, price: c.price, cap: c.cap, enrolled: c.enrolled,
+ status: c.enrolled >= c.cap ? 'full' : (c.cap - c.enrolled <= 5 ? 'filling' : 'open'),
+ date: '', // در سرور کلاس هفتگی تکرارشونده است
+ })))
+ }).catch(() => {})
+ return () => { alive = false }
+ }, [])
 
  // اتصال هر کلاس به وضعیت زنده + زمان شروع بعدی
- const enriched = useMemo(() => liveClasses.map((l) => ({
+ const enriched = useMemo(() => baseList.filter((l) => l.day != null).map((l) => ({
  ...l,
  startsAt: nextOccurrence(l.day, l.start),
- })), [])
+ })), [baseList])
 
  const list = day === 'همه' ? enriched : enriched.filter((l) => dayLabel(l.day) === day)
  const todayList = enriched.filter((l) => l.day === tIdx)
@@ -55,6 +73,9 @@ export default function LiveClasses() {
  const [h, m] = l.start.split(':').map(Number)
  const endMin = h * 60 + m + l.dur
  const endTime = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`
+ // تاریخ شروع بعدی واقعی (کلاس هفتگی تکرارشونده)
+ const d = l.startsAt
+ const isoDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
  return {
  '@type': 'ListItem',
  position: i + 1,
@@ -62,8 +83,8 @@ export default function LiveClasses() {
  '@type': 'Event',
  name: l.title,
  description: l.desc,
- startDate: `${l.date}T${l.start}:00+03:30`,
- endDate: `${l.date}T${endTime}:00+03:30`,
+ startDate: `${isoDate}T${l.start}:00+03:30`,
+ endDate: `${isoDate}T${endTime}:00+03:30`,
  eventAttendanceMode: 'https://schema.org/OnlineEventAttendanceMode',
  eventStatus: l.status === 'full'
  ? 'https://schema.org/EventSoldOut'
@@ -158,7 +179,9 @@ export default function LiveClasses() {
  fallback={<span className="c-emoji" style={{ fontSize: 44 }}><DataIcon name={l.icon} size={44} /></span>}
  />
  <span className={`badge c-badge ${l.status === 'full' ? 'b-red' : 'b-green'}`}>
- {l.status === 'full' ? 'تکمیل ظرفیت' : 'در حال ثبت‌نام'}
+ {liveSessions?.[l.id] && !liveSessions[l.id].ended
+ ? '● در حال برگزاری'
+ : (l.status === 'full' ? 'تکمیل ظرفیت' : 'در حال ثبت‌نام')}
  </span>
  <span className="badge b-gray c-level">{dayLabel(l.day)} • {l.start}</span>
  </div>

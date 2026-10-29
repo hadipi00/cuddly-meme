@@ -104,7 +104,7 @@ export default function PanelLayout({ role, roleLabel, nav }) {
  <main className="p-content" onClick={() => setNotiOpen(false)}>
  <div className="demo-banner">
  <Icon name="sparkles" />
- نسخه نمایشی — داده‌ها نمونه هستند و بعد از اتصال بک‌اند واقعی جایگزین می‌شوند.
+ حالت آنلاین — حساب، کلاس‌های زنده، حضور و چت روی سرور ذخیره می‌شود. بخش‌های فروشگاه و دوره‌ها موقتاً نمایشی هستند.
  </div>
  <Outlet />
  </main>

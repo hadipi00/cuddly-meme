@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "server:watch": "node --watch server/index.js",
     "build": "vite build && node scripts/post-build.mjs",
     "preview": "vite preview"
   },

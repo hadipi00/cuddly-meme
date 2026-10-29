@@ -1,18 +1,20 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { DEMO_USERS } from '../config/site'
+import { req, setToken, getToken } from '../services/http'
 
 // ================= استور مرکزی برنامه (ورود، سبد خرید، علاقه‌مندی، کلاس‌ها و ...) =================
-// برای اتصال به بک‌اند: اکشن‌های این کانتکست به متدهای services/api وصل می‌شوند.
+// ورود/ثبت‌نام به بک‌اند واقعی (JWT) وصل است؛ اگر سرور در دسترس نباشد
+// خودکار به حالت دمو (آفلاین) برمی‌گردد تا سایت هیچ‌وقت نمی‌شکند.
 
 const KEY = 'modaresyar:v1'
 const blank = {
  user: null, cart: [], wishlist: [], customClasses: [], lessonDone: {}, extraMinutes: 0,
- liveSessions: {}, // { [classId]: { startedAt, ended } } — وضعیت واقعی کلاس زنده (مدرس شروع/پایان می‌کند)
+ liveSessions: {}, // { [classId]: { startedAt, ended } } — آینه‌ی وضعیت سرور (poll هر ۴ ثانیه)
  recentlyViewed: [], coupons: {}, // کدهای تخفیف اعمال‌شده روی سبد
 }
 
 function load() {
- try { return { ...blank, ...JSON.parse(localStorage.getItem(KEY)) } } catch { return { ...blank } }
+ try { return { ...blank, ...JSON.parse(localStorage.getItem(KEY)), token: getToken() } } catch { return { ...blank, token: getToken() } }
 }
 
 const Ctx = createContext(null)
@@ -34,18 +36,74 @@ export function AppProvider({ children }) {
 
  const patch = (fn) => setState((s) => ({ ...s, ...fn(s) }))
 
+ /** حالت دمو (فقط وقتی بک‌اند در دسترس نیست) */
+ const loginDemo = useCallback((role, name) => {
+ const u = { ...(DEMO_USERS[role] || DEMO_USERS.student) }
+ if (name) u.name = name
+ patch(() => ({ user: u, token: null }))
+ toast(`حالت آفلاین: با حساب آزمایشی ${u.roleLabel} وارد شدید`)
+ return { ok: true, role: u.role, demo: true }
+ }, [toast])
+
+ /* ---------- همگام‌سازی وضعیت کلاس زنده از سرور (منبع حقیقت) ---------- */
+ const liveRef = useRef({})
+ useEffect(() => {
+ let alive = true
+ const tick = async () => {
+ try {
+ const r = await req('/live/overview')
+ const next = {}
+ for (const c of r.classes || []) {
+ if (c.status === 'live') next[c.id] = { startedAt: c.startedAt, ended: false }
+ else if (c.status === 'ended') next[c.id] = { startedAt: c.startedAt || Date.now(), ended: true, endedAt: c.endedAt }
+ }
+ // فقط وقتی واقعاً تغییری هست state را آپدیت کن (بدون re-render اضافی)
+ if (JSON.stringify(next) !== JSON.stringify(liveRef.current)) {
+ liveRef.current = next
+ patch(() => ({ liveSessions: next }))
+ }
+ } catch { /* سرور قطع است — حالت دمو */ }
+ }
+ tick()
+ const t = setInterval(tick, 4000)
+ return () => { alive = false; clearInterval(t) }
+ }, [])
+
  const value = useMemo(() => ({
  ...state,
  toasts,
  toast,
- login(role, name) {
- const u = { ...(DEMO_USERS[role] || DEMO_USERS.student) }
- if (name) u.name = name
- patch(() => ({ user: u }))
- toast(`خوش آمدید، ${u.name}!`)
- return u
+ /** ورود واقعی با بک‌اند (JWT) — اگر سرور قطع باشد → حالت دمو با نقش URL */
+ async login(email, password, fallbackRole = 'student') {
+ try {
+ const r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ setToken(r.token)
+ patch(() => ({ user: r.user, token: r.token }))
+ toast(`خوش آمدید، ${r.user.name}!`)
+ return { ok: true, role: r.user.role, demo: false }
+ } catch (e) {
+ if (e.serverDown) return loginDemo(fallbackRole)
+ return { ok: false, error: e.message }
+ }
  },
- logout() { patch(() => ({ user: null })) },
+ /** ثبت‌نام واقعی (نقش: دانش‌آموز) — اگر سرور قطع باشد → حالت دمو */
+ async register(name, email, password) {
+ try {
+ const r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
+ setToken(r.token)
+ patch(() => ({ user: r.user, token: r.token }))
+ toast(`حساب شما ساخته شد — خوش آمدید، ${r.user.name}!`)
+ return { ok: true, role: r.user.role, demo: false }
+ } catch (e) {
+ if (e.serverDown) return loginDemo('student', name)
+ return { ok: false, error: e.message }
+ }
+ },
+ loginDemo,
+ logout() {
+ setToken(null)
+ patch(() => ({ user: null, token: null }))
+ },
  addToCart(item, qty = 1) {
  setState((s) => {
  const cap = item.maxStock || 99
@@ -103,15 +161,23 @@ export function AppProvider({ children }) {
  patch((s) => ({ orders: [...(s.orders || []), { code, date: today, ...order }], cart: [] }))
  return code
  },
- /* ---------- موتور کلاس زنده ---------- */
- /** مدرس کلاس را شروع می‌کند — دانش‌آموزان بلافاصله بج «زنده» و دکمه ورود می‌بینند */
+ /* ---------- موتور کلاس زنده — دستور مدرس به سرور + آپدیت خوش‌بینانه ---------- */
+ /** مدرس کلاس را شروع می‌کند — برای همه کاربران (از سرور) بج «زنده» و دکمه ورود فعال می‌شود */
  startLive(classId) {
  patch((s) => ({ liveSessions: { ...s.liveSessions, [classId]: { startedAt: Date.now(), ended: false } } }))
+ liveRef.current = { ...liveRef.current, [classId]: { startedAt: Date.now(), ended: false } }
+ req(`/classes/${classId}/start`, { method: 'POST' }).catch((e) => {
+ if (!e.serverDown) toast(e.message || 'شروع کلاس ناموفق بود', 'error')
+ })
  },
  endLive(classId) {
  patch((s) => {
  const cur = s.liveSessions[classId]
  return { liveSessions: { ...s.liveSessions, [classId]: { ...(cur || {}), ended: true, startedAt: cur?.startedAt || Date.now() } } }
+ })
+ liveRef.current = { ...liveRef.current, [classId]: { ...(liveRef.current[classId] || {}), ended: true } }
+ req(`/classes/${classId}/end`, { method: 'POST' }).catch((e) => {
+ if (!e.serverDown) toast(e.message || 'پایان کلاس ناموفق بود', 'error')
  })
  },
  /** ثبت آخرین بازدید محصول/دوره برای ریل «ادامه بده» */

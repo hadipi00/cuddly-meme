@@ -1,34 +1,72 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
 import { teacherClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { DAYS, SLOTS, faNum } from '../../utils/format'
+import { req } from '../../services/http'
+
+const SLOT_HOURS = [8, 10, 12, 14, 16, 18, 20] // معادل SLOTS (فارسی)
 
 /**
- * کلاس‌های پیش‌رو مدرس:
- * مدرس جلسات جدید تعریف می‌کند → بلافاصله در جدول هفتگی دانش‌آموزهایش نمایش داده می‌شود.
+ * مدیریت کلاس‌های پیش‌رو مدرس — نسخه بک‌اند واقعی:
+ * ساخت/ویرایش/حذف کلاس روی دیتابیس سرور — بلافاصله در «کلاس زنده — برگزاری» و
+ * صفحه عمومی کلاس‌ها دیده می‌شود. در قطعی سرور، همان لیست نمونه نمایش داده می‌شود.
  */
 export default function TClasses() {
- const { customClasses, addClass, updateClass, removeClass, toast } = useApp()
+ const { toast } = useApp()
+ const nav = useNavigate()
  const [modal, setModal] = useState(null) // 'new' | row
- const rows = [...customClasses.map((c) => ({ ...c, source: 'تعریف‌شده توسط من' })), ...teacherClasses.map((c) => ({ ...c, source: 'سامانه' }))]
+ const [rows, setRows] = useState(() => teacherClasses.map((c) => ({ ...c, source: 'سامانه' })))
+ const [serverOn, setServerOn] = useState(false)
 
- const save = (data) => {
- const payload = {
- title: data.title, day: Number(data.day), slot: Number(data.slot),
- start: SLOTS[Number(data.slot)], dur: Number(data.dur) || 60,
- teacher: 'من', room: 'room-new', color: 'cb-teal',
+ const load = () => {
+ req('/me/teaching').then((r) => {
+ if (!r.classes) return
+ setServerOn(true)
+ setRows(r.classes.map((c) => ({
+ id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start,
+ dur: c.dur, students: c.enrolled, room: c.room, source: 'روی سرور (واقعی)',
+ })))
+ }).catch(() => setServerOn(false))
  }
+ useEffect(load, [])
+
+ const save = async (data) => {
+ const start = `${SLOT_HOURS[Number(data.slot)] || 16}:00`
+ const payload = {
+ title: data.title, day: Number(data.day), start,
+ dur: Number(data.dur) || 60, cap: Number(data.cap) || 30, desc: '',
+ }
+ try {
  if (modal === 'new') {
- addClass(payload)
- toast('کلاس جدید ثبت شد — در جدول هفتگی دانشجوهایتان نمایش داده می‌شود ')
+ await req('/classes', { method: 'POST', body: payload })
+ toast('کلاس جدید روی سرور ثبت شد — از «کلاس زنده — برگزاری» قابل شروع است ')
  } else {
- updateClass(modal.id, payload)
- toast('کلاس به‌روزرسانی شد')
+ await req(`/classes/${modal.id}`, { method: 'PATCH', body: payload })
+ toast('کلاس روی سرور به‌روزرسانی شد')
  }
  setModal(null)
+ load()
+ } catch (e) {
+ if (e.serverDown) {
+ toast('سرور در دسترس نیست — در حالت دمو ذخیره نمی‌شود', 'error')
+ } else {
+ toast(e.message || 'ذخیره ناموفق بود', 'error')
+ }
+ }
+ }
+
+ const remove = async (row) => {
+ try {
+ await req(`/classes/${row.id}`, { method: 'DELETE' })
+ toast('کلاس از سرور حذف شد', 'info')
+ load()
+ } catch (e) {
+ toast(e.serverDown ? 'سرور در دسترس نیست' : (e.message || 'حذف ناموفق بود'), 'error')
+ }
  }
 
  return (
@@ -39,10 +77,10 @@ export default function TClasses() {
  <Icon name="calendar" size={20} />
  </span>
  <div>
- <b>تعریف کلاس‌های پیش‌رو برای مشتری‌های شما</b>
+ <b>مدیریت کلاس‌های پیش‌رو {serverOn ? '— ذخیره واقعی روی سرور' : ''}</b>
  <p className="muted small">
- هر کلاسی که اینجا تعریف کنید، به‌صورت خودکار در جدول هفتگی دانشجوهایتان ظاهر می‌شود
- و لینک ورود به کلاس زنده برایشان فعال خواهد بود.
+ هر کلاسی که اینجا تعریف کنید روی سرور ذخیره می‌شود، در «کلاس زنده — برگزاری» قابل شروع است
+ و لینک ورود دانشجوها به همان کلاس فعال خواهد بود.
  </p>
  </div>
  </div>
@@ -55,7 +93,7 @@ export default function TClasses() {
  { key: 'day', label: 'روز هفته', render: (r) => DAYS[r.day] },
  { key: 'start', label: 'ساعت شروع' },
  { key: 'dur', label: 'مدت (دقیقه)', render: (r) => faNum(r.dur) },
- { key: 'students', label: 'دانشجو', render: (r) => faNum(r.students ?? 18) },
+ { key: 'students', label: 'ثبت‌نام', render: (r) => faNum(r.students ?? 0) },
  { key: 'source', label: 'منبع', render: (r) => <span className={`badge ${r.source === 'سامانه' ? 'b-gray' : 'b-teal'}`}>{r.source}</span> },
  ]}
  rows={rows}
@@ -65,13 +103,9 @@ export default function TClasses() {
  addLabel="کلاس جدید"
  actions={(row) => (
  <>
- {row.source === 'تعریف‌شده توسط من' ? (
- <>
  <button className="icon-btn" title="ویرایش" onClick={() => setModal(row)}><Icon name="edit" /></button>
- <button className="icon-btn" title="حذف" onClick={() => { removeClass(row.id); toast('کلاس حذف شد و از جدول دانشجوها پاک شد', 'info') }}><Icon name="trash" /></button>
- </>
- ) : null}
- <button className="icon-btn" title="شروع کلاس زنده" onClick={() => toast('برای شروع، از منوی «کلاس زنده — برگزاری» استفاده کنید', 'info')}><Icon name="video" /></button>
+ <button className="icon-btn" title="حذف" onClick={() => remove(row)}><Icon name="trash" /></button>
+ <button className="icon-btn" title="شروع کلاس زنده" onClick={() => nav('/panel/teacher/live')}><Icon name="video" /></button>
  </>
  )}
  />
@@ -82,8 +116,8 @@ export default function TClasses() {
  title={modal === 'new' ? 'تعریف کلاس پیش‌رو جدید' : 'ویرایش کلاس'}
  onClose={() => setModal(null)}
  onSubmit={save}
- initial={modal && modal !== 'new' ? { title: modal.title, day: String(modal.day), slot: String(modal.slot), dur: modal.dur } : {}}
- submitLabel={modal === 'new' ? 'ثبت کلاس در جدول هفتگی' : 'ذخیره تغییرات'}
+ initial={modal && modal !== 'new' ? { title: modal.title, day: String(modal.day), slot: String(Math.max(0, SLOT_HOURS.indexOf(parseInt(modal.start)))), dur: modal.dur } : {}}
+ submitLabel={modal === 'new' ? 'ثبت کلاس روی سرور' : 'ذخیره تغییرات'}
  fields={[
  { key: 'title', label: 'عنوان کلاس', full: true, placeholder: 'مثلاً کارگاه React — هوک‌های پیشرفته' },
  { key: 'day', label: 'روز هفته', type: 'select', options: DAYS.map((d, i) => ({ value: String(i), label: d })) },
