@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { ShoppingCart, Heart, Star, Clock, PlayCircle, User } from 'lucide-react'
 import Icon from './Icon'
+import SmartImg from './SmartImg'
 import { RatingStars } from './ui'
 import { useApp } from '../store/AppContext'
 import { faNum, toman } from '../utils/format'
@@ -14,7 +15,14 @@ export function CourseCard({ course, myProgress }) {
   return (
     <div className="card course-card" onClick={() => nav(`/courses/${course.id}`)}>
       <div className={`c-thumb ${course.color}`}>
-        <DataIcon name={course.icon} size={54} />
+        {/* عکس واقعی دوره با alt کامل — سئوی تصویر گوگل؛ در صورت خطا گرادیان + آیکون */}
+        <SmartImg
+          src={`/images/courses/c${course.id}.jpg`}
+          alt={`کاور دوره ${course.title} — ${course.cat}`}
+          width={672}
+          height={330}
+          fallback={<DataIcon name={course.icon} size={54} />}
+        />
         {course.badge && <span className="badge b-amber c-badge">{course.badge}</span>}
         <span className="badge b-gray c-level">{course.level}</span>
         <span className="badge b-gray c-type"><Icon name="video" size={12} /> ضبط‌شده</span>
@@ -84,7 +92,14 @@ export function ProductCard({ product, onQuickView }) {
   return (
     <div className="card product-card mk-card" onClick={() => nav(`/market/${product.id}`)}>
       <div className={`p-thumb ${product.color}`}>
-        <DataIcon name={product.icon} size={52} />
+        {/* عکس واقعی محصول با alt — سئوی تصویر گوگل شاپینگ */}
+        <SmartImg
+          src={`/images/products/${product.id}.jpg`}
+          alt={`${product.name} — ${product.cat} | مدرس‌مارکت`}
+          width={512}
+          height={300}
+          fallback={<DataIcon name={product.icon} size={52} />}
+        />
         {off > 0 && <span className="badge discount p-off">٪{faNum(off)}</span>}
         {!off && product.badge && <span className="badge b-amber p-badge">{product.badge}</span>}
         <button

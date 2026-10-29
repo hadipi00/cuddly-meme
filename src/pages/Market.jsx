@@ -172,7 +172,7 @@ export default function Market() {
 
         <div className="mk-layout">
           {/* سایدبار فیلتر — دسکتاپ */}
-          <aside className="mk-filters hidden lg:flex">
+          <aside className="mk-filters hidden lg:block">
             <div className="between mb16">
               <b className="row g8"><SlidersHorizontal size={16} /> فیلترها</b>
               {activeCount > 0 && <Badge variant="discount">{faNum(activeCount)}</Badge>}

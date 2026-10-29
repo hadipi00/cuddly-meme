@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import Seo from '../components/Seo'
 import Icon from '../components/Icon'
+import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import { Reveal } from '../components/ui'
 import { blogPosts } from '../data/mock'
@@ -26,7 +27,13 @@ export default function Blog() {
  <Link to={`/blog/${p.id}`}>
  <div className="card course-card" style={{ height: '100%' }}>
  <div className={`c-thumb ${p.color}`} style={{ height: 140 }}>
- <span className="c-emoji" style={{ fontSize: 46 }}><DataIcon name={p.icon} size={46} /></span>
+ <SmartImg
+  src={`/images/blog/b${p.id.replace('b', '')}.jpg`}
+  alt={`${p.title} — بلاگ مدرس‌یار`}
+  width={672}
+  height={280}
+  fallback={<span className="c-emoji" style={{ fontSize: 46 }}><DataIcon name={p.icon} size={46} /></span>}
+ />
  <span className="badge b-gray c-level">{p.cat}</span>
  </div>
  <div className="c-body">

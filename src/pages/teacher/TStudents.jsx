@@ -1,6 +1,7 @@
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { Avatar } from '../../components/ui'
+import { StatCard } from '../../components/PanelLayout'
 import { teacherStudents } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { faNum } from '../../utils/format'

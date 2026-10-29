@@ -6,6 +6,7 @@ import {
   PackageCheck, Boxes, Minus, Plus, ShieldCheck,
 } from 'lucide-react'
 import Icon from '../components/Icon'
+import SmartImg from '../components/SmartImg'
 import { Reveal, RatingStars } from '../components/ui'
 import { ProductCard } from '../components/cards'
 import { products, reviews } from '../data/mock'
@@ -62,32 +63,45 @@ export default function ProductDetail() {
         title={product.name}
         description={`خرید ${product.name} از مدرس‌مارکت — ${product.cat} با ارسال پیش‌کرایه، پس‌کرایه و پیک فوری تهران.`}
         path={`/market/${product.id}`}
-        jsonLd={{
-          '@context': 'https://schema.org',
-          '@type': 'Product',
-          name: product.name,
-          category: product.cat,
-          brand: { '@type': 'Brand', name: 'مدرس‌یار' },
-          aggregateRating: product.rating
-            ? {
-                '@type': 'AggregateRating',
-                ratingValue: product.rating,
-                ratingCount: product.sold || 10,
-                bestRating: 5,
-                worstRating: 1,
-              }
-            : undefined,
-          offers: {
-            '@type': 'Offer',
-            price: product.price * 10,
-            priceCurrency: 'IRR',
-            availability:
-              product.stock > 0
-                ? 'https://schema.org/InStock'
-                : 'https://schema.org/OutOfStock',
-            url: `${ORIGIN}/market/${product.id}`,
+        image={`${ORIGIN}/images/products/${product.id}.jpg`}
+        jsonLd={[
+          {
+            '@context': 'https://schema.org',
+            '@type': 'Product',
+            name: product.name,
+            category: product.cat,
+            image: [`${ORIGIN}/images/products/${product.id}.jpg`],
+            brand: { '@type': 'Brand', name: 'مدرس‌یار' },
+            aggregateRating: product.rating
+              ? {
+                  '@type': 'AggregateRating',
+                  ratingValue: product.rating,
+                  ratingCount: product.sold || 10,
+                  bestRating: 5,
+                  worstRating: 1,
+                }
+              : undefined,
+            offers: {
+              '@type': 'Offer',
+              price: product.price * 10,
+              priceCurrency: 'IRR',
+              availability:
+                product.stock > 0
+                  ? 'https://schema.org/InStock'
+                  : 'https://schema.org/OutOfStock',
+              url: `${ORIGIN}/market/${product.id}`,
+            },
           },
-        }}
+          {
+            '@context': 'https://schema.org',
+            '@type': 'BreadcrumbList',
+            itemListElement: [
+              { '@type': 'ListItem', position: 1, name: 'صفحه نخست', item: `${ORIGIN}/` },
+              { '@type': 'ListItem', position: 2, name: 'مدرس‌مارکت', item: `${ORIGIN}/market` },
+              { '@type': 'ListItem', position: 3, name: product.name, item: `${ORIGIN}/market/${product.id}` },
+            ],
+          },
+        ]}
       />
       <section className="page-hero" style={{ paddingBottom: 20 }}>
         <div className="container">
@@ -103,7 +117,20 @@ export default function ProductDetail() {
           {/* ستون راست — گالری */}
           <div className="mk-gallery">
             <Reveal className={`card mk-shot ${gallery[shot]}`} style={{ height: 360, borderRadius: 22 }}>
-              <DataIcon name={thumbs[shot] === product.icon ? product.icon : thumbs[shot]} size={116} />
+              {/* نمای اول = عکس واقعی محصول؛ نمای‌های بعدی واریانت گرافیکی */}
+              {shot === 0 ? (
+                <SmartImg
+                  src={`/images/products/${product.id}.jpg`}
+                  alt={`${product.name} — ${product.cat} | خرید از مدرس‌مارکت`}
+                  width={512}
+                  height={360}
+                  loading="eager"
+                  className="mk-shot-img"
+                  fallback={<DataIcon name={product.icon} size={116} />}
+                />
+              ) : (
+                <DataIcon name={thumbs[shot] === product.icon ? product.icon : thumbs[shot]} size={116} />
+              )}
               {off > 0 && <span className="badge discount mk-shot-off">٪{faNum(off)} تخفیف</span>}
             </Reveal>
             <div className="row g8 mt8" style={{ justifyContent: 'center' }}>
@@ -128,7 +155,7 @@ export default function ProductDetail() {
                 {off > 0 && <Badge variant="discount">٪{faNum(off)} تخفیف ویژه</Badge>}
                 <Badge variant="green"><BadgeCheck size={13} /> اورجینال</Badge>
               </div>
-              <h2 style={{ fontSize: 'clamp(18px, 2.2vw, 24px)', lineHeight: 1.7 }}>{product.name}</h2>
+              <h1 style={{ fontSize: 'clamp(18px, 2.2vw, 24px)', lineHeight: 1.7 }}>{product.name}</h1>
               <div className="row g12 mt8 flex-wrap">
                 <span className="row g8 small"><RatingStars value={product.rating} showNum /></span>
                 <span className="muted small">|</span>

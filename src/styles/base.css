@@ -301,6 +301,10 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 /* ---------- reveal on scroll ---------- */
 .reveal { opacity: 0; transform: translateY(26px); transition: opacity 0.7s ease, transform 0.7s ease; }
 .reveal.is-in { opacity: 1; transform: none; }
+/* کاربرانی که انیمیشن نمی‌خواهند — محتوا بدون انیمیشن و همیشه نمایان */
+@media (prefers-reduced-motion: reduce) {
+ .reveal { opacity: 1; transform: none; transition: none; }
+}
 
 /* ---------- stats band ---------- */
 .stats-band {
@@ -337,7 +341,10 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 /* ---------- course card ---------- */
 .course-card { overflow: hidden; display: flex; flex-direction: column; cursor: pointer; position: relative; }
 .course-card:hover { transform: translateY(-5px); border-color: rgba(45, 212, 191, 0.4); box-shadow: var(--shadow-lg); }
-.c-thumb { height: 165px; position: relative; display: flex; align-items: center; justify-content: center; }
+.c-thumb { height: 165px; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+/* عکس واقعی دوره/محصول — پوشش کامل بندانگشتی */
+.smart-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.c-thumb .smart-img, .p-thumb .smart-img { position: absolute; inset: 0; }
 .c-thumb .c-emoji { font-size: 52px; filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.35)); }
 .c-thumb .c-badge { position: absolute; top: 14px; inset-inline-start: 14px; }
 .c-thumb .c-level { position: absolute; top: 14px; inset-inline-end: 14px; background: rgba(7, 13, 24, 0.65); backdrop-filter: blur(6px); }
@@ -654,7 +661,7 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 /* چیدمان فیلتر + محصولات */
 .mk-layout { display: grid; grid-template-columns: 250px 1fr; gap: 22px; align-items: start; }
 .mk-filters {
- position: sticky; top: 128px;
+ position: sticky; top: 128px; display: flex; flex-direction: column;
  background: var(--card); border: 1px solid var(--line2);
  border-radius: var(--r-lg); padding: 18px;
  max-height: calc(100vh - 150px); overflow-y: auto;
@@ -688,7 +695,8 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 /* صفحه جزئیات محصول — سه ستونه */
 .mk-detail { display: grid; grid-template-columns: minmax(280px, 380px) 1fr 300px; gap: 24px; align-items: start; }
 .mk-gallery { position: sticky; top: 96px; }
-.mk-shot { display: flex; align-items: center; justify-content: center; position: relative; }
+.mk-shot { display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.mk-shot-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .mk-shot-off { position: absolute; top: 14px; inset-inline-start: 14px; font-size: 13px; padding: 4px 11px; }
 .mk-thumb {
  width: 58px; height: 58px; border-radius: 13px; cursor: pointer;

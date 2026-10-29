@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import Seo from '../components/Seo'
 import Icon from '../components/Icon'
-import { DataIcon } from '../utils/icons'
+import SmartImg from '../components/SmartImg'
 import { Reveal } from '../components/ui'
 import { liveClasses } from '../data/mock'
 import { useApp } from '../store/AppContext'
 import { DAYS, faNum, toman } from '../utils/format'
+import { DataIcon } from '../utils/icons'
 
 export default function LiveClasses() {
  const { addToCart, toast } = useApp()
@@ -41,7 +42,13 @@ export default function LiveClasses() {
  <Reveal key={l.id} delay={(i % 3) * 70}>
  <div className="card" style={{ overflow: 'hidden', height: '100%', display: 'flex', flexDirection: 'column' }}>
  <div className={`c-thumb ${l.color}`} style={{ height: 130 }}>
- <span className="c-emoji" style={{ fontSize: 44 }}><DataIcon name={l.icon} size={44} /></span>
+ <SmartImg
+  src="/images/courses/live.jpg"
+  alt={`${l.title} — کلاس آنلاین زنده با ${l.teacher}`}
+  width={672}
+  height={260}
+  fallback={<span className="c-emoji" style={{ fontSize: 44 }}><DataIcon name={l.icon} size={44} /></span>}
+ />
  <span className={`badge c-badge ${l.status === 'full' ? 'b-red' : 'b-green'}`}>
  {l.status === 'full' ? 'تکمیل ظرفیت' : 'در حال ثبت‌نام'}
  </span>

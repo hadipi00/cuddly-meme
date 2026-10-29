@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Seo, { ORIGIN } from '../components/Seo'
 import Icon from '../components/Icon'
+import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import { RatingStars, Reveal, Avatar } from '../components/ui'
 import { CourseCard } from '../components/cards'
@@ -28,27 +29,41 @@ export default function CourseDetail() {
   title={course.title}
   description={course.desc}
   path={`/courses/${course.id}`}
-  jsonLd={{
-   '@context': 'https://schema.org',
-   '@type': 'Course',
-   name: course.title,
-   description: course.desc,
-   provider: { '@type': 'Organization', name: 'مدرس‌یار', sameAs: `${ORIGIN}/` },
-   aggregateRating: {
-    '@type': 'AggregateRating',
-    ratingValue: course.rating,
-    ratingCount: course.students,
-    bestRating: 5,
-    worstRating: 1,
+  image={`${ORIGIN}/images/courses/c${course.id}.jpg`}
+  jsonLd={[
+   {
+    '@context': 'https://schema.org',
+    '@type': 'Course',
+    name: course.title,
+    description: course.desc,
+    image: [`${ORIGIN}/images/courses/c${course.id}.jpg`],
+    inLanguage: 'fa-IR',
+    provider: { '@type': 'Organization', name: 'مدرس‌یار', sameAs: `${ORIGIN}/` },
+    aggregateRating: {
+     '@type': 'AggregateRating',
+     ratingValue: course.rating,
+     ratingCount: course.students,
+     bestRating: 5,
+     worstRating: 1,
+    },
+    offers: {
+     '@type': 'Offer',
+     price: course.price * 10,
+     priceCurrency: 'IRR',
+     availability: 'https://schema.org/InStock',
+     url: `${ORIGIN}/courses/${course.id}`,
+    },
    },
-   offers: {
-    '@type': 'Offer',
-    price: course.price * 10,
-    priceCurrency: 'IRR',
-    availability: 'https://schema.org/InStock',
-    url: `${ORIGIN}/courses/${course.id}`,
+   {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+     { '@type': 'ListItem', position: 1, name: 'صفحه نخست', item: `${ORIGIN}/` },
+     { '@type': 'ListItem', position: 2, name: 'دوره‌های آموزشی', item: `${ORIGIN}/courses` },
+     { '@type': 'ListItem', position: 3, name: course.title, item: `${ORIGIN}/courses/${course.id}` },
+    ],
    },
-  }}
+  ]}
  />
  <section className="page-hero" style={{ paddingBottom: 24 }}>
  <div className="container">
@@ -63,7 +78,14 @@ export default function CourseDetail() {
  <div className="detail-layout">
  <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
  <Reveal className={`card c-thumb ${course.color}`} style={{ height: 300, borderRadius: 22 }}>
- <span className="c-emoji" style={{ fontSize: 84 }}><DataIcon name={course.icon} size={84} /></span>
+ <SmartImg
+  src={`/images/courses/c${course.id}.jpg`}
+  alt={`کاور دوره ${course.title} — ${course.cat} | مدرس‌یار`}
+  width={672}
+  height={300}
+  loading="eager"
+  fallback={<span className="c-emoji" style={{ fontSize: 84 }}><DataIcon name={course.icon} size={84} /></span>}
+ />
  {course.badge && <span className="badge b-amber c-badge">{course.badge}</span>}
  </Reveal>
 

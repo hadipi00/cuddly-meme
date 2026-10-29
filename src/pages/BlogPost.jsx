@@ -1,5 +1,6 @@
 import { useParams, Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN } from '../components/Seo'
+import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import Icon from '../components/Icon'
 import { blogPosts } from '../data/mock'
@@ -17,16 +18,31 @@ export default function BlogPost() {
   title={post.title}
   description={post.excerpt}
   path={`/blog/${post.id}`}
-  jsonLd={{
-   '@context': 'https://schema.org',
-   '@type': 'BlogPosting',
-   headline: post.title,
-   description: post.excerpt,
-   articleSection: post.cat,
-   author: { '@type': 'Organization', name: 'مدرس‌یار' },
-   publisher: { '@type': 'Organization', name: 'مدرس‌یار' },
-   mainEntityOfPage: `https://modaresyar.ir/blog/${post.id}`,
-  }}
+  type="article"
+  image={`${ORIGIN}/images/blog/b${post.id.replace('b', '')}.jpg`}
+  jsonLd={[
+   {
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    headline: post.title,
+    description: post.excerpt,
+    image: [`${ORIGIN}/images/blog/b${post.id.replace('b', '')}.jpg`],
+    inLanguage: 'fa-IR',
+    articleSection: post.cat,
+    author: { '@type': 'Organization', name: 'مدرس‌یار', url: `${ORIGIN}/` },
+    publisher: { '@type': 'Organization', name: 'مدرس‌یار', logo: { '@type': 'ImageObject', url: `${ORIGIN}/favicon.svg` } },
+    mainEntityOfPage: `${ORIGIN}/blog/${post.id}`,
+   },
+   {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+     { '@type': 'ListItem', position: 1, name: 'صفحه نخست', item: `${ORIGIN}/` },
+     { '@type': 'ListItem', position: 2, name: 'وبلاگ', item: `${ORIGIN}/blog` },
+     { '@type': 'ListItem', position: 3, name: post.title, item: `${ORIGIN}/blog/${post.id}` },
+    ],
+   },
+  ]}
  />
  <section className="page-hero" style={{ paddingBottom: 16 }}>
  <div className="container">
@@ -38,8 +54,15 @@ export default function BlogPost() {
  </section>
 
  <article className="container" style={{ maxWidth: 820 }}>
- <div className={`card p-thumb ${post.color}`} style={{ height: 260, borderRadius: 22 }}>
- <span className="p-emoji" style={{ fontSize: 84 }}><DataIcon name={post.icon} size={84} /></span>
+ <div className={`card p-thumb ${post.color}`} style={{ height: 260, borderRadius: 22, overflow: 'hidden' }}>
+ <SmartImg
+  src={`/images/blog/b${post.id.replace('b', '')}.jpg`}
+  alt={`${post.title} — مقالات آموزشی مدرس‌یار`}
+  width={672}
+  height={260}
+  loading="eager"
+  fallback={<span className="p-emoji" style={{ fontSize: 84 }}><DataIcon name={post.icon} size={84} /></span>}
+ />
  </div>
  <span className="kicker mt24">{post.cat}</span>
  <h1 style={{ fontSize: 'clamp(22px,3vw,30px)', marginBlock: '10px 8px' }}>{post.title}</h1>

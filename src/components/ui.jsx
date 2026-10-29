@@ -40,19 +40,46 @@ export function RatingStars({ value = 5, showNum = false }) {
  )
 }
 
-/** نمایان‌سازی نرم هنگام اسکرول */
+/** نمایان‌سازی نرم — نسخه ضدخطا
+ *  تضمین می‌کند محتوا هرگز نامرئی نماند:
+ *  ۱) عنصر داخل دید اولیه → فوراً نمایش
+ *  ۲) IntersectionObserver برای انیمیشن هنگام اسکرول
+ *  ۳) اگر کاربر با اسکرول سریع/درگ اسکرول‌بار از روی عنصر رد شود
+ *     (IO دیگر fire نمی‌شود) → تشخیص «بالای viewport» و نمایش
+ *  ۴) تایمر اطمینان: حداکثر ~۱ ثانیه بعد، هر عنصری نمایش داده می‌شود
+ *  ۵) با prefers-reduced-motion انیمیشن کلاً غیرفعال می‌شود (CSS) */
 export function Reveal({ children, delay = 0, className = '', as: Tag = 'div', ...rest }) {
  const ref = useRef(null)
  useEffect(() => {
  const el = ref.current
  if (!el) return
+ const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+ if (reduce || !('IntersectionObserver' in window)) {
+ el.classList.add('is-in')
+ return
+ }
  el.style.transitionDelay = `${delay}ms`
+ let done = false
+ const show = () => {
+ if (done) return
+ done = true
+ el.classList.add('is-in')
+ io.disconnect()
+ clearTimeout(safety)
+ }
  const io = new IntersectionObserver(
- ([e]) => { if (e.isIntersecting) { el.classList.add('is-in'); io.disconnect() } },
- { threshold: 0.12 }
+ (entries) => {
+ for (const e of entries) {
+ /* isIntersecting = در دید است؛ boundingRect.top < 0 = کاربر از روی آن رد شده */
+ if (e.isIntersecting || e.boundingClientRect.top < 0) show()
+ }
+ },
+ { threshold: 0.08 }
  )
  io.observe(el)
- return () => io.disconnect()
+ /* تور ایمن نهایی — هیچ محتوایی بیش از ~۱ ثانیه پنهان نمی‌ماند */
+ const safety = setTimeout(show, 1000 + delay)
+ return () => { io.disconnect(); clearTimeout(safety) }
  }, [delay])
  return (
  <Tag ref={ref} className={`reveal ${className}`} {...rest}>

@@ -43,8 +43,10 @@ export default function Seo({
   type = 'website',
   robots = 'index, follow, max-image-preview:large',
   jsonLd, // آبجکت یا آرایه‌ای از آبجکت‌های schema.org
+  image, // آدرس مطلق og:image — پیش‌فرض بنر اصلی سایت
 }) {
   const jsonLdKey = jsonLd ? JSON.stringify(jsonLd) : ''
+  const ogImage = image || `${ORIGIN}/images/og.jpg`
 
   useEffect(() => {
     const fullTitle = title ? `${title} | ${SITE_NAME}` : `${SITE_NAME} | پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی`
@@ -59,9 +61,14 @@ export default function Seo({
     upsertMeta('property', 'og:url', url)
     upsertMeta('property', 'og:site_name', SITE_NAME)
     upsertMeta('property', 'og:locale', 'fa_IR')
-    upsertMeta('name', 'twitter:card', 'summary')
+    upsertMeta('property', 'og:image', ogImage)
+    upsertMeta('property', 'og:image:width', '1440')
+    upsertMeta('property', 'og:image:height', '720')
+    upsertMeta('property', 'og:image:alt', fullTitle)
+    upsertMeta('name', 'twitter:card', 'summary_large_image')
     upsertMeta('name', 'twitter:title', fullTitle)
     upsertMeta('name', 'twitter:description', description)
+    upsertMeta('name', 'twitter:image', ogImage)
     upsertLink('canonical', url)
 
     // داده ساختاریافته صفحه — هر بار به‌روزرسانی کامل می‌شود
@@ -74,7 +81,7 @@ export default function Seo({
       document.head.appendChild(s)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, description, path, type, robots, jsonLdKey])
+  }, [title, description, path, type, robots, jsonLdKey, ogImage])
 
   return null
 }
