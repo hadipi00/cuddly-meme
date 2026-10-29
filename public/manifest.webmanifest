@@ -1,0 +1,20 @@
+{
+  "name": "مدرس‌یار | پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی",
+  "short_name": "مدرس‌یار",
+  "description": "خرید کلاس‌های آنلاین، دوره‌های ضبط‌شده و لوازم‌التحریر از مدرس‌مارکت",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070d18",
+  "theme_color": "#070d18",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

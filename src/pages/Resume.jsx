@@ -1,4 +1,6 @@
 import Icon from '../components/Icon'
+import { Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import { Reveal, RatingStars } from '../components/ui'
 import { teachers } from '../data/mock'
 import { site } from '../config/site'
@@ -8,10 +10,14 @@ export default function Resume() {
  const lead = teachers[0]
  return (
  <>
+ <Seo
+  title="رزومه و افتخارات"
+  description="سابقه، افتخارات و دستاوردهای آکادمی مدرس‌یار — دانلود رزومه رسمی مدرس‌یار."
+ />
  <section className="page-hero">
  <div className="container">
  <div className="breadcrumb">
- <a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>رزومه و افتخارات</span>
+ <Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>رزومه و افتخارات</span>
  </div>
  <h1>رزومه و افتخارات <span className="text-teal">مدرس‌یار</span></h1>
  <p className="muted" style={{ maxWidth: 620 }}>

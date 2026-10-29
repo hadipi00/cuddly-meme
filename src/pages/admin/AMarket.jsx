@@ -201,7 +201,7 @@ export default function AMarket() {
               </DialogHeader>
               <table className="dtable" style={{ minWidth: 'auto' }}>
                 <tbody>
-                  [['اقلام', detail.items], ['مبلغ کل', toman(detail.total)],
+                  {[['اقلام', detail.items], ['مبلغ کل', toman(detail.total)],
                    ['روش ارسال', detail.ship], ['وضعیت', ORDER_STATUS[detail.status][0]],
                    ['آدرس مقصد', detail.addr]].map(([k, v]) => (
                     <tr key={k}><td className="muted" style={{ width: 110 }}>{k}</td><td className="cell-strong">{v}</td></tr>

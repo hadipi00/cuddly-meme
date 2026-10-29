@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import Seo, { ORIGIN } from '../components/Seo'
 import {
   Search, SlidersHorizontal, X, PackageCheck, Percent, Store, RotateCcw,
   Truck, BadgeCheck, Undo2, CreditCard, ShoppingBag,
@@ -27,6 +28,7 @@ const SORTS = [
 const MAX_PRICE = 1000000
 
 export default function Market() {
+  const navigate = useNavigate()
   const [cat, setCat] = useState('همه')
   const [q, setQ] = useState('')
   const [sort, setSort] = useState('best')
@@ -113,6 +115,20 @@ export default function Market() {
 
   return (
     <>
+      <Seo
+        title="مدرس‌مارکت — فروشگاه لوازم‌التحریر"
+        description="خرید آنلاین نوشت‌افزار، لوازم هنری، اداری و دانش‌آموزی با تخفیف واقعی؛ ارسال پیش‌کرایه، پس‌کرایه و پیک فوری تهران — مدرس‌مارکت."
+        jsonLd={{
+          '@context': 'https://schema.org',
+          '@type': 'ItemList',
+          itemListElement: products.map((p, i) => ({
+            '@type': 'ListItem',
+            position: i + 1,
+            name: p.name,
+            url: `${ORIGIN}/market/${p.id}`,
+          })),
+        }}
+      />
       <section className="page-hero" style={{ paddingBottom: 20 }}>
         <div className="container">
           <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>مدرس‌مارکت</span></div>
@@ -251,7 +267,7 @@ export default function Market() {
                   className="flex-1"
                   onClick={() => {
                     setQuick(null)
-                    window.location.hash = `#/market/${quick.id}`
+                    navigate(`/market/${quick.id}`)
                   }}
                 >
                   <PackageCheck size={16} /> مشاهده و خرید

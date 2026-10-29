@@ -4,8 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // مسیرهای نسبی → بیلد روی هر هاستی (ریشه یا زیرپوشه مثل GitHub Pages) کار می‌کند
-  base: './',
+  // مسیر مطلق — برای BrowserRouter و URLهای تمیز (لازم برای سئو) ضروری است
+  base: '/',
   server: { port: 3000, host: '0.0.0.0', open: false, allowedHosts: true },
   preview: { port: 4173, host: '0.0.0.0', open: false, allowedHosts: true },
   build: {

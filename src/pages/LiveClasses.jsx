@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { DataIcon } from '../utils/icons'
 import { Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { liveClasses } from '../data/mock'
@@ -14,9 +14,13 @@ export default function LiveClasses() {
 
  return (
  <>
+ <Seo
+  title="کلاس‌های آنلاین زنده"
+  description="رزرو کلاس‌های آنلاین زنده با اساتید برتر — کلاس‌های تعاملی با ضبط جلسات، تکلیف و گواهی‌نامه — مدرس‌یار."
+ />
  <section className="page-hero">
  <div className="container">
- <div className="breadcrumb"><a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>کلاس‌های آنلاین</span></div>
+ <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>کلاس‌های آنلاین</span></div>
  <h1>کلاس‌های <span className="text-teal">آنلاین زنده</span></h1>
  <p className="muted">
  تدریس زنده با دوربین و اشتراک صفحه، پرسش‌وپاسخ مستقیم — بعد از ثبت‌نام، کلاس‌ها در جدول هفتگی پنل شما قرار می‌گیرند.

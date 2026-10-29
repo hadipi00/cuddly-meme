@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import Seo, { ORIGIN } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { CourseCard } from '../components/cards'
@@ -6,8 +8,12 @@ import { courses, courseCats } from '../data/mock'
 
 export default function Courses() {
  const [cat, setCat] = useState('همه')
- const [q, setQ] = useState('')
  const [sort, setSort] = useState('محبوب‌ترین')
+ const [searchParams, setSearchParams] = useSearchParams()
+
+ /* جستجو با URL همگام است (?q=...) → لینک جستجو قابل اشتراک‌گذاری و ایندکس‌شدنی است */
+ const q = searchParams.get('q') || ''
+ const setQ = (val) => setSearchParams(val ? { q: val } : {}, { replace: true })
 
  const list = useMemo(() => {
  let out = courses
@@ -22,9 +28,23 @@ export default function Courses() {
 
  return (
  <>
+ <Seo
+  title="دوره‌های ضبط‌شده"
+  description="خرید دوره‌های ضبط‌شده برنامه‌نویسی، طراحی گرافیک، زبان، کنکور و کسب‌وکار با دسترسی مادام‌العمر، تمرین و گواهی‌نامه — مدرس‌یار."
+  jsonLd={{
+   '@context': 'https://schema.org',
+   '@type': 'ItemList',
+   itemListElement: courses.map((c, i) => ({
+    '@type': 'ListItem',
+    position: i + 1,
+    name: c.title,
+    url: `${ORIGIN}/courses/${c.id}`,
+   })),
+  }}
+ />
  <section className="page-hero">
  <div className="container">
- <div className="breadcrumb"><a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>دوره‌های ضبط‌شده</span></div>
+ <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>دوره‌های ضبط‌شده</span></div>
  <h1>دوره‌های <span className="text-teal">ضبط‌شده</span></h1>
  <p className="muted">دسترسی مادام‌العمر، تمرین و آزمون، گواهی‌نامه پایان دوره — یادگیری با سرعت خودتان.</p>
  </div>

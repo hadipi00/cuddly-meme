@@ -1,4 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
@@ -15,6 +16,21 @@ export default function TeacherProfile() {
 
  return (
  <>
+ {t && (
+  <Seo
+   title={t.name}
+   description={t.bio}
+   path={`/teachers/${t.id}`}
+   jsonLd={{
+    '@context': 'https://schema.org',
+    '@type': 'Person',
+    name: t.name,
+    description: t.bio,
+    jobTitle: t.role,
+    worksFor: { '@type': 'Organization', name: 'مدرس‌یار' },
+   }}
+  />
+ )}
  <section className="page-hero">
  <div className="container">
  <div className="breadcrumb">

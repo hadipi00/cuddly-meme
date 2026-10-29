@@ -5,7 +5,7 @@
 // مثال: getProducts: () => fetch('/api/products').then(r => r.json())
 // =====================================================================
 
-const delay = (ms = 350) => new Promise((r) => setTimeout(r, ms))
+const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms))
 
 import {
  courses, liveClasses, products, teachers, students, payments, marketOrders,

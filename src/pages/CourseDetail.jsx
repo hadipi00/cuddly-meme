@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
+import Seo, { ORIGIN } from '../components/Seo'
 import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { RatingStars, Reveal, Avatar } from '../components/ui'
@@ -23,6 +24,32 @@ export default function CourseDetail() {
 
  return (
  <>
+ <Seo
+  title={course.title}
+  description={course.desc}
+  path={`/courses/${course.id}`}
+  jsonLd={{
+   '@context': 'https://schema.org',
+   '@type': 'Course',
+   name: course.title,
+   description: course.desc,
+   provider: { '@type': 'Organization', name: 'مدرس‌یار', sameAs: `${ORIGIN}/` },
+   aggregateRating: {
+    '@type': 'AggregateRating',
+    ratingValue: course.rating,
+    ratingCount: course.students,
+    bestRating: 5,
+    worstRating: 1,
+   },
+   offers: {
+    '@type': 'Offer',
+    price: course.price * 10,
+    priceCurrency: 'IRR',
+    availability: 'https://schema.org/InStock',
+    url: `${ORIGIN}/courses/${course.id}`,
+   },
+  }}
+ />
  <section className="page-hero" style={{ paddingBottom: 24 }}>
  <div className="container">
  <div className="breadcrumb">

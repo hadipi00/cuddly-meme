@@ -7,6 +7,7 @@ import { courses, liveClasses, products, testimonials, faqItems } from '../data/
 import { DAYS, faNum } from '../utils/format'
 import { site } from '../config/site'
 import { useState } from 'react'
+import Seo from '../components/Seo'
 
 function FAQ() {
  const [open, setOpen] = useState(0)
@@ -32,6 +33,19 @@ export default function Home() {
 
  return (
  <>
+ <Seo
+  title="خانه"
+  description="مدرس‌یار — کلاس‌های آنلاین زنده، دوره‌های ضبط‌شده با گواهی‌نامه و فروشگاه لوازم‌التحریر با ارسال سراسری."
+  jsonLd={{
+   '@context': 'https://schema.org',
+   '@type': 'FAQPage',
+   mainEntity: faqItems.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: { '@type': 'Answer', text: f.a },
+   })),
+  }}
+ />
  {/* ===== هیرو با ظاهر رزومه‌ای ===== */}
  <section className="hero">
  <div className="container hero-grid">

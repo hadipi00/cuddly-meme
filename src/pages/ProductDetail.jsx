@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
+import Seo, { ORIGIN } from '../components/Seo'
 import {
   Truck, BadgeCheck, Undo2, ShoppingCart, Star, Store, MapPin,
   PackageCheck, Boxes, Minus, Plus, ShieldCheck,
@@ -57,6 +58,37 @@ export default function ProductDetail() {
 
   return (
     <>
+      <Seo
+        title={product.name}
+        description={`خرید ${product.name} از مدرس‌مارکت — ${product.cat} با ارسال پیش‌کرایه، پس‌کرایه و پیک فوری تهران.`}
+        path={`/market/${product.id}`}
+        jsonLd={{
+          '@context': 'https://schema.org',
+          '@type': 'Product',
+          name: product.name,
+          category: product.cat,
+          brand: { '@type': 'Brand', name: 'مدرس‌یار' },
+          aggregateRating: product.rating
+            ? {
+                '@type': 'AggregateRating',
+                ratingValue: product.rating,
+                ratingCount: product.sold || 10,
+                bestRating: 5,
+                worstRating: 1,
+              }
+            : undefined,
+          offers: {
+            '@type': 'Offer',
+            price: product.price * 10,
+            priceCurrency: 'IRR',
+            availability:
+              product.stock > 0
+                ? 'https://schema.org/InStock'
+                : 'https://schema.org/OutOfStock',
+            url: `${ORIGIN}/market/${product.id}`,
+          },
+        }}
+      />
       <section className="page-hero" style={{ paddingBottom: 20 }}>
         <div className="container">
           <div className="breadcrumb">

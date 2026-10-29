@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { site } from '../config/site'
@@ -22,9 +24,13 @@ export default function Contact() {
 
  return (
  <>
+ <Seo
+  title="تماس با ما"
+  description="ارتباط با تیم مدرس‌یار — مشاوره انتخاب دوره، همکاری به‌عنوان مدرس و پشتیبانی سفارش‌ها."
+ />
  <section className="page-hero">
  <div className="container">
- <div className="breadcrumb"><a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>تماس با ما</span></div>
+ <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>تماس با ما</span></div>
  <h1>در <span className="text-teal">تماس</span> باشیم</h1>
  <p className="muted">برای مشاوره انتخاب دوره، همکاری به‌عنوان مدرس یا هر سوال دیگر — پیام بگذارید.</p>
  </div>

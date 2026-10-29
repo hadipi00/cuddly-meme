@@ -1,9 +1,11 @@
 import { Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 
 /** صفحه ۴۰۴ — برای هر آدرس ناشناخته (در کل سایت) */
 export default function NotFound() {
  return (
  <section className="nf-wrap container">
+ <Seo title="صفحه پیدا نشد" robots="noindex, nofollow" />
  <div>
  <div className="kicker"><span>خطای مسیر</span></div>
  <div className="nf-code" aria-hidden="true">۴۰۴</div>

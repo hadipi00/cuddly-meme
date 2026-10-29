@@ -1,4 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import { DataIcon } from '../utils/icons'
 import Icon from '../components/Icon'
 import { blogPosts } from '../data/mock'
@@ -12,6 +13,21 @@ export default function BlogPost() {
 
  return (
  <>
+ <Seo
+  title={post.title}
+  description={post.excerpt}
+  path={`/blog/${post.id}`}
+  jsonLd={{
+   '@context': 'https://schema.org',
+   '@type': 'BlogPosting',
+   headline: post.title,
+   description: post.excerpt,
+   articleSection: post.cat,
+   author: { '@type': 'Organization', name: 'مدرس‌یار' },
+   publisher: { '@type': 'Organization', name: 'مدرس‌یار' },
+   mainEntityOfPage: `https://modaresyar.ir/blog/${post.id}`,
+  }}
+ />
  <section className="page-hero" style={{ paddingBottom: 16 }}>
  <div className="container">
  <div className="breadcrumb">

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
+import Seo, { ORIGIN } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
 import { teachers } from '../data/mock'
@@ -11,9 +12,23 @@ export default function Teachers() {
  const list = teachers.filter((t) => !q.trim() || t.name.includes(q.trim()) || t.role.includes(q.trim()))
  return (
  <>
+ <Seo
+  title="اساتید مدرس‌یار"
+  description="با اساتید برتر ایران در برنامه‌نویسی، طراحی، زبان‌های خارجی، کنکور و بازاریابی دیجیتال آشنا شوید و کلاس آنلاین رزرو کنید."
+  jsonLd={{
+   '@context': 'https://schema.org',
+   '@type': 'ItemList',
+   itemListElement: teachers.map((t, i) => ({
+    '@type': 'ListItem',
+    position: i + 1,
+    name: t.name,
+    url: `${ORIGIN}/teachers/${t.id}`,
+   })),
+  }}
+ />
  <section className="page-hero">
  <div className="container">
- <div className="breadcrumb"><a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>اساتید</span></div>
+ <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>اساتید</span></div>
  <h1>اساتید <span className="text-teal">مدرس‌یار</span></h1>
  <p className="muted">رزومه، تخصص و امتیاز واقعی هر مدرس را قبل از ثبت‌نام ببینید.</p>
  </div>

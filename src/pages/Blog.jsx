@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import Seo from '../components/Seo'
 import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { Reveal } from '../components/ui'
@@ -7,9 +8,13 @@ import { blogPosts } from '../data/mock'
 export default function Blog() {
  return (
  <>
- <section className="page-hero">
+ <Seo
+  title="بلاگ آموزشی"
+  description="مقالات روش مطالعه، بهره‌وری، برنامه‌نویسی و آموزش آنلاین — راهنمای یادگیری بهتر در مدرس‌یار."
+ />
+ <section className="page-hero" >
  <div className="container">
- <div className="breadcrumb"><a href="#/">صفحه نخست</a> <Icon name="chevronLeft" size={13} /> <span>وبلاگ</span></div>
+ <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>وبلاگ</span></div>
  <h1>وبلاگ <span className="text-teal">مدرس‌یار</span></h1>
  <p className="muted">مقالات آموزشی، تکنیک‌های مطالعه و اخبار آکادمی</p>
  </div>

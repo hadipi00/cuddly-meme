@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom'
 import Icon from '../components/Icon'
+import Seo from '../components/Seo'
 import { Brand } from '../components/ui'
 import { useApp } from '../store/AppContext'
 
@@ -38,6 +39,7 @@ export default function Auth() {
 
  return (
  <div className="auth-wrap">
+ <Seo title="ورود و ثبت‌نام" robots="noindex, nofollow" />
  {/* سمت بصری */}
  <div className="auth-visual">
  <div style={{ position: 'relative', zIndex: 1 }}>

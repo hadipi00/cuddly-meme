@@ -1,5 +1,6 @@
 import { useLocation, Link } from 'react-router-dom'
 import { CheckCircle2, Truck, BookOpen, CalendarDays, Home } from 'lucide-react'
+import Seo from '../components/Seo'
 import { faNum, toman } from '../utils/format'
 
 export default function OrderSuccess() {
@@ -10,6 +11,7 @@ export default function OrderSuccess() {
   const today = new Date().toLocaleDateString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' })
   return (
     <section className="container section">
+      <Seo title="ثبت سفارش" robots="noindex, nofollow" />
       <div className="card success-card">
         <div className="success-icon"><CheckCircle2 size={40} /></div>
         <h1 style={{ fontSize: 24, marginBottom: 8 }}>پرداخت با موفقیت انجام شد</h1>

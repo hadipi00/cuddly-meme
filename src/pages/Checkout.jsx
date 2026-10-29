@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { EmptyState } from '../components/ui'
 import { useApp } from '../store/AppContext'
+import Seo from '../components/Seo'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
 import { Button } from '../components/ui/button'
@@ -72,6 +73,7 @@ export default function Checkout() {
 
   return (
     <>
+      <Seo title="تسویه حساب" robots="noindex, nofollow" />
       <section className="page-hero" style={{ paddingBottom: 20 }}>
         <div className="container">
           <h1>تسویه <span className="text-teal">حساب</span></h1>

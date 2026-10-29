@@ -1,0 +1,9 @@
+# مدرس‌یار — راهنمای خزنده‌ها
+User-agent: *
+Allow: /
+# پنل‌های خصوصی و صفحات تراکنشی ایندکس نشوند
+Disallow: /panel/
+Disallow: /checkout
+Disallow: /order-success
+
+Sitemap: https://modaresyar.ir/sitemap.xml

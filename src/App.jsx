@@ -7,62 +7,114 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { RouteGuard } from './components/guards'
 import { LoadingScreen } from './components/LoadingScreen'
 import { CartDrawer, Toasts } from './components/CartDrawer'
+import { useApp } from './store/AppContext'
+import { initPrefetch } from './lib/prefetch'
+
+/* ---------- lazy loading با مکانیزم retry — رفع ارور «لود نشد» ----------
+ * اگر بارگذاری chunk به‌خاطر قطعی لحظه‌ای اینترنت یا کشِ قدیمی مرورگر
+ * (بعد از آپدیت سایت) شکست بخورد: ابتدا یک‌بار خودکار تلاش مجدد می‌کنیم و
+ * اگر باز هم نشد، یک‌بار صفحه رفرش می‌شود تا HTML و chunkهای تازه گرفته شود.
+ * (پرچم sessionStorage جلوی حلقه‌ی رفرش بی‌پایان را می‌گیرد) */
+const lazyPage = (factory) =>
+  lazy(() =>
+    factory().catch(
+      () =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => {
+            factory().then(resolve, (err) => {
+              try {
+                if (!sessionStorage.getItem('my_chunk_reload')) {
+                  sessionStorage.setItem('my_chunk_reload', '1')
+                  window.location.reload()
+                  return
+                }
+              } catch { /* حالت ناشناس/خصوصی مرورگر */ }
+              reject(err)
+            })
+          }, 400)
+        })
+    )
+  )
+
+/** با mount موفق برنامه، پرچم رفرش اضطراری پاک می‌شود */
+function ChunkFlagClear() {
+  useEffect(() => {
+    try { sessionStorage.removeItem('my_chunk_reload') } catch { /* noop */ }
+  }, [])
+  return null
+}
+
+/** هشدار قطع/وصل شدن اینترنت — توضیح وقفه‌های بارگذاری برای کاربر */
+function OfflineWatch() {
+  const { toast } = useApp()
+  useEffect(() => {
+    const off = () => toast('اتصال اینترنت قطع شد! بارگذاری صفحات ممکن است با وقفه همراه باشد.', 'error')
+    const on = () => toast('اتصال اینترنت برقرار شد.', 'success')
+    window.addEventListener('offline', off)
+    window.addEventListener('online', on)
+    return () => {
+      window.removeEventListener('offline', off)
+      window.removeEventListener('online', on)
+    }
+  }, [toast])
+  return null
+}
 
 /* ---------- صفحات با lazy loading (کد-اسپلیت خودکار) ---------- */
-const Home = lazy(() => import('./pages/Home'))
-const Resume = lazy(() => import('./pages/Resume'))
-const Courses = lazy(() => import('./pages/Courses'))
-const CourseDetail = lazy(() => import('./pages/CourseDetail'))
-const LiveClasses = lazy(() => import('./pages/LiveClasses'))
-const Teachers = lazy(() => import('./pages/Teachers'))
-const TeacherProfile = lazy(() => import('./pages/TeacherProfile'))
-const Market = lazy(() => import('./pages/Market'))
-const ProductDetail = lazy(() => import('./pages/ProductDetail'))
-const Blog = lazy(() => import('./pages/Blog'))
-const BlogPost = lazy(() => import('./pages/BlogPost'))
-const Checkout = lazy(() => import('./pages/Checkout'))
-const OrderSuccess = lazy(() => import('./pages/OrderSuccess'))
-const Contact = lazy(() => import('./pages/Contact'))
-const Auth = lazy(() => import('./pages/Auth'))
-const NotFound = lazy(() => import('./pages/NotFound'))
+const Home = lazyPage(() => import('./pages/Home'))
+const Resume = lazyPage(() => import('./pages/Resume'))
+const Courses = lazyPage(() => import('./pages/Courses'))
+const CourseDetail = lazyPage(() => import('./pages/CourseDetail'))
+const LiveClasses = lazyPage(() => import('./pages/LiveClasses'))
+const Teachers = lazyPage(() => import('./pages/Teachers'))
+const TeacherProfile = lazyPage(() => import('./pages/TeacherProfile'))
+const Market = lazyPage(() => import('./pages/Market'))
+const ProductDetail = lazyPage(() => import('./pages/ProductDetail'))
+const Blog = lazyPage(() => import('./pages/Blog'))
+const BlogPost = lazyPage(() => import('./pages/BlogPost'))
+const Checkout = lazyPage(() => import('./pages/Checkout'))
+const OrderSuccess = lazyPage(() => import('./pages/OrderSuccess'))
+const Contact = lazyPage(() => import('./pages/Contact'))
+const Auth = lazyPage(() => import('./pages/Auth'))
+const NotFound = lazyPage(() => import('./pages/NotFound'))
 
 /* پنل دانش‌آموز */
-const StudentPanel = lazy(() => import('./pages/student/StudentPanel'))
-const SDashboard = lazy(() => import('./pages/student/SDashboard'))
-const SSchedule = lazy(() => import('./pages/student/SSchedule'))
-const SMyCourses = lazy(() => import('./pages/student/SMyCourses'))
-const SCoursePlayer = lazy(() => import('./pages/student/SCoursePlayer'))
-const SAssignments = lazy(() => import('./pages/student/SAssignments'))
-const SCertificates = lazy(() => import('./pages/student/SCertificates'))
-const SStudy = lazy(() => import('./pages/student/SStudy'))
-const SOrders = lazy(() => import('./pages/student/SOrders'))
-const SWishlist = lazy(() => import('./pages/student/SWishlist'))
-const STickets = lazy(() => import('./pages/student/STickets'))
-const SLiveRoom = lazy(() => import('./pages/student/SLiveRoom'))
+const StudentPanel = lazyPage(() => import('./pages/student/StudentPanel'))
+const SDashboard = lazyPage(() => import('./pages/student/SDashboard'))
+const SSchedule = lazyPage(() => import('./pages/student/SSchedule'))
+const SMyCourses = lazyPage(() => import('./pages/student/SMyCourses'))
+const SCoursePlayer = lazyPage(() => import('./pages/student/SCoursePlayer'))
+const SAssignments = lazyPage(() => import('./pages/student/SAssignments'))
+const SCertificates = lazyPage(() => import('./pages/student/SCertificates'))
+const SStudy = lazyPage(() => import('./pages/student/SStudy'))
+const SOrders = lazyPage(() => import('./pages/student/SOrders'))
+const SWishlist = lazyPage(() => import('./pages/student/SWishlist'))
+const STickets = lazyPage(() => import('./pages/student/STickets'))
+const SLiveRoom = lazyPage(() => import('./pages/student/SLiveRoom'))
 
 /* پنل مدرس */
-const TeacherPanel = lazy(() => import('./pages/teacher/TeacherPanel'))
-const TDashboard = lazy(() => import('./pages/teacher/TDashboard'))
-const TClasses = lazy(() => import('./pages/teacher/TClasses'))
-const TLiveRoom = lazy(() => import('./pages/teacher/TLiveRoom'))
-const TStudents = lazy(() => import('./pages/teacher/TStudents'))
-const TAssignments = lazy(() => import('./pages/teacher/TAssignments'))
-const TEarnings = lazy(() => import('./pages/teacher/TEarnings'))
-const TReviews = lazy(() => import('./pages/teacher/TReviews'))
-const TProfile = lazy(() => import('./pages/teacher/TProfile'))
+const TeacherPanel = lazyPage(() => import('./pages/teacher/TeacherPanel'))
+const TDashboard = lazyPage(() => import('./pages/teacher/TDashboard'))
+const TClasses = lazyPage(() => import('./pages/teacher/TClasses'))
+const TLiveRoom = lazyPage(() => import('./pages/teacher/TLiveRoom'))
+const TStudents = lazyPage(() => import('./pages/teacher/TStudents'))
+const TAssignments = lazyPage(() => import('./pages/teacher/TAssignments'))
+const TEarnings = lazyPage(() => import('./pages/teacher/TEarnings'))
+const TReviews = lazyPage(() => import('./pages/teacher/TReviews'))
+const TProfile = lazyPage(() => import('./pages/teacher/TProfile'))
 
 /* پنل مدیریت */
-const AdminPanel = lazy(() => import('./pages/admin/AdminPanel'))
-const ADashboard = lazy(() => import('./pages/admin/ADashboard'))
-const AUsers = lazy(() => import('./pages/admin/AUsers'))
-const ACourses = lazy(() => import('./pages/admin/ACourses'))
-const AClasses = lazy(() => import('./pages/admin/AClasses'))
-const AMarket = lazy(() => import('./pages/admin/AMarket'))
-const AFinance = lazy(() => import('./pages/admin/AFinance'))
-const ASupport = lazy(() => import('./pages/admin/ASupport'))
-const AContent = lazy(() => import('./pages/admin/AContent'))
-const AReports = lazy(() => import('./pages/admin/AReports'))
-const ASettings = lazy(() => import('./pages/admin/ASettings'))
+const AdminPanel = lazyPage(() => import('./pages/admin/AdminPanel'))
+const ADashboard = lazyPage(() => import('./pages/admin/ADashboard'))
+const AUsers = lazyPage(() => import('./pages/admin/AUsers'))
+const ACourses = lazyPage(() => import('./pages/admin/ACourses'))
+const AClasses = lazyPage(() => import('./pages/admin/AClasses'))
+const AMarket = lazyPage(() => import('./pages/admin/AMarket'))
+const AFinance = lazyPage(() => import('./pages/admin/AFinance'))
+const ASupport = lazyPage(() => import('./pages/admin/ASupport'))
+const AContent = lazyPage(() => import('./pages/admin/AContent'))
+const AReports = lazyPage(() => import('./pages/admin/AReports'))
+const ASettings = lazyPage(() => import('./pages/admin/ASettings'))
 
 /* ---------- عنوان داینامیک هر مسیر (سئو و تجربه کاربری) ---------- */
 const ROUTE_TITLES = {
@@ -119,8 +171,11 @@ function Public({ children }) {
 }
 
 export default function App() {
+ useEffect(() => initPrefetch(), [])
  return (
  <ErrorBoundary>
+ <ChunkFlagClear />
+ <OfflineWatch />
  <TitleSync />
  <Suspense fallback={<LoadingScreen />}>
  <Routes>
