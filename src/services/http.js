@@ -35,26 +35,32 @@ export const markServerUp = (v) => { serverUp = v }
  * @returns {Promise<Object>} پاسخ JSON سرور
  * @throws Error با پرچم serverDown=true اگر سرور در دسترس نباشد (→ حالت دمو)
  */
-export async function req(path, { method = 'GET', body } = {}) {
+export async function req(path, { method = 'GET', body, timeout = 0 } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
+  const ac = timeout > 0 ? new AbortController() : null
+  const tid = ac ? setTimeout(() => ac.abort(), timeout) : null
   let res
   try {
     res = await fetch('/api' + path, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: ac?.signal,
     })
-  } catch {
+  } catch (err) {
+    if (tid) clearTimeout(tid)
     serverUp = false
-    const e = new Error('SERVER_DOWN')
-    e.serverDown = true
+    const e = new Error(err?.name === 'AbortError' ? 'TIMEOUT' : 'SERVER_DOWN')
+    e.serverDown = err?.name !== 'AbortError'
+    e.timeout = err?.name === 'AbortError'
     throw e
   }
 
+  if (tid) clearTimeout(tid)
   serverUp = true
   let data = {}
   try { data = await res.json() } catch { /* پاسخ خالی */ }

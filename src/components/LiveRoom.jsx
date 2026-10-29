@@ -42,32 +42,59 @@ const b64ToBuf = (b64) => {
   return u.buffer
 }
 
-/** بهترین MIME پخش (MediaSource) — روی iOS قدیمی null می‌شود → پیام جایگزین */
-const pickSrcMime = () => {
-  if (!window.MediaSource) return null
-  for (const m of ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']) {
-    try { if (MediaSource.isTypeSupported(m)) return m } catch { /* noop */ }
+/** MediaSource یا ManagedMediaSource (iOS ۱۷+) — برای پخش تکه‌ها */
+const getMS = () => {
+  if (window.MediaSource) return window.MediaSource
+  if (window.ManagedMediaSource) return window.ManagedMediaSource
+  return null
+}
+
+/** بهترین MIME پخش برای قالب استریم فرستنده (webm در کروم، mp4 در سافاری)
+ *  روی مرورگرهای بدون MediaSource (iOS قدیمی) null می‌شود → پلیر جایگزین بلابی */
+const SRC_CONTAINERS = { webm: 'video/webm', mp4: 'video/mp4' }
+const SRC_FALLBACKS = [
+  'video/webm;codecs=vp8,opus', 'video/webm',
+  'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4',
+]
+const pickSrcMime = (fmt, cd) => {
+  const MS = getMS()
+  if (!MS) return null
+  const cont = SRC_CONTAINERS[fmt] || 'video/webm'
+  const list = []
+  /* کدک‌های واقعی فرستنده اول — ترکیب ترک‌ها ممکن است فقط ویدیو یا فقط صدا باشد */
+  if (cd) list.push(`${cont};codecs=${cd}`)
+  list.push(cont, ...SRC_FALLBACKS)
+  for (const m of list) {
+    try { if (MS.isTypeSupported(m)) return m } catch { /* noop */ }
   }
   return null
 }
 
-/** بهترین MIME ضبط (MediaRecorder) */
+/** بهترین MIME ضبط (MediaRecorder) + قالب آن — سافاری فقط mp4 ضبط می‌کند */
+const REC_MIMES = [
+  ['video/webm;codecs=vp8,opus', 'webm'],
+  ['video/webm', 'webm'],
+  ['video/mp4', 'mp4'],
+]
 const pickRecMime = () => {
-  if (!window.MediaRecorder) return ''
-  for (const m of ['video/webm;codecs=vp8,opus', 'video/webm']) {
-    try { if (MediaRecorder.isTypeSupported(m)) return m } catch { /* noop */ }
+  if (!window.MediaRecorder) return null
+  for (const [m, fmt] of REC_MIMES) {
+    try { if (MediaRecorder.isTypeSupported(m)) return { mime: m, fmt } } catch { /* noop */ }
   }
-  return ''
+  return null
 }
 
 /**
- * پلیر یک استریم رله‌شده — تکه‌های webm را به ترتیب در MediaSource می‌ریزد،
- * خودش را روی «لبه زنده» نگه می‌دهد و حافظه را تمیز می‌کند.
+ * پلیر یک استریم رله‌شده — تکه‌ها به ترتیب در MediaSource می‌ریزند،
+ * پخش روی «لبه زنده» نگه داشته می‌شود و حافظه تمیز می‌شود.
+ * attach ایدمپوتنت است (تغییر وضعیت دوربین دیگر ویدیو را سیاه نمی‌کند) و
+ * قبل از اتصال به عنصر تازه، عنصر قبلی آزاد می‌شود (جابه‌جایی صحنه↔نوار).
  */
-function createFeedPlayer() {
-  const mime = pickSrcMime()
+function createFeedPlayer(fmt, cd) {
+  const mime = pickSrcMime(fmt, cd)
+  if (!mime) return createBlobPlayer(fmt)
   const p = {
-    mime, el: null, objUrl: null, ms: null, sb: null, sess: null,
+    mime, fmt, cd, el: null, objUrl: null, ms: null, sb: null, sess: null,
     queue: [], alive: true, keepT: null, trimT: null,
   }
   const pump = () => {
@@ -86,12 +113,13 @@ function createFeedPlayer() {
     }
   }
   const rebuild = (sess) => {
-    if (!p.mime) return
     p.sess = sess
     p.queue = []
     try { p.sb?.abort?.() } catch { /* noop */ }
     p.sb = null
-    const ms = new MediaSource()
+    const MS = getMS()
+    if (!MS) return
+    const ms = new MS()
     p.ms = ms
     ms.addEventListener('sourceopen', () => {
       if (!p.alive || p.ms !== ms) return
@@ -111,25 +139,26 @@ function createFeedPlayer() {
   }
   /** تکه تازه — اگر سشن عوض شده بود، خودکار از نو ساخته می‌شود */
   p.push = (sess, b64) => {
-    if (!p.mime || !p.alive || !b64) return
+    if (!p.alive || !b64) return
     if (p.sess !== sess) rebuild(sess)
     p.queue.push(b64ToBuf(b64))
     pump()
   }
   /** شروع از سر (گپ یا تازه‌وارد) — حتی اگر سشن همان باشد */
   p.hardReset = (sess) => {
-    if (!p.mime) return
     p.queue = []
-    rebuild(sess)
+    if (p.sess !== sess) rebuild(sess)
   }
   p.attach = (el) => {
+    if (!el || p.el === el) return
+    /* عنصر قبلی آزاد شود تا MediaSource بتواند به عنصر تازه وصل شود */
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
     p.el = el
-    if (el && p.ms) {
-      try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
-      p.objUrl = URL.createObjectURL(p.ms)
-      el.src = p.objUrl
-      el.play?.().catch(() => {})
-    }
+    if (!p.ms) return
+    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+    p.objUrl = URL.createObjectURL(p.ms)
+    el.src = p.objUrl
+    el.play?.().catch(() => {})
   }
   p.destroy = () => {
     p.alive = false
@@ -169,25 +198,111 @@ function createFeedPlayer() {
   return p
 }
 
-/** ویدیوی یک شرکت‌کننده با استریم محلی — srcObject با useEffect ست می‌شود */
+/**
+ * پلیر جایگزین برای مرورگرهای بدون MediaSource (سافاری iOS قدیمی‌تر از ۱۷٫۱):
+ * تکه‌ها جمع و هر ~۳٫۵ ثانیه یک Blob تازه ساخته و پخش می‌شود —
+ * تاخیر بیشتر ولی کار می‌کند. حافظه سقف دارد؛ در سقف init تازه از سرور می‌آید.
+ */
+function createBlobPlayer(fmt) {
+  const p = {
+    mime: null, fmt, mode: 'blob', el: null, objUrl: null, sess: null, alive: true,
+    parts: [], bytes: 0, dirty: false, buildT: null, onNeedReset: null,
+  }
+  const rebuild = () => {
+    if (!p.el || !p.parts.length || !p.alive) return
+    try {
+      if (p.objUrl) URL.revokeObjectURL(p.objUrl)
+      const blob = new Blob(p.parts, { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' })
+      p.objUrl = URL.createObjectURL(blob)
+      p.el.src = p.objUrl
+      p.el.play?.().catch(() => {})
+      /* پرش به لبه زنده */
+      p.el.addEventListener('loadedmetadata', () => {
+        try {
+          if (p.el && p.el.duration && isFinite(p.el.duration)) p.el.currentTime = Math.max(0, p.el.duration - 0.4)
+          p.el?.play?.().catch(() => {})
+        } catch { /* noop */ }
+      }, { once: true })
+    } catch { /* noop */ }
+  }
+  p.push = (sess, b64) => {
+    if (!p.alive || !b64) return
+    if (p.sess !== sess) { p.sess = sess; p.parts = []; p.bytes = 0 }
+    const buf = b64ToBuf(b64)
+    p.parts.push(buf)
+    p.bytes += buf.byteLength
+    p.dirty = true
+    if (p.bytes > 30 * 1024 * 1024) {
+      /* سقف حافظه — کرسر گیرنده صفر شود تا سرور init تازه بفرستد */
+      p.parts = []; p.bytes = 0; p.sess = null
+      try { p.onNeedReset?.() } catch { /* noop */ }
+    }
+  }
+  p.hardReset = (sess) => { p.sess = null }
+  p.attach = (el) => {
+    if (!el || p.el === el) return
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
+    p.el = el
+    p.dirty = true
+  }
+  p.destroy = () => {
+    p.alive = false
+    clearInterval(p.buildT)
+    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
+    p.el = null
+    p.parts = []
+  }
+  p.buildT = setInterval(() => {
+    if (p.dirty && p.el && p.alive) { p.dirty = false; rebuild() }
+  }, 3500)
+  return p
+}
+
+/** تیکر مبتنی بر Web Worker — setInterval در تب مخفی به‌شدت throttle می‌شود
+ *  (پولینگ رسانه می‌میرد و تصویر دانش‌آموز پس از سوییچ تب فریز می‌شود)؛
+ *  تایمر داخل Worker از این throttle معاف است و همیشه دقیق تیک می‌زند */
+function createTicker(ms, fn) {
+  let w = null
+  try {
+    const src = 'let id=null;onmessage=(e)=>{if(e.data.cmd==="start"){clearInterval(id);id=setInterval(()=>postMessage(1),e.data.ms)}}'
+    w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })))
+    w.onmessage = () => { try { fn() } catch { /* noop */ } }
+    w.postMessage({ cmd: 'start', ms })
+  } catch { /* Worker نبود — fallback به setInterval معمولی */
+    w = null
+    const id = setInterval(fn, ms)
+    return { stop: () => clearInterval(id) }
+  }
+  return { stop: () => { try { w.terminate() } catch { /* noop */ } } }
+}
+
+/** ویدیوی یک شرکت‌کننده با استریم محلی — ویدیو همیشه mount می‌ماند؛
+ *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود) */
+/** ویدیوی یک شرکت‌کننده با استریم محلی — ویدیو همیشه mount می‌ماند؛
+ *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود) */
 function VideoTile({ stream, self, name, camOn, color, big }) {
   const ref = useRef(null)
+  const hasVid = !!stream && stream.getVideoTracks().length > 0
   useEffect(() => {
     const v = ref.current
     if (v && stream) {
       if (v.srcObject !== stream) v.srcObject = stream
       v.play?.().catch(() => {})
     }
-  }, [stream])
+  }, [stream, camOn])
   return (
     <div className={`cam-tile ${big ? 'big' : ''} ${self ? 'self' : ''}`}>
-      {stream && camOn !== false ? (
-        <video ref={ref} autoPlay playsInline muted={!!self} />
+      {stream && hasVid ? (
+        <>
+          <video ref={ref} autoPlay playsInline muted={!!self} style={camOn === false ? { visibility: 'hidden' } : undefined} />
+          {camOn === false && <div className="cam-off cam-off-ov"><Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} /></div>}
+        </>
       ) : (
         <div className="cam-off"><Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} /></div>
       )}
       <span className="ct-name">{name}{self ? ' (شما)' : ''}</span>
-      {!camOn && <span className="ct-off"><Icon name="camera" size={11} /> خاموش</span>}
+      {stream && !hasVid ? null : camOn === false && <span className="ct-off"><Icon name="camera" size={11} /> خاموش</span>}
     </div>
   )
 }
@@ -205,9 +320,18 @@ function ScreenPreview({ stream }) {
   return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
 }
 
-const MSE_OK = (() => { try { return !!pickSrcMime() } catch { return false } })()
+/* سیاست autoplay موبایل: با اولین لمس کاربر در صفحه، صدای همه استریم‌های در انتظار فعال می‌شود */
+const pendingUnmute = new Set()
+if (typeof document !== 'undefined' && !pendingUnmute.armed) {
+  pendingUnmute.armed = true
+  document.addEventListener('pointerdown', () => {
+    for (const fn of [...pendingUnmute]) { try { fn() } catch { /* noop */ } }
+  }, { passive: true })
+}
 
-/** ویدیوی یک استریمِ رله‌شده (مدرس یا هم‌کلاسی) — با MediaSource پخش می‌شود */
+/** ویدیوی یک استریمِ رله‌شده (مدرس یا هم‌کلاسی) — ویدیو همیشه mount می‌ماند؛
+ *  خاموشی دوربین فرستنده فقط لایه آواتار را نشان می‌دهد (پخش رله قطع نمی‌شود).
+ *  پلیر یا MSE است یا بلابی (پشتیبانی همه مرورگرها از جمله iOS قدیمی) */
 function RelayVideo({ player, name, color, camOff, screen, big }) {
   const ref = useRef(null)
   const [needTap, setNeedTap] = useState(false)
@@ -220,8 +344,15 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
       v.muted = true
       setNeedTap(true)
       v.play?.().catch(() => {})
+      const autoUnmute = () => {
+        const vv = ref.current
+        if (!vv) return
+        vv.muted = false
+        vv.play?.().then(() => { setNeedTap(false); pendingUnmute.delete(autoUnmute) }).catch(() => { vv.muted = true })
+      }
+      pendingUnmute.add(autoUnmute)
     })
-  }, [player])
+  }, [player, camOff])
   const unmute = () => {
     const v = ref.current
     if (!v) return
@@ -229,23 +360,13 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
     setNeedTap(false)
     v.play?.().catch(() => { v.muted = true; setNeedTap(true) })
   }
-  if (!MSE_OK) {
-    return (
-      <div className={`cam-tile ${big ? 'big' : ''}`}>
-        <div className="cam-off" style={{ padding: 14, textAlign: 'center' }}>
-          <Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} />
-          <div className="muted" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.8 }}>
-            پخش زنده در این مرورگر پشتیبانی نمی‌شود — با Chrome باز کنید
-          </div>
-        </div>
-        <span className="ct-name">{name}</span>
-      </div>
-    )
-  }
   return (
     <div className={`cam-tile ${big ? 'big' : ''}`}>
-      {!camOff && player ? (
-        <video ref={ref} autoPlay playsInline onClick={unmute} style={screen ? { objectFit: 'contain' } : undefined} />
+      {player ? (
+        <>
+          <video ref={ref} autoPlay playsInline style={{ ...(screen ? { objectFit: 'contain' } : null), ...(camOff ? { visibility: 'hidden' } : null) }} />
+          {camOff && <div className="cam-off cam-off-ov"><Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} /></div>}
+        </>
       ) : (
         <div className="cam-off"><Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} /></div>
       )}
@@ -257,9 +378,6 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
   )
 }
 
-/** کارت عیب‌یابی و درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس
- *  state: 'idle' | 'denied' | 'nodevice' | 'busy' | 'insecure'
- *  diag: { videoCount, audioCount, lastError } — گزارش واقعی مرورگر برای عیب‌یابی */
 function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, onOpenTab, onGoHttps, needsApproval, handSent }) {
   const dv = diag?.videoCount ?? 0
   const da = diag?.audioCount ?? 0
@@ -592,12 +710,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [])
 
- /* ---------- فرستنده رله — تکه‌های webm به سرور ----------
+ /* ---------- فرستنده رله — تکه‌های webm/mp4 به سرور ----------
   * آپلودها زنجیره‌ای‌اند (ترتیب تکه‌ها حیاتی است) و هر تکه ۳ بار تلاش می‌شود؛
   * اگر هر سه شکست خورد، سشن با init تازه از سر شروع می‌شود تا گیرنده‌ها سالم بمانند */
- const uploadChunk = async (kind, blob, isInit) => {
+ const uploadChunk = async (kind, blob, isInit, fmt, cd) => {
    if (!classId) return false
-   const q = `?k=${kind}&init=${isInit ? 1 : 0}&mic=${micRef.current ? 1 : 0}&cam=${camRef.current ? 1 : 0}&screen=${screenRef.current ? 1 : 0}`
+   const q = `?k=${kind}&init=${isInit ? 1 : 0}&mic=${micRef.current ? 1 : 0}&cam=${camRef.current ? 1 : 0}&screen=${screenRef.current ? 1 : 0}&fmt=${fmt || 'webm'}&cd=${encodeURIComponent(cd || '')}`
    for (let i = 0; i < 3; i++) {
      try {
        const res = await fetch(`/api/classes/${classId}/media/up${q}`, {
@@ -627,26 +745,31 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const startOutgoing = () => {
    if (!classId || outRef.current) return
    if (!isTeacher && !canSpeakRef.current) return
-   const mime = pickRecMime()
-   if (!mime) return
+   const recMime = pickRecMime() // { mime, fmt } — سافاری mp4، بقیه webm
+   if (!recMime) return
    const s = localStreamRef.current
    const v = screenRef.current && screenTrackRef.current ? screenTrackRef.current : s?.getVideoTracks()[0]
    const a = s?.getAudioTracks()[0]
    if (!v && !a) return
+   /* کدک‌های واقعی داخل استریم — گیرنده SourceBuffer را دقیقاً با همین‌ها می‌سازد
+      (وگرنه استریمِ بدون صدا با خطای "misses expected opus track" رد می‌شد) */
+   const cd = recMime.fmt === 'mp4'
+     ? [...(v ? ['avc1.42E01E'] : []), ...(a ? ['mp4a.40.2'] : [])].join(',')
+     : [...(v ? ['vp8'] : []), ...(a ? ['opus'] : [])].join(',')
    let rec
    try {
      rec = new MediaRecorder(new MediaStream([...(v ? [v] : []), ...(a ? [a] : [])]), {
-       mimeType: mime, videoBitsPerSecond: 1_100_000, audioBitsPerSecond: 48_000,
+       mimeType: recMime.mime, videoBitsPerSecond: 1_100_000, audioBitsPerSecond: 48_000,
      })
    } catch { return }
-   const o = { rec, kind: isTeacher ? 'teacher' : 'student', stopping: false }
+   const o = { rec, kind: isTeacher ? 'teacher' : 'student', fmt: recMime.fmt, cd, stopping: false }
    outRef.current = o
    rec.ondataavailable = (e) => {
      if (!e.data?.size || o.stopping || outRef.current !== o) return
      const isInit = pendingInitRef.current
      pendingInitRef.current = false
      const blob = e.data
-     upChainRef.current = upChainRef.current.then(() => uploadChunk(o.kind, blob, isInit)).then((ok) => {
+     upChainRef.current = upChainRef.current.then(() => uploadChunk(o.kind, blob, isInit, o.fmt, o.cd)).then((ok) => {
        if (!ok && outRef.current === o && !o.stopping) pendingInitRef.current = true // سشن تازه در اولین فرصت
      }).catch(() => {})
    }
@@ -679,30 +802,40 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    let alive = true
    const players = feedPlayersRef.current
    const cur = { t: null, s: {} }
-   let timer = null
+   let busy = false
 
    const applyFeed = (key, f) => {
      let p = players.get(key)
-     if (!p) { p = createFeedPlayer(); players.set(key, p) }
+     /* اگر قالب/کدک‌های فرستنده عوض شد (webm↔mp4 یا اضافه‌شدن ترک) پلیر از نو ساخته می‌شود */
+     if (p && (p.fmt !== (f.fmt || 'webm') || (p.cd || '') !== (f.cd || ''))) { try { p.destroy() } catch { /* noop */ } players.delete(key); p = null }
+     if (!p) {
+       p = createFeedPlayer(f.fmt || 'webm', f.cd || '')
+       p.onNeedReset = () => { cur.t = null; delete cur.s[key] } // پلیر بلابی init تازه می‌خواهد
+       players.set(key, p)
+     }
      if (f.reset) p.hardReset(f.sess)
      if (f.init) p.push(f.sess, f.init)
      for (const c of f.chunks) p.push(f.sess, c.b64)
+     /* کرسر فقط تا «آخرین تکه‌ی واقعاً تحویل‌شده» جلو می‌رود — نه seq سرور؛
+        وگرنه تکه‌های بریده‌شده برای همیشه گم می‌شوند */
+     return f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null
    }
 
    const loop = async () => {
-     if (!alive) return
+     if (!alive || busy) return
+     busy = true
      try {
-       const r = await req(`/classes/${classId}/media/feeds?cur=${encodeURIComponent(JSON.stringify(cur))}`)
+       const r = await req(`/classes/${classId}/media/feeds?cur=${encodeURIComponent(JSON.stringify(cur))}`, { timeout: 7000 })
        const next = {}
        if (!isTeacher && r.teacher) {
-         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, name: classInfo?.teacher || 'مدرس', color: 'grad-0' }
-         applyFeed('t', r.teacher)
-         cur.t = { s: r.teacher.sess, q: r.teacher.seq }
+         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0' }
+         const lastSeq = applyFeed('t', r.teacher)
+         cur.t = { s: r.teacher.sess, q: lastSeq ?? (cur.t?.q || 0) }
        } else if (cur.t) cur.t = null
        for (const sf of r.students || []) {
-         next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, name: sf.name || 'هم‌کلاسی', color: 'grad-2' }
-         applyFeed(sf.uid, sf)
-         cur.s[sf.uid] = { s: sf.sess, q: sf.seq }
+         next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2' }
+         const lastSeq = applyFeed(sf.uid, sf)
+         cur.s[sf.uid] = { s: sf.sess, q: lastSeq ?? (cur.s[sf.uid]?.q || 0) }
        }
        for (const k of Object.keys(cur.s)) if (!(k in next)) delete cur.s[k]
        for (const k of [...players.keys()]) {
@@ -710,12 +843,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        }
        setFeedInfo((prev) => (feedsEq(prev, next) ? prev : next))
      } catch { /* شبکه — دوباره */ }
-     finally { if (alive) timer = setTimeout(loop, 800) }
+     finally { busy = false }
    }
    loop()
+   const ticker = createTicker(800, loop)
    return () => {
      alive = false
-     clearTimeout(timer)
+     ticker.stop()
      for (const [k, p] of players) { try { p.destroy() } catch { /* noop */ } }
      players.clear()
    }
@@ -802,9 +936,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!classId) return
    let alive = true
    let hbCount = 0
+   let busy2 = false
    const poll = async () => {
+     if (!alive || busy2) return
+     busy2 = true
      try {
-       const st = await req(`/classes/${classId}/state`)
+       const st = await req(`/classes/${classId}/state`, { timeout: 7000 })
        if (!alive) return
        setLive({ status: st.status, startedAt: st.startedAt, participants: st.participants || [] })
        if (!isTeacher && st.boardOpen != null && canSyncBoard()) setBoard(!!st.boardOpen)
@@ -821,10 +958,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        })
        lastIdRef.current = Math.max(lastIdRef.current, ...r.messages.map((x) => x.id))
      } catch { /* سرور قطع — حالت محلی */ }
+     finally { busy2 = false }
    }
    poll()
-   const t = setInterval(poll, 2500)
-   return () => { alive = false; clearInterval(t) }
+   const ticker2 = createTicker(2500, poll)
+   return () => { alive = false; ticker2.stop() }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
@@ -842,11 +980,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!classId || !user?.id) return
    let alive = true
    const cur = liveWbCurRef.current
-   let timer = null
+   let busy3 = false
    const tick = async () => {
-     if (!alive) return
+     if (!alive || busy3) return
+     busy3 = true
      try {
-       const r = await req(`/classes/${classId}/board/live?after=${cur.after}&dt=${cur.dt}&bgr=${cur.bgr}`)
+       const r = await req(`/classes/${classId}/board/live?after=${cur.after}&dt=${cur.dt}&bgr=${cur.bgr}`, { timeout: 7000 })
        if (r.strokes?.length) {
          setStrokes((list) => {
            const known = new Set(list.filter((s) => s.id != null).map((s) => s.id))
@@ -870,10 +1009,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        }
        cur.dt = r.serverTime || Date.now()
      } catch { /* شبکه */ }
-     finally { if (alive) timer = setTimeout(tick, board ? 650 : 2200) }
+     finally { busy3 = false }
    }
    tick()
-   return () => { alive = false; clearTimeout(timer) }
+   const ticker3 = createTicker(board ? 650 : 2200, tick)
+   return () => { alive = false; ticker3.stop() }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId, user?.id, isTeacher, board])
 
@@ -1046,38 +1186,51 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!cur?.getVideoTracks().length) { startMedia(); return }
    switchingRef.current = true
    const track = cur.getVideoTracks()[0]
-   const curFacing = track.getSettings?.().facingMode || facingRef.current || 'user'
+   const settings = track.getSettings?.() || {}
    const isTouch = (navigator.maxTouchPoints || 0) > 0
+   /* جهت درخواستی — getSettings روی خیلی از گوشی‌ها facingMode برنمی‌گرداند،
+      پس جهتِ درخواستی را خودمان نگه می‌داریم تا فلپ واقعی بماند */
+   const curFacing = facingRef.current || settings.facingMode || 'user'
+   const flip = curFacing === 'environment' ? 'user' : 'environment'
+   const base = { width: { ideal: 1280 }, height: { ideal: 720 } }
    const candidates = []
    if (isTouch) {
-     const flip = curFacing === 'environment' ? 'user' : 'environment'
-     candidates.push({ facingMode: { exact: flip }, width: { ideal: 1280 }, height: { ideal: 720 } })
-     candidates.push({ facingMode: flip, width: { ideal: 1280 }, height: { ideal: 720 } })
+     candidates.push({ ...base, facingMode: { exact: flip } })
+     candidates.push({ ...base, facingMode: flip })
    }
    try {
-     let ds = devicesRef.current
-     if (!ds.length) {
-       ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
-       devicesRef.current = ds
-     }
+     /* هر بار لیست تازه گرفته می‌شود — iOS تا بعد از اجازه لیست خالی می‌دهد */
+     const ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
+     devicesRef.current = ds
      if (ds.length > 1) {
-       const i = ds.findIndex((d) => d.deviceId === track.getSettings?.().deviceId)
-       candidates.push({ deviceId: { exact: ds[(i + 1 + ds.length) % ds.length].deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } })
+       const others = ds.filter((d) => d.deviceId !== settings.deviceId)
+       if (others.length) candidates.push({ ...base, deviceId: { exact: others[0].deviceId } })
      }
    } catch { /* noop */ }
-   candidates.push({ facingMode: { ideal: curFacing === 'environment' ? 'user' : 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } })
+   candidates.push({ ...base, facingMode: { ideal: flip } })
+   candidates.push(base)
 
    for (const video of candidates) {
      try {
        const g = await navigator.mediaDevices.getUserMedia({ video, audio: false })
        const nv = g.getVideoTracks()[0]
        if (!nv) { g.getTracks().forEach((t) => t.stop()); continue }
+       /* اگر همان دوربین قبلی برگشت و دنبال فلپ بودیم — گزینه بعدی */
+       const newId = nv.getSettings?.().deviceId
+       if (newId && settings.deviceId && newId === settings.deviceId && !('facingMode' in video)) {
+         g.getTracks().forEach((t) => t.stop())
+         continue
+       }
        const old = localStreamRef.current?.getVideoTracks()[0]
        old?.stop()
        const audio = localStreamRef.current?.getAudioTracks()[0]
        const nextStream = new MediaStream([...(audio ? [audio] : []), nv])
        nv.enabled = camRef.current // وضعیت روشن/خاموش دوربین حفظ شود
-       facingRef.current = nv.getSettings?.().facingMode || curFacing
+       /* جهتِ درخواستی ترجیح دارد — گزارش settings روی برخی گوشی‌ها undefined است */
+       const reqFacing = 'facingMode' in video
+         ? (typeof video.facingMode === 'string' ? video.facingMode : (video.facingMode?.exact || video.facingMode?.ideal || flip))
+         : (nv.getSettings?.().facingMode || curFacing)
+       facingRef.current = reqFacing
        localStreamRef.current = nextStream
        setLocalStream(nextStream)
        rebuildOutgoing()
@@ -1090,7 +1243,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    switchingRef.current = false
  }
 
- /* ---------- تمام‌صفحه ---------- */
+/* ---------- تمام‌صفحه ---------- */
  const toggleFs = async () => {
    const el = stageRef.current
    if (!el) return
@@ -1644,7 +1797,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
        </div>
      )}
-     {watchingFeed && feedTile('t', tFeed, false)}
+     {tFeed && feedTile('t', tFeed, false)} /* استریم مدرس همیشه در نوار — با باز بودن تخته هم صدا/تصویر مدرس قطع نشود */
      {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}

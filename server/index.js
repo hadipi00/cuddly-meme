@@ -597,13 +597,22 @@ function mediaRoom(classId) {
   return r
 }
 
-function feedPush(feed, buf, isInit, meta) {
+function feedPush(feed, buf, isInit, meta, fmt) {
   const t = now()
-  if (isInit) { feed.sess = (feed.sess || 0) + 1; feed.init = buf; feed.chunks = []; feed.seq = 0 }
-  if (!feed.seq) feed.seq = 0
-  feed.seq += 1
-  feed.chunks.push({ seq: feed.seq, buf, ts: t })
+  if (isInit) {
+    /* تکه‌ی init (هدر webm/mp4) فقط به‌عنوان init ذخیره می‌شود و هرگز وارد صف تکه‌ها
+       نمی‌شود — فرستادن دوباره‌ی همان هدر در گیرنده، SourceBuffer را خراب می‌کند و
+       پخش برای همیشه می‌میرد (باگ «صدا/تصویر اصلا پخش نمی‌شود») */
+    feed.sess = (feed.sess || 0) + 1
+    feed.init = buf
+    feed.chunks = []
+    feed.seq = 0
+  } else {
+    feed.seq += 1
+    feed.chunks.push({ seq: feed.seq, buf, ts: t })
+  }
   if (meta) feed.meta = meta
+  if (fmt) feed.fmt = fmt
   feed.updatedAt = t
   while (feed.chunks.length && t - feed.chunks[0].ts > MEDIA_CHUNK_TTL) feed.chunks.shift()
 }
@@ -614,22 +623,25 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای حضور در کلاس باید ثبت‌نام کنید' })
-  if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
   const room = mediaRoom(c.id)
   const meta = { mic: req.query.mic !== '0', cam: req.query.cam !== '0', screen: req.query.screen === '1' }
+  const fmt = req.query.fmt === 'mp4' ? 'mp4' : 'webm' // قالب استریم فرستنده (webm در کروم، mp4 در سافاری)
+  const cd = /^[a-z0-9.,]{1,40}$/i.test(String(req.query.cd || '')) ? String(req.query.cd) : '' // کدک‌های واقعی داخل استریم
   if (req.query.k === 'teacher') {
     if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
-    if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0 }
-    feedPush(room.teacher, req.body, req.query.init === '1', meta)
+    if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
+    if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, fmt, cd }
+    feedPush(room.teacher, req.body, req.query.init === '1', meta, fmt, cd)
     return res.json({ ok: true })
   }
   // دانش‌آموز — فقط با اجازه فعال مدرس (گیت سمت سرور؛ دور زدن کلاینت بی‌فایده است)
   const att = db.prepare('SELECT can_speak FROM attendance WHERE class_id = ? AND user_id = ?').get(c.id, req.user.id)
   if (!att?.can_speak) return res.status(403).json({ error: 'مدرس اجازه فعال‌سازی صدا/تصویر نداده است', noPerm: true })
+  if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
   let feed = room.students.get(req.user.id)
-  if (!feed) { feed = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, name: req.user.name }; room.students.set(req.user.id, feed) }
+  if (!feed) { feed = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, name: req.user.name, fmt, cd }; room.students.set(req.user.id, feed) }
   feed.name = req.user.name
-  feedPush(feed, req.body, req.query.init === '1', meta)
+  feedPush(feed, req.body, req.query.init === '1', meta, fmt)
   res.json({ ok: true })
 })
 
@@ -646,7 +658,7 @@ app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
     if (!feedAlive(f)) return null
     // اگر گیرنده تازه وارد است یا جا مانده (گپ) → از سر: init + چند تکه اخیر
     const stale = !c0 || c0.s !== f.sess || (f.chunks.length && c0.q < f.chunks[0].seq - 1)
-    const base = { sess: f.sess, seq: f.seq, mic: !!f.meta?.mic, cam: !!f.meta?.cam, screen: !!f.meta?.screen }
+    const base = { sess: f.sess, seq: f.seq, mic: !!f.meta?.mic, cam: !!f.meta?.cam, screen: !!f.meta?.screen, fmt: f.fmt || 'webm', cd: f.cd || '' }
     if (stale) {
       return { ...base, reset: true, init: b64(f.init), chunks: f.chunks.slice(-6).map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
     }
