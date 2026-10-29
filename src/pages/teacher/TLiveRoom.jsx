@@ -20,6 +20,21 @@ export default function TLiveRoom() {
  const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
  const now = useNow(1000)
 
+ /* چک واقعی تجهیزات (getUserMedia) برای صفحه آماده‌سازی — بالای early-returnها */
+ const [devCheck, setDevCheck] = useState(null) // {mic, cam} | 'denied'
+ useEffect(() => {
+   if (!preparing) return
+   let stream
+   setDevCheck(null)
+   navigator.mediaDevices?.getUserMedia({ video: true, audio: true })
+     .then((s) => {
+       stream = s
+       setDevCheck({ mic: s.getAudioTracks().length > 0, cam: s.getVideoTracks().length > 0 })
+     })
+     .catch(() => setDevCheck('denied'))
+   return () => stream?.getTracks().forEach((t) => t.stop())
+ }, [preparing])
+
  /* کلاس‌های این مدرس از بک‌اند واقعی — در قطعی سرور همان دموی قبلی */
  useEffect(() => {
  let alive = true
@@ -117,7 +132,11 @@ export default function TLiveRoom() {
  )
  }
 
- // صفحه آماده‌سازی (چک تجهیزات)
+ // صفحه آماده‌سازی (چک واقعی تجهیزات با getUserMedia)
+ const devBadge = (label, ok, pending) => (
+   <div className="toggle-row" key={label}><b>{label}</b><span className={`badge ${pending ? 'b-gray' : ok ? 'b-green' : 'b-red'}`}>{pending ? 'در حال بررسی…' : ok ? '✓ آماده' : '✗ یافت نشد / دسترسی داده نشد'}</span></div>
+ )
+
  return (
  <div className="card pad" style={{ maxWidth: 560, margin: '40px auto', textAlign: 'center' }}>
  <div className="sc-icon teal" style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
@@ -126,15 +145,15 @@ export default function TLiveRoom() {
  <h2 style={{ fontSize: 19, marginBottom: 6 }}>آماده‌سازی کلاس زنده</h2>
  <p className="muted small mb24">{preparing.title} — تجهیزات خود را بررسی کنید و سپس کلاس را شروع کنید</p>
  <div style={{ textAlign: 'right' }}>
- {[
- ['میکروفون', ' متصل — کیفیت خوب'],
- ['دوربین', ' متصل — 720p'],
- ['اشتراک صفحه', ' مجاز'],
- ['سرعت اینترنت', ' عالی (۲۴ مگابیت)'],
- ].map(([k, v]) => (
- <div className="toggle-row" key={k}><b>{k}</b><span className="badge b-green">{v}</span></div>
- ))}
+ {devBadge('میکروفون', devCheck?.mic, devCheck === null)}
+ {devBadge('دوربین', devCheck?.cam, devCheck === null)}
+ {devBadge('اشتراک صفحه', true, false)}
  </div>
+ {devCheck === 'denied' && (
+   <p className="muted small mt12" style={{ color: 'var(--red)' }}>
+   دسترسی دوربین/میکروفون داده نشد — از تنظیمات مرورگر مجوز بدهید (می‌توانید بدون دوربین هم کلاس را برگزار کنید).
+   </p>
+ )}
  <p className="muted small mt16" style={{ background: 'var(--card)', border: '1px dashed var(--line)', borderRadius: 10, padding: '10px 14px' }}>
  با زدن دکمه زیر، جلسه برای {faNum(preparing.students)} دانشجوی این کلاس زنده می‌شود و دکمه ورود در پنل آن‌ها فعال خواهد شد.
  </p>

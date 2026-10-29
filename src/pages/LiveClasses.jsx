@@ -16,13 +16,14 @@ import { req } from '../services/http'
 const dayLabel = (d) => DAYS[d]
 
 export default function LiveClasses() {
- const { addToCart, toast, user, liveSessions } = useApp()
+ const { toast, user, liveSessions } = useApp()
  const nav = useNavigate()
  const now = useNow(1000)
  const tIdx = todayIdx()
  const [day, setDay] = useState('همه')
  const [detail, setDetail] = useState(null)
  const [baseList, setBaseList] = useState(liveClasses) // fallback: دمو
+ const [buying, setBuying] = useState(false)
 
  /* لیست واقعی کلاس‌ها از سرور — شامل کلاس‌های جدید ساخته‌شده توسط مدرس‌ها */
  useEffect(() => {
@@ -33,6 +34,7 @@ export default function LiveClasses() {
  id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
  teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,
  dur: c.dur, price: c.price, cap: c.cap, enrolled: c.enrolled,
+ iAmIn: c.iAmIn, isMine: c.isMine,
  status: c.enrolled >= c.cap ? 'full' : (c.cap - c.enrolled <= 5 ? 'filling' : 'open'),
  date: '', // در سرور کلاس هفتگی تکرارشونده است
  })))
@@ -49,12 +51,25 @@ export default function LiveClasses() {
  const list = day === 'همه' ? enriched : enriched.filter((l) => dayLabel(l.day) === day)
  const todayList = enriched.filter((l) => l.day === tIdx)
 
- const register = (l) => {
- if (l.status === 'full') return
- addToCart({ id: l.id, name: l.title, price: l.price, icon: l.icon, color: l.color, kind: 'live' })
- toast('کلاس به سبد خرید اضافه شد — بعد از خرید در برنامه هفتگی شما قرار می‌گیرد')
- setDetail(null)
+ /* خرید / ثبت‌نام واقعی کلاس — فقط خریداران وارد اتاق می‌شوند */
+ const register = async (l) => {
+ if (!user) { setDetail(null); nav('/auth'); return }
+ if (buying) return
+ setBuying(true)
+ try {
+ const r = await req(`/classes/${l.id}/purchase`, { method: 'POST' })
+ setBaseList((list) => list.map((x) => (x.id === l.id ? { ...x, iAmIn: true, enrolled: r.enrolled || x.enrolled } : x)))
+ setDetail((d) => (d?.id === l.id ? { ...d, iAmIn: true, enrolled: r.enrolled || d.enrolled } : d))
+ if (r.order) toast(`پرداخت موفق — کد سفارش ${r.order.code} • کلاس به برنامه شما اضافه شد`)
+ else toast('ثبت‌نام شما در کلاس انجام شد — کلاس به برنامه هفتگی شما اضافه شد')
+ } catch (e) {
+ if (!e.serverDown) toast(e.message || 'ثبت‌نام ناموفق بود', 'error')
  }
+ setBuying(false)
+ }
+
+ /** مقصد ورود به اتاق بر اساس نقش */
+ const roomLink = (l) => (user?.role === 'teacher' || user?.role === 'admin' || l.isMine ? '/panel/teacher/live' : `/panel/student/live/${l.id}`)
 
  return (
  <>
@@ -183,6 +198,7 @@ export default function LiveClasses() {
  ? '● در حال برگزاری'
  : (l.status === 'full' ? 'تکمیل ظرفیت' : 'در حال ثبت‌نام')}
  </span>
+ {l.iAmIn && <span className="badge b-teal" style={{ position: 'absolute', top: 10, insetInlineStart: 10 }}>✓ ثبت‌نام شدید</span>}
  <span className="badge b-gray c-level">{dayLabel(l.day)} • {l.start}</span>
  </div>
  <div className="c-body" style={{ flex: 1 }}>
@@ -198,10 +214,10 @@ export default function LiveClasses() {
  {l.price ? <div className="price-box">{toman(l.price)}</div> : <span className="badge b-green">رایگان</span>}
  <button
  className="btn btn-primary btn-sm"
- disabled={l.status === 'full'}
- onClick={(e) => { e.stopPropagation(); register(l) }}
+ disabled={l.status === 'full' && !l.iAmIn}
+ onClick={(e) => { e.stopPropagation(); l.iAmIn || l.isMine ? nav(roomLink(l)) : register(l) }}
  >
- {l.status === 'full' ? 'تکمیل شد' : 'ثبت‌نام'}
+ {l.iAmIn ? 'ورود به کلاس' : l.isMine ? 'کلاس من' : l.status === 'full' ? 'تکمیل شد' : l.price ? 'خرید کلاس' : 'ثبت‌نام'}
  </button>
  </div>
  </div>
@@ -305,9 +321,15 @@ export default function LiveClasses() {
  <button className="btn btn-ghost" onClick={() => { setDetail(null); user ? nav('/panel/student') : nav('/auth') }}>
  {user ? 'پنل من' : 'ورود / ثبت‌نام'}
  </button>
- <button className="btn btn-primary btn-lg" disabled={detail.status === 'full'} onClick={() => register(detail)}>
- {detail.status === 'full' ? 'ظرفیت تکمیل است' : detail.price ? 'ثبت‌نام در کلاس' : 'رزرو رایگان'}
+ {detail.iAmIn || detail.isMine ? (
+ <button className="btn btn-primary btn-lg" onClick={() => { setDetail(null); nav(roomLink(detail)) }}>
+ ورود به اتاق کلاس
  </button>
+ ) : (
+ <button className="btn btn-primary btn-lg" disabled={buying || (detail.status === 'full')} onClick={() => register(detail)}>
+ {buying ? 'در حال پردازش…' : detail.status === 'full' ? 'ظرفیت تکمیل است' : detail.price ? 'پرداخت و ثبت‌نام' : 'رزرو رایگان'}
+ </button>
+ )}
  </div>
  </div>
  </>

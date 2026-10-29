@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
@@ -8,17 +9,33 @@ import { studyLogs, myCourses, courses, assignments, seedSchedule, liveClasses }
 import { useApp } from '../../store/AppContext'
 import { faNum, faDate, DAYS } from '../../utils/format'
 import { useNow, nextOccurrence, splitDuration, todayIdx } from '../../hooks/useClassStatus'
+import { req } from '../../services/http'
 
 export default function SDashboard() {
  const { user, liveSessions } = useApp()
  const now = useNow(1000)
  const tIdx = todayIdx()
+ const [myLive, setMyLive] = useState(null) // کلاس‌های واقعی ثبت‌نام‌شده
+
+ /* کلاس‌های زنده ثبت‌نام‌شده از سرور — در قطعی سرور همان دمو */
+ useEffect(() => {
+ let alive = true
+ req('/me/classes').then((r) => {
+ if (!alive) return
+ setMyLive(r.classes.map((c) => ({
+ id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start, dur: c.dur,
+ teacher: c.teacherName || 'مدرس', color: c.color, desc: c.desc,
+ })))
+ }).catch(() => {})
+ return () => { alive = false }
+ }, [user?.id])
 
  const totalMin = studyLogs.reduce((a, d) => a + d.minutes, 0)
  const dueSoon = assignments.filter((a) => a.status === 'todo').slice(0, 3)
 
- // کلاس‌های واقعی امروز (برنامه پایه + کلاس‌های ساخته‌شده)
- const todayClasses = seedSchedule
+ // کلاس‌های امروز: از سرور (واقعی) یا دمو
+ const scheduleSrc = myLive || seedSchedule
+ const todayClasses = scheduleSrc
  .filter((c) => c.day === tIdx && c.liveId)
  .map((c) => ({ ...c, ...liveClasses.find((l) => l.id === c.liveId) }))
  .filter((c) => c.id)
@@ -88,7 +105,7 @@ export default function SDashboard() {
 
  <div className="stat-cards">
  <StatCard icon="book" color="teal" label="دوره‌های در حال یادگیری" value={faNum(myCourses.filter((c) => c.progress < 100).length)} trend={12} />
- <StatCard icon="calendar" color="violet" label="کلاس زنده این هفته" value={faNum(seedSchedule.filter((c) => c.liveId).length + 2)} trend={0} />
+ <StatCard icon="calendar" color="violet" label="کلاس زنده این هفته" value={faNum((myLive || seedSchedule).filter((c) => c.liveId).length)} trend={0} />
  <StatCard icon="clock" color="amber" label="مطالعه این ماه" value={`${faNum(Math.round(totalMin / 60))} ساعت`} trend={8}
  spark={<Spark points={studyLogs.map((d) => d.minutes)} color="#fbbf24" />} />
  <StatCard icon="check" color="green" label="میانگین نمره تمرین‌ها" value={`${faNum(19.2)}`} trend={3} />

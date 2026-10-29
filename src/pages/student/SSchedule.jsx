@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { BellRing, Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
@@ -8,6 +8,7 @@ import { DAYS, SLOTS, faNum } from '../../utils/format'
 import {
  useNow, nextOccurrence, splitDuration, todayIdx, STATUS_LABEL,
 } from '../../hooks/useClassStatus'
+import { req } from '../../services/http'
 
 /* ============================================================
    برنامه هفتگی دانش‌آموز — نسخه بازطراحی‌شده (بدون جدول)
@@ -27,12 +28,29 @@ export default function SSchedule() {
  const now = useNow(1000)
  const tIdx = todayIdx()
  const [openDays, setOpenDays] = useState(() => new Set([todayIdx()]))
+ const [mine, setMine] = useState(null) // کلاس‌های واقعی ثبت‌نام‌شده از سرور
 
- // همه جلسات من: پایه + کلاس‌های ساخته‌شده توسط مدرس/مدیر
- const all = useMemo(() => ([
+ /* کلاس‌های واقعی این دانش‌آموز (خریداری‌شده/ثبت‌نام‌شده) از بک‌اند — در قطعی سرور دمو */
+ useEffect(() => {
+ let alive = true
+ req('/me/classes').then((r) => {
+ if (!alive) return
+ setMine(r.classes.map((c) => ({
+ id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start, dur: c.dur,
+ teacher: c.teacherName || 'مدرس', desc: c.desc, color: c.color, icon: c.icon, mine: true,
+ })))
+ }).catch(() => {})
+ return () => { alive = false }
+ }, [user?.id])
+
+ // همه جلسات من: از سرور (واقعی) یا دمو — به‌علاوه کلاس‌های محلی قدیمی
+ const all = useMemo(() => {
+ if (mine) return mine
+ return [
  ...seedSchedule.map((c) => ({ ...c, mine: true })),
  ...customClasses.filter((c) => c.audience !== 'teacher-only').map((c) => ({ ...c, mine: true })),
- ]), [customClasses])
+ ]
+ }, [mine, customClasses])
 
  // اتصال به دیتای کلاس زنده (ساعت/مدت/مدرس)
  const withMeta = useMemo(() => all.map((c) => {

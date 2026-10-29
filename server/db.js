@@ -72,9 +72,35 @@ CREATE TABLE IF NOT EXISTS messages (
   body       TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS orders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  code       TEXT NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  kind       TEXT NOT NULL DEFAULT 'class',   -- class | course | product
+  item_id    TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  amount     INTEGER NOT NULL DEFAULT 0,      -- تومان
+  status     TEXT NOT NULL DEFAULT 'paid',    -- paid | pending | refunded
+  gateway    TEXT NOT NULL DEFAULT 'test',    -- test | zarinpal (مرحله بعد)
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS board_strokes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  class_id   TEXT NOT NULL REFERENCES classes(id),
+  user_id    TEXT NOT NULL,
+  color      TEXT NOT NULL DEFAULT '#0f172a',
+  size       INTEGER NOT NULL DEFAULT 4,
+  tool       TEXT NOT NULL DEFAULT 'pen',     -- pen | erase
+  points     TEXT NOT NULL,                   -- JSON [[x,y],…] نرمال‌شده ۰..۱
+  created_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_class ON messages(class_id, id);
 CREATE INDEX IF NOT EXISTS idx_attendance_class ON attendance(class_id, last_seen);
+CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
 `)
+
+/* مهاجرت‌های سبک — افزودن ستون اگر وجود ندارد */
+try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
 /* ---------------- کلید امضای JWT (تولید یک‌بار و ذخیره) ---------------- */
 const secretFile = join(dataDir, '.jwt-secret')

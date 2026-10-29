@@ -169,11 +169,12 @@ app.delete('/api/classes/:id', requireRole('teacher', 'admin'), (req, res) => {
   res.json({ ok: true })
 })
 
-/* ثبت‌نام دانش‌آموز در کلاس */
+/* ثبت‌نام دانش‌آموز در کلاس — فقط کلاس‌های رایگان (کلاس‌های پولی باید خرید شوند) */
 app.post('/api/classes/:id/enroll', requireAuth, (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (c.status === 'ended') return res.status(400).json({ error: 'این کلاس برگزار شده است' })
+  if (c.price > 0) return res.status(402).json({ error: 'این کلاس پولی است — ابتدا خرید/ثبت‌نام انجام دهید', needPurchase: true })
   const cnt = db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE class_id = ?').get(c.id).n + c.base_enrolled
   if (cnt >= c.cap) return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
   db.prepare('INSERT OR IGNORE INTO enrollments (class_id, user_id, created_at) VALUES (?,?,?)').run(c.id, req.user.id, now())
@@ -187,6 +188,87 @@ app.delete('/api/classes/:id/enroll', requireAuth, (req, res) => {
 
 /* ---------------- موتور کلاس زنده — منبع حقیقت سرور ---------------- */
 const canControl = (c, u) => u && (u.role === 'admin' || c.teacher_id === u.id)
+
+/** دسترسی ورود به کلاس: مدرس همان کلاس / ادمین / دانش‌آموز ثبت‌نام‌شده (خریدار) */
+const isEnrolled = (classId, userId) =>
+  !!db.prepare('SELECT 1 AS x FROM enrollments WHERE class_id = ? AND user_id = ?').get(classId, userId)
+const classAccess = (c, u) => u && (u.role === 'admin' || c.teacher_id === u.id || isEnrolled(c.id, u.id))
+
+/* ---------------- خرید / ثبت‌نام کلاس (گیت ورود به اتاق) ---------------- */
+app.post('/api/classes/:id/purchase', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (c.status === 'ended') return res.status(400).json({ error: 'این کلاس برگزار شده است' })
+  if (isEnrolled(c.id, req.user.id)) return res.json({ ok: true, already: true })
+  const cnt = db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE class_id = ?').get(c.id).n + c.base_enrolled
+  if (cnt >= c.cap) return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
+
+  let order = null
+  if (c.price > 0) {
+    // درگاه واقعی (زرین‌پال) در مرحله بعد — فعلاً ثبت پرداخت آزمایشی برای تست کامل جریان خرید
+    const code = 'MY-' + Date.now().toString(36).toUpperCase()
+    const info = db.prepare(`INSERT INTO orders (code, user_id, kind, item_id, title, amount, status, gateway, created_at)
+      VALUES (?,?,?,?,?,?,'paid','test',?)`)
+      .run(code, req.user.id, 'class', c.id, c.title, c.price, now())
+    order = db.prepare('SELECT code, amount, status, gateway, created_at FROM orders WHERE id = ?').get(info.lastInsertRowid)
+  }
+  db.prepare('INSERT OR IGNORE INTO enrollments (class_id, user_id, created_at) VALUES (?,?,?)').run(c.id, req.user.id, now())
+  res.json({ ok: true, already: false, order, enrolled: cnt + 1, price: c.price })
+})
+
+/** لیست خریدهای کاربر (برای «دوره‌های من» / سفارش‌ها) */
+app.get('/api/me/orders', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT id, code, kind, item_id AS itemId, title, amount, status, gateway, created_at AS createdAt FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.user.id)
+  res.json({ orders: rows })
+})
+
+/* ---------------- وایت‌برد همگام کلاس ---------------- */
+app.get('/api/classes/:id/board', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id, board_locked FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'فقط ثبت‌نام‌شده‌های کلاس' })
+  const strokes = db.prepare('SELECT id, user_id AS userId, color, size, tool, points, created_at AS createdAt FROM board_strokes WHERE class_id = ? ORDER BY id').all(c.id)
+    .map((s) => ({ ...s, points: JSON.parse(s.points) }))
+  res.json({ strokes, locked: !!c.board_locked })
+})
+
+app.post('/api/classes/:id/board', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id, board_locked FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'فقط ثبت‌نام‌شده‌های کلاس' })
+  if (c.board_locked && !canControl(c, req.user)) return res.status(403).json({ error: 'تخته توسط مدرس قفل شده است' })
+  const { color, size, tool, points } = req.body || {}
+  if (!Array.isArray(points) || points.length < 2 || points.length > 800) return res.status(400).json({ error: 'نقاط نامعتبر است' })
+  if (points.some((p) => !Array.isArray(p) || p.length !== 2 || !Number.isFinite(p[0]) || !Number.isFinite(p[1])))
+    return res.status(400).json({ error: 'نقاط نامعتبر است' })
+  const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a'
+  const safeSize = Math.min(40, Math.max(1, Number(size) || 4))
+  const safeTool = tool === 'erase' ? 'erase' : 'pen'
+  const info = db.prepare('INSERT INTO board_strokes (class_id, user_id, color, size, tool, points, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(c.id, req.user.id, safeColor, safeSize, safeTool, JSON.stringify(points.map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)])), now())
+  const strokeOut = { id: Number(info.lastInsertRowid), userId: req.user.id, color: safeColor, size: safeSize, tool: safeTool, points: points.map(([x, y]) => [+x.toFixed(4), +y.toFixed(4)]) }
+  broadcast(c.id, { type: 'board', stroke: strokeOut, at: now() })
+  res.json({ ok: true, stroke: strokeOut })
+})
+
+app.delete('/api/classes/:id/board', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  db.prepare('DELETE FROM board_strokes WHERE class_id = ?').run(c.id)
+  broadcast(c.id, { type: 'board-clear', at: now() })
+  res.json({ ok: true })
+})
+
+app.post('/api/classes/:id/board/lock', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  const locked = req.body?.locked ? 1 : 0
+  db.prepare('UPDATE classes SET board_locked = ? WHERE id = ?').run(locked, c.id)
+  broadcast(c.id, { type: 'board-lock', locked: !!locked, at: now() })
+  res.json({ ok: true, locked: !!locked })
+})
 
 app.post('/api/classes/:id/start', requireRole('teacher', 'admin'), (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
@@ -219,6 +301,12 @@ app.get('/api/classes/:id/state', (req, res) => {
   })
 })
 
+/** حاضران فعلی اتاق (برای WebRTC — ثبت‌نام‌شده‌ها با اتصال باز) */
+app.get('/api/classes/:id/room', (req, res) => {
+  const room = rtcPeers.get(req.params.id)
+  res.json({ peers: room ? [...room.values()].map(peerInfo) : [] })
+})
+
 /** نمای کلی برای poller فرانت — همه کلاس‌های live/ended اخیر */
 app.get('/api/live/overview', (req, res) => {
   const rows = db.prepare(`SELECT id, status, started_at, ended_at FROM classes
@@ -229,8 +317,9 @@ app.get('/api/live/overview', (req, res) => {
 
 /* ---------------- حضور و غیاب (heartbeat) ---------------- */
 app.post('/api/classes/:id/heartbeat', requireAuth, (req, res) => {
-  const c = db.prepare('SELECT id, status FROM classes WHERE id = ?').get(req.params.id)
+  const c = db.prepare('SELECT id, status, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای حضور در کلاس باید ثبت‌نام کنید' })
   const hand = req.body?.hand ? 1 : 0
   db.prepare(`INSERT INTO attendance (class_id, user_id, hand, first_seen, last_seen) VALUES (?,?,?,?,?)
     ON CONFLICT(class_id, user_id) DO UPDATE SET last_seen=excluded.last_seen, hand=excluded.hand`)
@@ -259,6 +348,7 @@ app.post('/api/classes/:id/messages', requireAuth, (req, res) => {
   if (!body) return res.status(400).json({ error: 'متن پیام خالی است' })
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای گفتگو در کلاس باید ثبت‌نام کنید' })
   const info = db.prepare('INSERT INTO messages (class_id, user_id, name, role, body, created_at) VALUES (?,?,?,?,?,?)')
     .run(c.id, req.user.id, req.user.name, req.user.role, body, now())
   const msg = db.prepare('SELECT id, user_id, name, role, body, created_at FROM messages WHERE id = ?').get(info.lastInsertRowid)
@@ -278,8 +368,10 @@ app.get('/api/me/teaching', requireRole('teacher', 'admin'), (req, res) => {
   res.json({ classes: rows.map((c) => classWithMeta(c, req.user)) })
 })
 
-/* ---------------- SSE: رویداد لحظه‌ای کلاس ---------------- */
+/* ---------------- SSE + سیگنالینگ WebRTC ---------------- */
 const sseClients = new Map() // classId → Set(res)
+const rtcPeers = new Map()   // classId → Map(peerId → { res, user })
+
 function broadcast(classId, event) {
   const set = sseClients.get(classId)
   if (!set) return
@@ -287,16 +379,78 @@ function broadcast(classId, event) {
   for (const r of set) { try { r.write(payload) } catch { set.delete(r) } }
 }
 
+function rtcRoom(classId) {
+  if (!rtcPeers.has(classId)) rtcPeers.set(classId, new Map())
+  return rtcPeers.get(classId)
+}
+
+function peerInfo(p) {
+  return { peer: p.id, name: p.user?.name || 'مهمان', role: p.user?.role || 'student', color: p.user?.color || 'grad-1' }
+}
+
+/** اتصال SSE با هویت peer (برای WebRTC) — توکن از کوئری چون EventSource هدر نمی‌فرستد */
 app.get('/api/classes/:id/events', (req, res) => {
   const c = db.prepare('SELECT id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).end()
+
+  const peerId = String(req.query.peer || '').slice(0, 24)
+  let user = null
+  try {
+    const t = String(req.query.token || '')
+    if (t) user = jwt.verify(t, JWT_SECRET) ? db.prepare('SELECT * FROM users WHERE id = ?').get(jwt.verify(t, JWT_SECRET).uid) : null
+  } catch { user = null }
+
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
   res.flushHeaders()
   res.write(`data: ${JSON.stringify({ type: 'hello', at: now() })}\n\n`)
+
   if (!sseClients.has(c.id)) sseClients.set(c.id, new Set())
   sseClients.get(c.id).add(res)
+
+  // ثبت peer و اطلاع‌رسانی به بقیه + معرفی حاضران فعلی به تازه‌وارد
+  if (peerId) {
+    const room = rtcRoom(c.id)
+    for (const [oldId, p] of room) if (p.res === res) room.delete(oldId) // اتصال تازه همان کلاینت
+    const entry = { res, id: peerId, user }
+    room.set(peerId, entry)
+    res.write(`data: ${JSON.stringify({ type: 'peers', peers: [...room.values()].filter((p) => p.id !== peerId).map(peerInfo) })}\n\n`)
+    broadcast(c.id, { type: 'peer-join', ...peerInfo(entry), at: now() })
+    // peer-join برای خودش هم ارسال شد؛ کلاینت خودش را با peer id فیلتر می‌کند
+  }
+
   const ping = setInterval(() => { try { res.write(`: ping\n\n`) } catch {} }, 20_000)
-  req.on('close', () => { clearInterval(ping); sseClients.get(c.id)?.delete(res) })
+  req.on('close', () => {
+    clearInterval(ping)
+    sseClients.get(c.id)?.delete(res)
+    const room = rtcPeers.get(c.id)
+    if (room) {
+      for (const [pid, p] of room) {
+        if (p.res === res) { room.delete(pid); broadcast(c.id, { type: 'peer-leave', peer: pid, at: now() }) }
+      }
+      if (!room.size) rtcPeers.delete(c.id)
+    }
+  })
+})
+
+/** رله سیگنال‌های WebRTC (offer/answer/ice/state) بین هم‌کلاسی‌ها */
+app.post('/api/classes/:id/signal', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای اتصال به کلاس باید ثبت‌نام کنید' })
+  const { from, to, kind, data } = req.body || {}
+  const room = rtcPeers.get(c.id)
+  const sender = room?.get(String(from || '').slice(0, 24))
+  if (!sender) return res.status(403).json({ error: 'peer نامعتبر — اتصال SSE باز نیست' })
+  if (sender.user && sender.user.id !== req.user.id) return res.status(403).json({ error: 'peer متعلق به کاربر دیگری است' })
+  const event = { type: 'signal', from: sender.id, kind: String(kind || '').slice(0, 12), data, at: now() }
+  if (to === '*') {
+    for (const [pid, p] of (room || new Map())) if (pid !== sender.id) { try { p.res.write(`data: ${JSON.stringify(event)}\n\n`) } catch {} }
+  } else {
+    const target = room?.get(String(to || '').slice(0, 24))
+    if (!target) return res.status(404).json({ error: 'مخاطب پیدا نشد — شاید خارج شده باشد' })
+    try { target.res.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
+  }
+  res.json({ ok: true })
 })
 
 /* ---------------- سلام سرور ---------------- */
