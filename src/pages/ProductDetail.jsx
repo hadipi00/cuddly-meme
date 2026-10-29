@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import Seo, { ORIGIN } from '../components/Seo'
 import {
@@ -23,10 +23,16 @@ const GRADS = ['grad-0', 'grad-1', 'grad-2', 'grad-3', 'grad-4', 'grad-5']
 export default function ProductDetail() {
   const { id } = useParams()
   const nav = useNavigate()
-  const { addToCart, toast } = useApp()
+  const { addToCart, toast, pushViewed } = useApp()
   const product = products.find((p) => p.id === id)
   const [qty, setQty] = useState(1)
   const [shot, setShot] = useState(0)
+
+  // ثبت بازدید برای ریل «بازدیدهای اخیر» در مدرس‌مارکت
+  useEffect(() => {
+    if (product) pushViewed({ id: product.id, name: product.name })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id])
   if (!product) {
     return (
       <div className="container section">

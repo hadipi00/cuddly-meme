@@ -134,6 +134,8 @@ export const liveClasses = [
  { id: 'l6', title: 'استارتاپ اسکول — جلسه منتورینگ', teacher: 'نگار رستمی', teacherId: 't5', day: 4, start: '20:00', dur: 90, price: 0, cap: 80, enrolled: 35, status: 'open', icon: 'rocket', color: 'grad-1', date: '2026-11-06', desc: 'نشست هفتگی رایگان بررسی ایده کسب‌وکار.' },
  { id: 'l7', title: 'ریاضی ۲ — حد و پیوستگی', teacher: 'حسین موسوی', teacherId: 't4', day: 5, start: '16:00', dur: 90, price: 350000, cap: 30, enrolled: 19, status: 'open', icon: 'sigma', color: 'grad-3', date: '2026-11-07', desc: 'کلاس زنده مباحث حد و پیوستگی.' },
  { id: 'l8', title: 'پایتون — حل تمرین پروژه‌ها', teacher: 'رضا کریمی', teacherId: 't1', day: 2, start: '14:00', dur: 60, price: 0, cap: 40, enrolled: 28, status: 'open', icon: 'terminal', color: 'grad-0', date: '2026-11-04', desc: 'رفع اشکال پروژه‌های دانشجوها.' },
+ { id: 'l9', title: 'کارگاه Context و مدیریت State', teacher: 'رضا کریمی', teacherId: 't1', day: 3, start: '18:00', dur: 90, price: 0, cap: 40, enrolled: 36, status: 'filling', icon: 'atom', color: 'grad-0', date: '2026-11-05', desc: 'مدیریت state در مقیاس بزرگ با Context و reducer.' },
+ { id: 'l10', title: 'پرسش و پاسخ پروژه نهایی', teacher: 'رضا کریمی', teacherId: 't1', day: 5, start: '18:00', dur: 90, price: 0, cap: 25, enrolled: 22, status: 'filling', icon: 'terminal', color: 'grad-0', date: '2026-11-07', desc: 'جلسه رفع اشکال گروهی پروژه پایانی دوره ری‌اکت.' },
 ]
 
 // ---- weekly schedule seed (student view): {day, slot, title, teacher, color, liveId?} ----
@@ -144,7 +146,9 @@ export const seedSchedule = [
  { day: 2, slot: 3, title: 'حل تمرین پایتون', teacher: 'رضا کریمی', color: 'cb-teal', liveId: 'l8' },
  { day: 2, slot: 6, title: 'کریتیک پورتفولیو', teacher: 'مریم احمدی', color: 'cb-pink', liveId: 'l4' },
  { day: 3, slot: 2, title: 'آزمونک شیمی', teacher: 'حسین موسوی', color: 'cb-orange', liveId: 'l5' },
+ { day: 3, slot: 5, title: 'کارگاه Context', teacher: 'رضا کریمی', color: 'cb-teal', liveId: 'l9' },
  { day: 4, slot: 6, title: 'منتورینگ استارتاپ', teacher: 'نگار رستمی', color: 'cb-violet', liveId: 'l6' },
+ { day: 5, slot: 5, title: 'پرسش‌وپاسخ پروژه', teacher: 'رضا کریمی', color: 'cb-teal', liveId: 'l10' },
  { day: 5, slot: 4, title: 'ریاضی ۲ — حد', teacher: 'حسین موسوی', color: 'cb-amber', liveId: 'l7' },
  { day: 1, slot: 1, title: 'مرور فیزیک — خودخوان', teacher: '—', color: 'cb-green' },
 ]
@@ -322,10 +326,10 @@ export const studentTickets = [
 
 // ---- teacher data ----
 export const teacherClasses = [
- { id: 'tc1', title: 'کارگاه React — هوک‌های پیشرفته', day: 0, start: '18:00', dur: 120, students: 41, room: 'room-react', status: 'scheduled' },
- { id: 'tc2', title: 'حل تمرین پایتون', day: 2, start: '14:00', dur: 60, students: 28, room: 'room-py', status: 'scheduled' },
- { id: 'tc3', title: 'کارگاه Context و مدیریت State', day: 3, start: '18:00', dur: 90, students: 36, room: 'room-ctx', status: 'scheduled' },
- { id: 'tc4', title: 'جلسه پرسش و پاسخ پروژه نهایی', day: 5, start: '18:00', dur: 90, students: 22, room: 'room-final', status: 'scheduled' },
+ { id: 'tc1', liveId: 'l2', title: 'کارگاه React — هوک‌های پیشرفته', day: 0, start: '18:00', dur: 120, students: 41, room: 'room-react', status: 'scheduled' },
+ { id: 'tc2', liveId: 'l8', title: 'حل تمرین پایتون', day: 2, start: '14:00', dur: 60, students: 28, room: 'room-py', status: 'scheduled' },
+ { id: 'tc3', liveId: 'l9', title: 'کارگاه Context و مدیریت State', day: 3, start: '18:00', dur: 90, students: 36, room: 'room-ctx', status: 'scheduled' },
+ { id: 'tc4', liveId: 'l10', title: 'جلسه پرسش و پاسخ پروژه نهایی', day: 5, start: '18:00', dur: 90, students: 22, room: 'room-final', status: 'scheduled' },
 ]
 
 export const submissions = [

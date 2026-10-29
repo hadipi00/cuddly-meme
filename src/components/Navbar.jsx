@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { ShoppingCart } from 'lucide-react'
 import Icon from './Icon'
 import { Brand } from './ui'
+import { ThemeToggle } from '../theme/ThemeProvider'
 import { useApp } from '../store/AppContext'
 import { faNum } from '../utils/format'
 
@@ -45,6 +46,7 @@ export default function Navbar() {
  ))}
  </nav>
  <div className="nav-cta">
+ <ThemeToggle />
  <button className="icon-btn" onClick={() => nav('/checkout', { state: { openCart: true } })} aria-label="سبد خرید">
  <ShoppingCart size={19} />
  {cartCount > 0 && <span className="bubble">{faNum(cartCount)}</span>}

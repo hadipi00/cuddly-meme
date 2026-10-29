@@ -31,12 +31,12 @@ export default function Footer() {
  </div>
  </div>
  <div>
- <h4>پنل‌های کاربری</h4>
+ <h4>پنل کاربری</h4>
  <div className="footer-links">
- <Link to="/auth?role=student">ورود دانش‌آموزان</Link>
- <Link to="/auth?role=teacher">ورود مدرسان</Link>
- <Link to="/auth?role=admin">ورود مدیریت</Link>
+ <Link to="/auth">ورود / ثبت‌نام</Link>
+ <Link to="/panel/student">پنل یادگیری من</Link>
  <Link to="/resume">درباره مدرس‌یار</Link>
+ <Link to="/contact">فرصت‌های همکاری</Link>
  </div>
  </div>
  <div>

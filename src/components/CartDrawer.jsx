@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { ShoppingCart, Trash2, Minus, Plus, Truck, X, Check, Info, Store } from 'lucide-react'
+import { ShoppingCart, Trash2, Minus, Plus, Truck, X, Check, Info, Store, Tag } from 'lucide-react'
 import { useApp } from '../store/AppContext'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
@@ -87,6 +87,9 @@ export function CartDrawer({ open, onClose }) {
                 <Info size={14} /> هزینه ارسال در مرحله پرداخت — پیش‌کرایه یا پس‌کرایه
               </p>
             )}
+            <p className="row g8 small" style={{ marginBottom: 10, color: 'var(--teal)' }}>
+              <Tag size={14} /> کد تخفیف داری؟ در مرحله پرداخت «WELCOME» را وارد کن — ۱۵٪ تخفیف
+            </p>
             <div className="cart-total"><span>مبلغ قابل پرداخت</span><b>{toman(total)}</b></div>
             <Button className="w-full" size="lg" onClick={() => { onClose(); nav('/checkout') }}>
               ادامه و پرداخت

@@ -5,7 +5,11 @@ import { DEMO_USERS } from '../config/site'
 // برای اتصال به بک‌اند: اکشن‌های این کانتکست به متدهای services/api وصل می‌شوند.
 
 const KEY = 'modaresyar:v1'
-const blank = { user: null, cart: [], wishlist: [], customClasses: [], lessonDone: {}, extraMinutes: 0 }
+const blank = {
+ user: null, cart: [], wishlist: [], customClasses: [], lessonDone: {}, extraMinutes: 0,
+ liveSessions: {}, // { [classId]: { startedAt, ended } } — وضعیت واقعی کلاس زنده (مدرس شروع/پایان می‌کند)
+ recentlyViewed: [], coupons: {}, // کدهای تخفیف اعمال‌شده روی سبد
+}
 
 function load() {
  try { return { ...blank, ...JSON.parse(localStorage.getItem(KEY)) } } catch { return { ...blank } }
@@ -98,6 +102,21 @@ export function AppProvider({ children }) {
  const today = new Date().toLocaleDateString('fa-IR')
  patch((s) => ({ orders: [...(s.orders || []), { code, date: today, ...order }], cart: [] }))
  return code
+ },
+ /* ---------- موتور کلاس زنده ---------- */
+ /** مدرس کلاس را شروع می‌کند — دانش‌آموزان بلافاصله بج «زنده» و دکمه ورود می‌بینند */
+ startLive(classId) {
+ patch((s) => ({ liveSessions: { ...s.liveSessions, [classId]: { startedAt: Date.now(), ended: false } } }))
+ },
+ endLive(classId) {
+ patch((s) => {
+ const cur = s.liveSessions[classId]
+ return { liveSessions: { ...s.liveSessions, [classId]: { ...(cur || {}), ended: true, startedAt: cur?.startedAt || Date.now() } } }
+ })
+ },
+ /** ثبت آخرین بازدید محصول/دوره برای ریل «ادامه بده» */
+ pushViewed(item) {
+ patch((s) => ({ recentlyViewed: [item, ...s.recentlyViewed.filter((r) => r.id !== item.id)].slice(0, 8) }))
  },
  }), [state, toasts, toast])
 

@@ -1,16 +1,29 @@
 import { useState } from 'react'
+import { Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
 import LiveRoom from '../../components/LiveRoom'
 import { teacherClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { DAYS, faNum } from '../../utils/format'
+import { useNow, fmtDuration } from '../../hooks/useClassStatus'
 
+/**
+ * برگزاری کلاس زنده — نمای مدرس.
+ * با «ورود به کلاس زنده»، جلسه برای همه دانش‌آموزان آن کلاس به‌صورت زنده فعال می‌شود
+ * (بج «در حال برگزاری» + تایمر + دکمه ورود در برنامه هفتگی و داشبورد آن‌ها ظاهر می‌شود).
+ */
 export default function TLiveRoom() {
- const { toast } = useApp()
+ const { toast, liveSessions, endLive } = useApp()
  const [active, setActive] = useState(null)
- const [preparing, setPreparing] = useState(false)
+ const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
+ const now = useNow(1000)
 
  if (active) return <LiveRoom variant="teacher" classInfo={active} />
+
+ const isLive = (c) => {
+ const s = liveSessions[c.liveId]
+ return s?.startedAt && !s?.ended
+ }
 
  if (!preparing) {
  return (
@@ -23,23 +36,46 @@ export default function TLiveRoom() {
  </div>
 
  <div className="grids g2 mb24">
- {teacherClasses.map((c) => (
- <div className="card pad" key={c.id}>
+ {teacherClasses.map((c) => {
+ const live = isLive(c)
+ const elapsed = live ? now - liveSessions[c.liveId].startedAt : 0
+ return (
+ <div className="card pad" key={c.id} style={live ? { borderColor: 'rgba(251,113,133,0.5)' } : undefined}>
  <div className="between mb8">
  <b className="small">{c.title}</b>
+ {live ? (
+ <span className="badge b-red live-pulse" style={{ padding: '4px 12px' }}>
+ <Radio size={12} /> زنده — {fmtDuration(elapsed)}
+ </span>
+ ) : (
  <span className="badge b-teal"><Icon name="users" size={12} /> {faNum(c.students)} نفر</span>
+ )}
  </div>
  <div className="muted small mb16">{DAYS[c.day]} • ساعت {c.start} • {faNum(c.dur)} دقیقه</div>
  <div className="row g8">
- <button className="btn btn-primary btn-sm" onClick={() => setPreparing(true)}>
+ {live ? (
+ <>
+ <button className="btn btn-danger btn-sm" onClick={() => setActive(c)}>
+ <Icon name="video" size={15} /> ادامه کلاس
+ </button>
+ <button className="btn btn-ghost btn-sm" onClick={() => { endLive(c.liveId); toast('کلاس پایان یافت — ضبط برای دانشجوها منتشر می‌شود', 'info') }}>
+ پایان جلسه
+ </button>
+ </>
+ ) : (
+ <>
+ <button className="btn btn-primary btn-sm" onClick={() => setPreparing(c)}>
  <Icon name="video" size={15} /> آماده‌سازی و شروع
  </button>
  <button className="btn btn-ghost btn-sm" onClick={() => toast('پیامک دعوت به کلاس برای دانشجوها ارسال شد')}>
  <Icon name="send" size={15} /> دعوت دانشجوها
  </button>
+ </>
+ )}
  </div>
  </div>
- ))}
+ )
+ })}
  </div>
 
  <div className="card pad">
@@ -73,7 +109,7 @@ export default function TLiveRoom() {
  <Icon name="video" size={30} />
  </div>
  <h2 style={{ fontSize: 19, marginBottom: 6 }}>آماده‌سازی کلاس زنده</h2>
- <p className="muted small mb24">تجهیزات خود را بررسی کنید و سپس وارد کلاس شوید</p>
+ <p className="muted small mb24">{preparing.title} — تجهیزات خود را بررسی کنید و سپس کلاس را شروع کنید</p>
  <div style={{ textAlign: 'right' }}>
  {[
  ['میکروفون', ' متصل — کیفیت خوب'],
@@ -84,11 +120,14 @@ export default function TLiveRoom() {
  <div className="toggle-row" key={k}><b>{k}</b><span className="badge b-green">{v}</span></div>
  ))}
  </div>
+ <p className="muted small mt16" style={{ background: 'var(--card)', border: '1px dashed var(--line)', borderRadius: 10, padding: '10px 14px' }}>
+ با زدن دکمه زیر، جلسه برای {faNum(preparing.students)} دانشجوی این کلاس زنده می‌شود و دکمه ورود در پنل آن‌ها فعال خواهد شد.
+ </p>
  <div className="row g12 mt24" style={{ justifyContent: 'center' }}>
- <button className="btn btn-primary btn-lg" onClick={() => setActive(teacherClasses[0])}>
- <Icon name="play" filled size={17} /> ورود به کلاس زنده
+ <button className="btn btn-primary btn-lg" onClick={() => setActive(preparing)}>
+ <Icon name="play" filled size={17} /> شروع کلاس زنده
  </button>
- <button className="btn btn-ghost" onClick={() => setPreparing(false)}>انصراف</button>
+ <button className="btn btn-ghost" onClick={() => setPreparing(null)}>انصراف</button>
  </div>
  </div>
  )

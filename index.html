@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -48,6 +48,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
+    <!-- اعمال تم ذخیره‌شده قبل از رندر — جلوگیری از فلاش تغییر رنگ (FOUC) -->
+    <script>
+      ;(function () {
+        try {
+          var t = localStorage.getItem('modaresyar:theme')
+          if (t !== 'light' && t !== 'blu') t = 'dark'
+          document.documentElement.dataset.theme = t
+        } catch (e) { document.documentElement.dataset.theme = 'dark' }
+      })()
+    </script>
+
     <!-- فونت وزیرمتن سلف‌هاست (بدون وابستگی به گوگل — سریع در ایران) -->
     <link rel="preload" href="/fonts/Vazirmatn-arabic.woff2" as="font" type="font/woff2" crossorigin />
 
@@ -88,9 +99,16 @@
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
     <noscript>
-      <div style="font-family: Tahoma, sans-serif; padding: 40px; text-align: center; direction: rtl">
+      <div style="font-family: Tahoma, sans-serif; padding: 40px; text-align: center; direction: rtl; max-width: 640px; margin: 0 auto">
         <h1>مدرس‌یار — پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی</h1>
         <p>برای استفاده از مدرس‌یار باید جاوااسکریپت مرورگر فعال باشد.</p>
+        <nav style="display:flex; flex-direction:column; gap:8px; margin-top:16px">
+          <a href="/courses">دوره‌های ضبط‌شده آموزشی</a>
+          <a href="/live">کلاس‌های آنلاین زنده</a>
+          <a href="/market">فروشگاه لوازم‌التحریر مدرس‌مارکت</a>
+          <a href="/teachers">اساتید آکادمی</a>
+          <a href="/blog">بلاگ آموزشی</a>
+        </nav>
       </div>
     </noscript>
   </body>

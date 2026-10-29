@@ -3,17 +3,21 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { AppProvider } from './store/AppContext'
+import { ThemeProvider } from './theme/ThemeProvider'
 import './styles/fonts.css'
 import './styles/tw.css'
 import './styles/base.css'
 import './styles/panel.css'
+import './styles/theme.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
  <React.StrictMode>
- <BrowserRouter>
+ <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+ <ThemeProvider>
  <AppProvider>
  <App />
  </AppProvider>
+ </ThemeProvider>
  </BrowserRouter>
  </React.StrictMode>
 )

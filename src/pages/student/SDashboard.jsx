@@ -1,32 +1,94 @@
 import { Link } from 'react-router-dom'
+import { Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
 import { DataIcon } from '../../utils/icons'
 import { StatCard } from '../../components/PanelLayout'
 import { Spark } from '../../components/Charts'
-import { studyLogs, myCourses, courses, assignments } from '../../data/mock'
+import { studyLogs, myCourses, courses, assignments, seedSchedule, liveClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
-import { faNum, faDate } from '../../utils/format'
+import { faNum, faDate, DAYS } from '../../utils/format'
+import { useNow, nextOccurrence, splitDuration, todayIdx } from '../../hooks/useClassStatus'
 
 export default function SDashboard() {
- const { user } = useApp()
+ const { user, liveSessions } = useApp()
+ const now = useNow(1000)
+ const tIdx = todayIdx()
+
  const totalMin = studyLogs.reduce((a, d) => a + d.minutes, 0)
- const today = assignments.filter((a) => a.status === 'todo').slice(0, 3)
+ const dueSoon = assignments.filter((a) => a.status === 'todo').slice(0, 3)
+
+ // کلاس‌های واقعی امروز (برنامه پایه + کلاس‌های ساخته‌شده)
+ const todayClasses = seedSchedule
+ .filter((c) => c.day === tIdx && c.liveId)
+ .map((c) => ({ ...c, ...liveClasses.find((l) => l.id === c.liveId) }))
+ .filter((c) => c.id)
+
+ const liveNow = todayClasses.filter((c) => {
+ const s = liveSessions[c.id]
+ if (s?.startedAt && !s?.ended) return true
+ const startsAt = nextOccurrence(c.day, c.start)
+ const msLeft = startsAt.getTime() - now
+ return msLeft <= 0 && msLeft > -(c.dur || 90) * 60_000
+ })
+
+ const next = todayClasses
+ .map((c) => ({ ...c, startsAt: nextOccurrence(c.day, c.start) }))
+ .filter((c) => c.startsAt.getTime() > now)
+ .sort((a, b) => a.startsAt - b.startsAt)[0]
+ const nextCd = next ? splitDuration(next.startsAt.getTime() - now) : null
 
  return (
  <div>
+ {/* ---------- خوش‌آمد + وضعیت امروز ---------- */}
  <div className="card pad mb24" style={{ background: 'linear-gradient(135deg, rgba(45,212,191,0.12), rgba(167,139,250,0.12))' }}>
- <div className="between wrap">
+ <div className="between wrap g16">
  <div>
- <h2 style={{ fontSize: 20 }}>سلام {user?.name || 'سارا'} عزیز </h2>
- <p className="muted small mt8">امروز ۲ کلاس زنده داری و ۲ تمرین سررسید نزدیک — انرژی‌ات رو حفظ کن!</p>
+ <h2 style={{ fontSize: 20 }}>سلام {user?.name || 'سارا'} عزیز</h2>
+ <p className="muted small mt8">
+ {liveNow.length > 0
+ ? <>الان <b className="text-red">{faNum(liveNow.length)} کلاس زنده</b> داری — دیر نکن!</>
+ : next
+ ? <>کلاس بعدی‌ات «{next.title}» {DAYS[tIdx]} ساعت {next.start} است — {nextCd.h > 0 ? `${faNum(nextCd.h)} ساعت و ` : ''}{faNum(nextCd.m)} دقیقه دیگر.</>
+ : <>امروز کلاس زنده نداری — روز خوبی برای پیشرفت در دوره‌هاست!</>}
+ {' '}و {faNum(dueSoon.length)} تمرین سررسید نزدیک داری.
+ </p>
  </div>
- <Link to="/panel/student/schedule" className="btn btn-primary">جدول هفتگی من <Icon name="calendar" size={16} /></Link>
+ <Link to="/panel/student/schedule" className="btn btn-primary">برنامه هفتگی من <Icon name="calendar" size={16} /></Link>
  </div>
+
+ {/* ریل کلاس‌های امروز با وضعیت زنده */}
+ {todayClasses.length > 0 && (
+ <div className="row g12 mt24" style={{ flexWrap: 'wrap' }}>
+ {todayClasses.map((c) => {
+ const s = liveSessions[c.id]
+ const startsAt = nextOccurrence(c.day, c.start)
+ const msLeft = startsAt.getTime() - now
+ const isLive = (s?.startedAt && !s?.ended) || (msLeft <= 0 && msLeft > -(c.dur || 90) * 60_000)
+ return (
+ <Link key={c.id} to={`/panel/student/live/${c.id}`} className="row g12" style={{
+ padding: '10px 16px', borderRadius: 14, border: '1px solid var(--line2)', background: 'var(--card)',
+ borderColor: isLive ? 'rgba(251,113,133,0.5)' : undefined, flex: '1 1 240px',
+ }}>
+ <span className={`avatar ${c.color}`} style={{ width: 38, height: 38, borderRadius: 11, fontSize: 16 }}>
+ <Icon name="video" size={16} />
+ </span>
+ <div style={{ flex: 1, minWidth: 0 }}>
+ <b className="small" style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title}</b>
+ <span className="muted" style={{ fontSize: 12 }}>ساعت {c.start} • {c.teacher}</span>
+ </div>
+ {isLive
+ ? <span className="badge b-red live-pulse"><Radio size={11} /> زنده</span>
+ : <span className="badge b-teal">{faNum(c.dur)}′</span>}
+ </Link>
+ )
+ })}
+ </div>
+ )}
  </div>
 
  <div className="stat-cards">
  <StatCard icon="book" color="teal" label="دوره‌های در حال یادگیری" value={faNum(myCourses.filter((c) => c.progress < 100).length)} trend={12} />
- <StatCard icon="calendar" color="violet" label="کلاس زنده این هفته" value={faNum(4)} trend={0} />
+ <StatCard icon="calendar" color="violet" label="کلاس زنده این هفته" value={faNum(seedSchedule.filter((c) => c.liveId).length + 2)} trend={0} />
  <StatCard icon="clock" color="amber" label="مطالعه این ماه" value={`${faNum(Math.round(totalMin / 60))} ساعت`} trend={8}
  spark={<Spark points={studyLogs.map((d) => d.minutes)} color="#fbbf24" />} />
  <StatCard icon="check" color="green" label="میانگین نمره تمرین‌ها" value={`${faNum(19.2)}`} trend={3} />
@@ -61,7 +123,7 @@ export default function SDashboard() {
  <h3>سررسیدهای نزدیک</h3>
  <div className="chart-sub">تمرین‌هایی که باید تحویل بدهی</div>
  <div className="feed">
- {today.map((a) => (
+ {dueSoon.map((a) => (
  <div className="feed-item" key={a.id}>
  <span className="fd-icon" style={{ background: 'rgba(251,113,133,0.12)', color: 'var(--red)' }}><Icon name="file" size={16} /></span>
  <div>
@@ -78,7 +140,7 @@ export default function SDashboard() {
 
  <div className="grids g3">
  {[
- { icon: 'calendar', t: 'جدول هفتگی', d: 'کلاس‌های زنده و زمان‌بندی هفته', to: '/panel/student/schedule', color: 'teal' },
+ { icon: 'calendar', t: 'برنامه هفتگی', d: 'کلاس‌های زنده با تایمر و یادآوری', to: '/panel/student/schedule', color: 'teal' },
  { icon: 'activity', t: 'میانگین مطالعه', d: 'نمودار دقیق روند مطالعه ۳۰ روز', to: '/panel/student/study', color: 'amber' },
  { icon: 'award', t: 'گواهی‌نامه‌ها', d: 'مدارک پایان دوره با کد رهگیری', to: '/panel/student/certificates', color: 'violet' },
  ].map((x) => (

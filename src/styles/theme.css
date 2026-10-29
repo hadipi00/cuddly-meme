@@ -1,0 +1,225 @@
+/* ============================================================
+   مدرس‌یار — سیستم تم چندحالته (فاز بازطراحی)
+   ------------------------------------------------------------
+   سه تم: dark (پیش‌فرض) / light / blu
+   حالت فعلی روی <html data-theme="..."> ست می‌شود و همه رنگ‌ها
+   از CSS Variables خوانده می‌شوند — بدون فلاش سفید (اسکریپت inline
+   در index.html قبل از رندر تم را اعمال می‌کند).
+   این فایل باید آخر از همه import شود (بعد از base.css و panel.css).
+   ============================================================ */
+
+/* ---------- تم تیره (پیش‌فرض) — اصلاح‌شده ---------- */
+:root {
+  /* رنگ‌های پایه */
+  --bg: #070d18;
+  --bg2: #0a1322;
+  --panel: #0d1626;
+  --card: rgba(148, 163, 184, 0.055);
+  --card-hover: rgba(148, 163, 184, 0.1);
+  --line: rgba(148, 163, 184, 0.16);
+  --line2: rgba(148, 163, 184, 0.09);
+  --text: #e7eef9;
+  --muted: #93a5bb;
+  --faint: #64748b;
+
+  --teal: #2dd4bf;
+  --sky: #38bdf8;
+  --violet: #a78bfa;
+  --amber: #fbbf24;
+  --green: #34d399;
+  --red: #fb7185;
+  --orange: #fb923c;
+  --pink: #f472b6;
+
+  --grad: linear-gradient(135deg, #2dd4bf 0%, #38bdf8 55%, #a78bfa 100%);
+  --shadow-lg: 0 24px 60px -20px rgba(2, 8, 23, 0.75);
+  --shadow-glow: 0 10px 40px -10px rgba(45, 212, 191, 0.35);
+
+  /* سطوح شیشه‌ای و لایه‌ها */
+  --well: rgba(7, 13, 24, 0.6);
+  --well-soft: rgba(10, 19, 34, 0.4);
+  --bar: rgba(7, 13, 24, 0.82);
+  --bar-strong: rgba(7, 13, 24, 0.94);
+  --scrim: rgba(4, 8, 16, 0.66);
+  --head: rgba(13, 22, 38, 0.65);
+  --panel-soft: rgba(13, 22, 38, 0.5);
+  --panel-glass: rgba(13, 22, 38, 0.7);
+  --panel-strong: rgba(13, 22, 38, 0.9);
+  --side: rgba(10, 19, 34, 0.75);
+  --footer: rgba(7, 13, 24, 0.6);
+  --glass-chip: rgba(7, 13, 24, 0.65);
+  --glass-quick: rgba(7, 13, 24, 0.72);
+  --stage-glass: rgba(5, 10, 20, 0.7);
+
+  /* صحنه پخش و کلاس زنده (همیشه تیره — طبیعی ویدیو) */
+  --stage: #050a14;
+  --stage-a: #0a1220;
+  --stage-b: #0d1830;
+  --live-a: #0a1220;
+  --live-b: #101b30;
+  --live-c: #0b1526;
+  --live-d: #0d1f33;
+  --tile-a: #0d1830;
+  --tile-b: #101f38;
+
+  /* کنترل‌ها */
+  --track: #24344d;
+  --track-hover: #33476a;
+  --star-off: #334155;
+  --knob: #cbd5e1;
+
+  /* پس‌زمینه درخشان */
+  --glow-teal: rgba(45, 212, 191, 0.09);
+  --glow-violet: rgba(167, 139, 250, 0.08);
+  --glow-sky: rgba(56, 189, 248, 0.06);
+  --grid-line: rgba(148, 163, 184, 0.05);
+
+  color-scheme: dark;
+}
+
+/* ---------- تم روشن ---------- */
+[data-theme='light'] {
+  --bg: #f3f6fb;
+  --bg2: #eaf0f8;
+  --panel: #ffffff;
+  --card: rgba(15, 23, 42, 0.035);
+  --card-hover: rgba(15, 23, 42, 0.07);
+  --line: rgba(15, 23, 42, 0.14);
+  --line2: rgba(15, 23, 42, 0.08);
+  --text: #101c33;
+  --muted: #48587a;
+  --faint: #7d8ca8;
+
+  --teal: #0d9488;
+  --sky: #0284c7;
+  --violet: #7c3aed;
+  --amber: #b45309;
+  --green: #059669;
+  --red: #e11d48;
+  --orange: #c2410c;
+  --pink: #db2777;
+
+  --grad: linear-gradient(135deg, #0d9488 0%, #0ea5e9 55%, #7c3aed 100%);
+  --shadow-lg: 0 24px 60px -24px rgba(15, 23, 42, 0.16);
+  --shadow-glow: 0 10px 36px -12px rgba(13, 148, 136, 0.32);
+
+  --well: #ffffff;
+  --well-soft: rgba(255, 255, 255, 0.72);
+  --bar: rgba(255, 255, 255, 0.86);
+  --bar-strong: rgba(255, 255, 255, 0.97);
+  --scrim: rgba(15, 23, 42, 0.38);
+  --head: rgba(15, 23, 42, 0.045);
+  --panel-soft: rgba(255, 255, 255, 0.66);
+  --panel-glass: rgba(255, 255, 255, 0.82);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --side: rgba(255, 255, 255, 0.88);
+  --footer: rgba(255, 255, 255, 0.72);
+  --glass-chip: rgba(15, 23, 42, 0.55);
+  --glass-quick: rgba(15, 23, 42, 0.62);
+  --stage-glass: rgba(5, 10, 20, 0.7);
+
+  /* صحنه ویدیو در تم روشن هم تیره می‌ماند */
+  --stage: #0b1220;
+  --stage-a: #101a2c;
+  --stage-b: #142340;
+  --live-a: #101a2c;
+  --live-b: #16263f;
+  --live-c: #111c30;
+  --live-d: #142338;
+  --tile-a: #142340;
+  --tile-b: #1a2d4f;
+
+  --track: #cbd5e1;
+  --track-hover: #94a3b8;
+  --star-off: #cbd5e1;
+  --knob: #f8fafc;
+
+  --glow-teal: rgba(13, 148, 136, 0.07);
+  --glow-violet: rgba(124, 58, 237, 0.06);
+  --glow-sky: rgba(2, 132, 199, 0.05);
+  --grid-line: rgba(15, 23, 42, 0.05);
+
+  color-scheme: light;
+}
+
+/* ---------- تم بلو (اقیانوس آبی) ---------- */
+[data-theme='blu'] {
+  --bg: #050d24;
+  --bg2: #071231;
+  --panel: #0a1838;
+  --card: rgba(96, 165, 250, 0.06);
+  --card-hover: rgba(96, 165, 250, 0.11);
+  --line: rgba(96, 165, 250, 0.2);
+  --line2: rgba(96, 165, 250, 0.11);
+  --text: #e3edff;
+  --muted: #9db6e8;
+  --faint: #5f7cbb;
+
+  --teal: #60a5fa;
+  --sky: #7dd3fc;
+  --violet: #818cf8;
+  --amber: #fbbf24;
+  --green: #4ade80;
+  --red: #fb7185;
+  --orange: #fb923c;
+  --pink: #f472b6;
+
+  --grad: linear-gradient(135deg, #3b82f6 0%, #6366f1 55%, #22d3ee 100%);
+  --shadow-lg: 0 24px 60px -20px rgba(1, 6, 22, 0.8);
+  --shadow-glow: 0 10px 40px -10px rgba(59, 130, 246, 0.4);
+
+  --well: rgba(4, 10, 26, 0.6);
+  --well-soft: rgba(6, 15, 38, 0.5);
+  --bar: rgba(4, 10, 28, 0.85);
+  --bar-strong: rgba(4, 10, 28, 0.95);
+  --scrim: rgba(2, 6, 18, 0.7);
+  --head: rgba(8, 20, 48, 0.7);
+  --panel-soft: rgba(8, 20, 48, 0.55);
+  --panel-glass: rgba(8, 20, 48, 0.75);
+  --panel-strong: rgba(8, 20, 48, 0.92);
+  --side: rgba(5, 13, 33, 0.85);
+  --footer: rgba(4, 10, 26, 0.6);
+  --glass-chip: rgba(4, 10, 26, 0.65);
+  --glass-quick: rgba(4, 10, 26, 0.72);
+  --stage-glass: rgba(3, 8, 22, 0.75);
+
+  --stage: #040a1e;
+  --stage-a: #071230;
+  --stage-b: #0a1c48;
+  --live-a: #071230;
+  --live-b: #0e2354;
+  --live-c: #081739;
+  --live-d: #0b2251;
+  --tile-a: #0a1c48;
+  --tile-b: #10275e;
+
+  --track: #24437c;
+  --track-hover: #2f5aa8;
+  --star-off: #24437c;
+  --knob: #bfdbfe;
+
+  --glow-teal: rgba(59, 130, 246, 0.12);
+  --glow-violet: rgba(99, 102, 241, 0.1);
+  --glow-sky: rgba(34, 211, 238, 0.07);
+  --grid-line: rgba(96, 165, 250, 0.06);
+
+  color-scheme: dark;
+}
+
+/* ---------- همگام‌سازی توکن‌های Tailwind با تم ---------- */
+[data-theme='light'] .btn-primary { color: #ffffff; }
+[data-theme='light'] .pc-avatar,
+[data-theme='light'] .avatar,
+[data-theme='light'] .mini-av { color: #ffffff; }
+
+/* رادیو/چک‌باکس با رنگ تم */
+input[type='checkbox'], input[type='radio'] { accent-color: var(--teal); }
+
+/* ---------- ترنزیشن نرم بین تم‌ها ---------- */
+body,
+.navbar, .card, .footer, .p-sidebar, .p-topbar, .cart-drawer, .modal,
+.input, .select, .textarea, .mk-filters, .chip, .icon-btn {
+  transition: background-color 0.35s ease, border-color 0.35s ease, color 0.2s ease;
+}
+/* هنگام سوییچ تم، ترنزیشن transform کارت‌ها نباید خراب شود */
+.card, .chip, .icon-btn { transition-property: background-color, border-color, color, transform, box-shadow; }

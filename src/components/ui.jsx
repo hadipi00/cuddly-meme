@@ -1,20 +1,29 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import Icon from './Icon'
 
-export function Logo() {
- return (
- <svg viewBox="0 0 64 64" width="40" height="40" className="logo-mark" aria-hidden="true">
- <defs>
- <linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1">
- <stop offset="0" stopColor="#2dd4bf" /><stop offset="1" stopColor="#a78bfa" />
- </linearGradient>
- </defs>
- <rect width="64" height="64" rx="16" fill="rgba(148,163,184,0.08)" stroke="rgba(148,163,184,0.2)" />
- <path d="M10 26 32 14l22 12-22 12z" fill="url(#lg1)" />
- <path d="M20 33v9c0 4 6 7 12 7s12-3 12-7v-9l-12 6z" fill="url(#lg1)" opacity=".8" />
- <circle cx="50" cy="18" r="3" fill="#fbbf24" />
- </svg>
- )
+/* لوگوی مدرن مدرس‌یار — سکویرکل گرادیانی + کلاه فارغ‌التحصیلی + شرابه
+ * گرادیان با useId یکتا می‌شود تا چند نمونه روی یک صفحه تداخل ID نداشته باشند */
+export function Logo({ size = 40 }) {
+  const id = useId().replace(/:/g, '')
+  const g = `mg-${id}`
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} className="logo-mark" aria-hidden="true">
+      <defs>
+        <linearGradient id={g} x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#2dd4bf" />
+          <stop offset=".55" stopColor="#38bdf8" />
+          <stop offset="1" stopColor="#a78bfa" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="18" fill={`url(#${g})`} />
+      <path d="M32 15.5 L53.5 25 L32 34.5 L10.5 25 Z" fill="#ffffff" />
+      <path d="M21.5 30.8 v7.4 c0 3.4 4.7 6.2 10.5 6.2 s10.5-2.8 10.5-6.2 v-7.4 l-10.5 4.7 Z" fill="#ffffff" opacity=".93" />
+      <circle cx="32" cy="24.6" r="1.9" fill="#38bdf8" />
+      <path d="M51 26.6 v7.4" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="round" />
+      <circle cx="51" cy="37.6" r="2.9" fill="#ffd54d" />
+      <path d="M13.5 45.5 l4.6 0 M15.8 43.2 l0 4.6" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" opacity=".95" />
+    </svg>
+  )
 }
 
 export function Brand({ small }) {

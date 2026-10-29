@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Icon from './Icon'
 import { Logo, Avatar } from './ui'
+import { ThemeToggle } from '../theme/ThemeProvider'
 import { useApp } from '../store/AppContext'
 import Seo from '../components/Seo'
 import { notifications } from '../data/mock'
@@ -72,6 +73,7 @@ export default function PanelLayout({ role, roleLabel, nav }) {
  <span className="crumb">مدرس‌یار / پنل {roleLabel}</span>
  </div>
  <div className="p-topbar-actions">
+ <ThemeToggle compact />
  <div className="noti-wrap">
  <button className="icon-btn" onClick={() => setNotiOpen((v) => !v)} aria-label="اعلان‌ها">
  <Icon name="bell" />

@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import Seo, { ORIGIN, crumbsJsonLd, storeJsonLd } from '../components/Seo'
 import {
   Search, SlidersHorizontal, X, PackageCheck, Store, RotateCcw,
   ChevronRight, ChevronLeft, Minus, Plus, ShoppingCart,
-  Truck, BadgeCheck, Undo2, CreditCard,
+  Truck, BadgeCheck, Undo2, CreditCard, Zap, Flame, Eye, Tag,
 } from 'lucide-react'
+import Seo, { ORIGIN, crumbsJsonLd, storeJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal, RatingStars } from '../components/ui'
 import { ProductCard } from '../components/cards'
-import { products, marketCats } from '../data/mock'
+import { products, marketCats, testimonials, faqItems } from '../data/mock'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
 import { useApp } from '../store/AppContext'
+import { useNow } from '../hooks/useClassStatus'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
@@ -30,9 +31,33 @@ const SORTS = [
 const MAX_PRICE = 1000000
 const PER_PAGE = 8
 
+/* آیکون هر دسته‌بندی */
+const CAT_ICONS = {
+  'نوشت‌افزار': 'pen',
+  'لوازم هنری': 'brush',
+  'لوازم اداری': 'copy',
+  'دانش‌آموزی': 'backpack',
+  'پک ویژه': 'gift',
+}
+
+/** شمارش معکوس تا نیمه‌شب (پایان کمپین روزانه) */
+function useMidnightCountdown(now) {
+  const end = new Date(now)
+  end.setHours(24, 0, 0, 0)
+  const ms = end.getTime() - now
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return {
+    h: String(Math.floor(s / 3600)).padStart(2, '0'),
+    m: String(Math.floor((s % 3600) / 60)).padStart(2, '0'),
+    s: String(s % 60).padStart(2, '0'),
+  }
+}
+
 export default function Market() {
   const navigate = useNavigate()
   const [filterOpen, setFilterOpen] = useState(false)
+  const now = useNow(1000)
+  const cd = useMidnightCountdown(now)
 
   /* ---------- فیلترها متصل به URL — هر دید فروشگاهی یک لینک اشتراکی دارد (سئو + UX) ---------- */
   const [params, setParams] = useSearchParams()
@@ -73,6 +98,12 @@ export default function Market() {
     }
     return out.sort(sorters[sort] || sorters.best)
   }, [cat, q, sort, maxPrice, inStockOnly, offOnly])
+
+  /* ---------- پیشنهاد شگفت‌انگیز: بیشترین تخفیف‌ها ---------- */
+  const flashDeals = useMemo(() => [...products]
+    .filter((p) => p.oldPrice)
+    .sort((a, b) => (1 - b.price / b.oldPrice) - (1 - a.price / a.oldPrice))
+    .slice(0, 6), [])
 
   /* ---------- صفحه‌بندی فروشگاهی ---------- */
   const pages = Math.max(1, Math.ceil(list.length / PER_PAGE))
@@ -146,7 +177,7 @@ export default function Market() {
   /* ---------- مشاهده سریع با انتخاب تعداد ---------- */
   const [quick, setQuick] = useState(null)
   const [quickQty, setQuickQty] = useState(1)
-  const { addToCart, toast } = useApp()
+  const { addToCart, toast, recentlyViewed } = useApp()
   useEffect(() => { setQuickQty(1) }, [quick])
 
   const quickAdd = () => {
@@ -158,6 +189,10 @@ export default function Market() {
     toast(`${faNum(quickQty)} عدد «${quick.name}» به سبد اضافه شد`)
     setQuick(null)
   }
+
+  const viewed = recentlyViewed
+    .map((r) => products.find((p) => p.id === r.id))
+    .filter(Boolean).slice(0, 6)
 
   return (
     <>
@@ -179,9 +214,75 @@ export default function Market() {
               url: `${ORIGIN}/market/${p.id}`,
             })),
           },
+          {
+            '@context': 'https://schema.org',
+            '@type': 'FAQPage',
+            mainEntity: faqItems.slice(4).map((f) => ({
+              '@type': 'Question',
+              name: f.q,
+              acceptedAnswer: { '@type': 'Answer', text: f.a },
+            })),
+          },
         ]}
       />
-      <section className="page-hero" style={{ paddingBottom: 20 }}>
+
+      {/* ---------- بنر کمپین روزانه ---------- */}
+      <section className="container" style={{ paddingTop: 28 }}>
+        <div className="mk-promo">
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <span className="badge b-amber" style={{ marginBottom: 12 }}><Flame size={13} /> پیشنهاد شگفت‌انگیز روزانه</span>
+            <h2 style={{ fontSize: 'clamp(19px, 2.4vw, 26px)', marginBottom: 8 }}>
+              تا ٪{faNum(35)} تخفیف روی کالاهای منتخب مدرس‌مارکت
+            </h2>
+            <p className="muted small" style={{ maxWidth: 420 }}>
+              هر روز نیمه‌شب، تخفیف‌ها تازه می‌شوند. ارسال رایگان برای خرید بالای یک میلیون تومان —
+              تهران همین امروز با پیک!
+            </p>
+          </div>
+          <div className="row g12" style={{ position: 'relative', zIndex: 1, flexWrap: 'wrap' }}>
+            <div className="countdown-box">
+              <span className="cd-cell"><b dir="ltr">{cd.h}</b><span>ساعت</span></span>
+              <span className="cd-cell"><b dir="ltr">{cd.m}</b><span>دقیقه</span></span>
+              <span className="cd-cell"><b dir="ltr">{cd.s}</b><span>ثانیه</span></span>
+            </div>
+            <button className="btn btn-primary" onClick={() => document.getElementById('flash-deals')?.scrollIntoView({ behavior: 'smooth' })}>
+              <Zap size={16} /> دیدن تخفیف‌ها
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------- ریل پیشنهاد شگفت‌انگیز ---------- */}
+      <section className="container" style={{ paddingTop: 26 }} id="flash-deals">
+        <div className="between wrap mb16">
+          <h2 className="row g8" style={{ fontSize: 17 }}><Zap size={19} className="text-amber" /> پیشنهاد شگفت‌انگیز</h2>
+          <Link to="/market?off=1" className="btn btn-ghost btn-sm">همه تخفیف‌دارها <Icon name="chevronLeft" size={14} /></Link>
+        </div>
+        <div className="hscroll">
+          {flashDeals.map((p) => {
+            const off = Math.round((1 - p.price / p.oldPrice) * 100)
+            return (
+              <Link to={`/market/${p.id}`} key={p.id} className="card mk-flash" onClick={() => {}}>
+                <div className={`p-thumb ${p.color}`} style={{ height: 110 }}>
+                  <DataIcon name={p.icon} size={40} />
+                  <span className="badge discount p-off">٪{faNum(off)}</span>
+                </div>
+                <div style={{ padding: '10px 12px 12px' }}>
+                  <b className="small" style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</b>
+                  <div className="row g8 mt8 between">
+                    <span className="price-box" style={{ fontSize: 13 }}>{toman(p.price)}</span>
+                    <s className="muted" style={{ fontSize: 11 }}>{faNum(p.oldPrice)}</s>
+                  </div>
+                  <div className="progress amber mt8" style={{ height: 5 }}><i style={{ width: `${Math.min(95, (p.sold / 2) % 90 + 10)}%` }} /></div>
+                  <span className="muted" style={{ fontSize: 11 }}>{faNum(p.sold)} فروش</span>
+                </div>
+              </Link>
+            )
+          })}
+        </div>
+      </section>
+
+      <section className="page-hero" style={{ paddingBottom: 12, paddingTop: 34 }}>
         <div className="container">
           <div className="breadcrumb"><Link to="/">صفحه نخست</Link> <Icon name="chevronLeft" size={13} /> <span>مدرس‌مارکت</span></div>
           <h1>مدرس‌<span className="text-amber">مارکت</span></h1>
@@ -189,12 +290,13 @@ export default function Market() {
         </div>
       </section>
 
-      {/* نوار دسته‌بندی چسبان — در موبایل اسکرول افقی */}
+      {/* نوار دسته‌بندی چسبان — با آیکون */}
       <div className="mk-catbar">
         <div className="container row g8 wrap mk-catscroll">
           {['همه', ...marketCats].map((c) => (
             <button key={c} className={`chip ${cat === c ? 'on' : ''}`} onClick={() => patch({ cat: c })}>
-              {c === 'همه' ? <ShoppingCart size={14} /> : null}{c}
+              {c === 'همه' ? <ShoppingCart size={14} /> : <DataIcon name={CAT_ICONS[c] || 'box'} size={15} />}
+              {c}
             </button>
           ))}
         </div>
@@ -242,6 +344,14 @@ export default function Market() {
               {activeCount > 0 && <Badge variant="discount">{faNum(activeCount)}</Badge>}
             </div>
             <FilterBlock />
+            {/* بنر کوچک کد تخفیف */}
+            <div className="mk-coupon-hint">
+              <Tag size={15} />
+              <div>
+                <b className="small">کد WELCOME</b>
+                <p className="muted" style={{ fontSize: 11.5 }}>۱۵٪ تخفیف اولین خرید — در مرحله پرداخت وارد کنید</p>
+              </div>
+            </div>
           </aside>
 
           {/* شبکه محصولات + صفحه‌بندی */}
@@ -287,6 +397,26 @@ export default function Market() {
         </div>
       </section>
 
+      {/* ---------- ریل بازدیدهای اخیر ---------- */}
+      {viewed.length > 0 && (
+        <section className="section-sm container" style={{ paddingTop: 0 }}>
+          <h2 className="row g8 mb16" style={{ fontSize: 17 }}><Eye size={18} className="text-teal" /> بازدیدهای اخیر شما</h2>
+          <div className="hscroll">
+            {viewed.map((p) => (
+              <Link to={`/market/${p.id}`} key={p.id} className="card mk-flash" style={{ width: 150 }}>
+                <div className={`p-thumb ${p.color}`} style={{ height: 96 }}>
+                  <DataIcon name={p.icon} size={34} />
+                </div>
+                <div style={{ padding: '9px 11px 11px' }}>
+                  <b className="small" style={{ display: 'block', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</b>
+                  <span className="price-box" style={{ fontSize: 12.5 }}>{toman(p.price)}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* مزایا */}
       <section className="section-sm container">
         <div className="grids g4">
@@ -303,6 +433,28 @@ export default function Market() {
               <b className="small">{t}</b>
               <p className="muted small">{d}</p>
             </div>
+          ))}
+        </div>
+      </section>
+
+      {/* نظرات مشتریان */}
+      <section className="section-sm container" style={{ paddingTop: 0 }}>
+        <div className="sec-head">
+          <h2>مشتریان مدرس‌مارکت چه می‌گویند؟</h2>
+          <p>بخشی از هزاران تجربه خرید موفق در پلتفرم مدرس‌یار</p>
+        </div>
+        <div className="grids g3">
+          {testimonials.slice(0, 3).map((t, i) => (
+            <Reveal key={t.name} delay={i * 70}>
+              <div className="card testimonial-card">
+                <RatingStars value={t.rating} />
+                <p className="quote">«{t.quote}»</p>
+                <div className="who">
+                  <span className={`avatar ${t.color}`} style={{ width: 40, height: 40, fontSize: 14 }}>{t.name[0]}</span>
+                  <div><b>{t.name}</b><span>{t.role}</span></div>
+                </div>
+              </div>
+            </Reveal>
           ))}
         </div>
       </section>

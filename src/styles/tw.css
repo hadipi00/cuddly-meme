@@ -1,40 +1,42 @@
 /* ============================================================
- Tailwind 4 + توکن‌های shadcn — هماهنگ با تم سرمه‌ای/فیروزه‌ای مدرس‌یار
+ Tailwind 4 + توکن‌های shadcn — هماهنگ با سیستم تم مدرس‌یار
  نکته: preflight عمداً لود نمی‌شود تا استایل‌های فعلی سایت دست‌نخورده بمانند.
+ توکن‌ها به CSS Variables تم اشاره می‌کنند (theme.css) تا با سوییچ تم،
+ کلاس‌های Tailwind (مثل bg-background) هم عوض شوند.
  ============================================================ */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @theme {
- /* رنگ‌های پایه مدرس‌یار */
- --color-background: #070d18;
- --color-surface: #0d1626;
- --color-surface-2: #101b2f;
- --color-foreground: #e7eef9;
- --color-muted-foreground: #93a5bb;
- --color-faint: #64748b;
+ /* رنگ‌های پایه مدرس‌یار — متصل به سیستم تم */
+ --color-background: var(--bg);
+ --color-surface: var(--panel);
+ --color-surface-2: var(--bg2);
+ --color-foreground: var(--text);
+ --color-muted-foreground: var(--muted);
+ --color-faint: var(--faint);
 
- --color-primary: #2dd4bf;
- --color-primary-foreground: #052018;
+ --color-primary: var(--teal);
+ --color-primary-foreground: #04121a;
 
- --color-secondary: rgba(148, 163, 184, 0.1);
- --color-secondary-foreground: #e7eef9;
+ --color-secondary: var(--card);
+ --color-secondary-foreground: var(--text);
 
- --color-accent: rgba(45, 212, 191, 0.12);
- --color-accent-foreground: #5eead4;
+ --color-accent: var(--card-hover);
+ --color-accent-foreground: var(--teal);
 
- --color-destructive: #fb7185;
+ --color-destructive: var(--red);
  --color-destructive-foreground: #2b0710;
 
- --color-success: #34d399;
- --color-warning: #fbbf24;
- --color-sky: #38bdf8;
- --color-violet: #a78bfa;
+ --color-success: var(--green);
+ --color-warning: var(--amber);
+ --color-sky: var(--sky);
+ --color-violet: var(--violet);
 
- --color-border: rgba(148, 163, 184, 0.16);
- --color-input: rgba(148, 163, 184, 0.16);
- --color-ring: #2dd4bf;
+ --color-border: var(--line);
+ --color-input: var(--line);
+ --color-ring: var(--teal);
 
  --radius-sm: 8px;
  --radius-md: 10px;

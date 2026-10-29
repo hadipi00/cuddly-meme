@@ -29,8 +29,11 @@ const participantsSeed = [
  */
 export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const isTeacher = variant === 'teacher'
- const { user, toast } = useApp()
+ const { user, toast, startLive, endLive, liveSessions } = useApp()
  const me = user?.name || (isTeacher ? 'مدرس' : 'دانش‌آموز')
+ const classId = classInfo?.liveId || classInfo?.id
+ const session = classId ? liveSessions[classId] : null
+ const startedRef = useRef(false)
 
  const [mic, setMic] = useState(true)
  const [cam, setCam] = useState(true)
@@ -40,10 +43,22 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [hand, setHand] = useState(false)
  const [ended, setEnded] = useState(false)
  const [tab, setTab] = useState('chat')
- const [elapsed, setElapsed] = useState(0)
+ // اگر جلسه قبلاً شروع شده (ورود مجدد دانش‌آموز)، تایمر از لحظه شروع واقعی ادامه پیدا می‌کند
+ const [elapsed, setElapsed] = useState(() =>
+ session?.startedAt ? Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000)) : 0
+ )
  const [messages, setMessages] = useState(fakeChat.slice(0, 3))
  const [input, setInput] = useState('')
  const chatRef = useRef(null)
+
+ /* مدرس: شروع جلسه برای همه دانش‌آموزان (فقط یک‌بار در mount) */
+ useEffect(() => {
+ if (isTeacher && classId && !startedRef.current) {
+ startedRef.current = true
+ if (!session?.startedAt || session?.ended) startLive(classId)
+ }
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [])
 
  useEffect(() => {
  const t = setInterval(() => setElapsed((e) => e + 1), 1000)
@@ -205,7 +220,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <div className="card stat-card" style={{ padding: 14 }}><b className="sc-val">{faNum(messages.length)}</b><span className="sc-label">پیام گفتگو</span></div>
  </div>
  <div className="modal-actions">
- <button className="btn btn-primary" onClick={() => { setEnded(false); toast('کلاس با موفقیت به پایان رسید — ضبط در پنل ذخیره شد') }}>ثبت و پایان</button>
+ <button className="btn btn-primary" onClick={() => { setEnded(false); if (classId) endLive(classId); toast('کلاس با موفقیت به پایان رسید — برای دانش‌آموزان ضبط شد') }}>ثبت و پایان</button>
  <button className="btn btn-ghost" onClick={() => setEnded(false)}>بازگشت به کلاس</button>
  </div>
  </>
