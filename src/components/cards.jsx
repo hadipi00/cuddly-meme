@@ -73,11 +73,12 @@ export function CourseCard({ course, myProgress }) {
 
 /* ---------- کارت محصول مدرس‌مارکت — سبک فروشگاهی مدرن ---------- */
 export function ProductCard({ product, onQuickView }) {
-  const { addToCart, toast } = useApp()
+  const { addToCart, toast, wishlist, toggleWish } = useApp()
   const nav = useNavigate()
   const off = product.oldPrice ? Math.round((1 - product.price / product.oldPrice) * 100) : 0
   const out = product.stock <= 0
   const low = !out && product.stock < 20
+  const wished = wishlist.some((w) => w.id === product.id)
 
   const add = (e) => {
     e.stopPropagation()
@@ -103,7 +104,7 @@ export function ProductCard({ product, onQuickView }) {
         {off > 0 && <span className="badge discount p-off">٪{faNum(off)}</span>}
         {!off && product.badge && <span className="badge b-amber p-badge">{product.badge}</span>}
         <button
-          className="mk-quick"
+          className={`mk-quick ${wished ? 'wished' : ''}`}
           onClick={(e) => { e.stopPropagation(); onQuickView?.(product) }}
           aria-label="مشاهده سریع"
           title="مشاهده سریع"
@@ -128,15 +129,28 @@ export function ProductCard({ product, onQuickView }) {
             {product.oldPrice && <span className="old">{faNum(product.oldPrice)}</span>}
             {out ? <span className="muted">ناموجود</span> : toman(product.price)}
           </div>
-          <button
-            className={`mk-add ${out ? 'disabled' : ''}`}
-            onClick={add}
-            disabled={out}
-            aria-label="افزودن به سبد"
-            title={out ? 'ناموجود' : 'افزودن به سبد خرید'}
-          >
-            <ShoppingCart size={16} />
-          </button>
+          <div className="row g6">
+            <button
+              className={`wish-btn ${wished ? 'on' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                toggleWish({ id: product.id, name: product.name, icon: product.icon, color: product.color, price: product.price, kind: 'market', maxStock: product.stock })
+              }}
+              aria-label="علاقه‌مندی"
+              title="افزودن به علاقه‌مندی‌ها"
+            >
+              <Icon name="heart" filled={wished} />
+            </button>
+            <button
+              className={`mk-add ${out ? 'disabled' : ''}`}
+              onClick={add}
+              disabled={out}
+              aria-label="افزودن به سبد"
+              title={out ? 'ناموجود' : 'افزودن به سبد خرید'}
+            >
+              <ShoppingCart size={16} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

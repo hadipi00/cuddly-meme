@@ -1,9 +1,12 @@
 import { useNavigate } from 'react-router-dom'
-import { ShoppingCart, Trash2, Minus, Plus, Truck, X, Check, Info } from 'lucide-react'
+import { ShoppingCart, Trash2, Minus, Plus, Truck, X, Check, Info, Store } from 'lucide-react'
 import { useApp } from '../store/AppContext'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
 import { Button } from './ui/button'
+
+/** آستانه ارسال رایگان مدرس‌مارکت (تومان) */
+const FREE_SHIP = 1000000
 
 export function CartDrawer({ open, onClose }) {
   const { cart, removeFromCart, updateQty, toast } = useApp()
@@ -11,6 +14,8 @@ export function CartDrawer({ open, onClose }) {
   const count = cart.reduce((a, i) => a + (i.qty || 1), 0)
   const total = cart.reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
   const hasMarket = cart.some((i) => i.kind === 'market')
+  const shipPct = Math.min(100, Math.round((total / FREE_SHIP) * 100))
+  const remain = FREE_SHIP - total
 
   return (
     <>
@@ -25,6 +30,13 @@ export function CartDrawer({ open, onClose }) {
             <div className="empty">
               <ShoppingCart size={44} />
               <p>سبد خرید شما خالی است</p>
+              <p className="muted small" style={{ marginBottom: 14 }}>
+                دوره، کلاس زنده یا لوازم‌التحریر مورد علاقه‌ات را انتخاب کن.
+              </p>
+              <div className="row g8" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
+                <Button size="sm" onClick={() => { onClose(); nav('/market') }}><Store size={14} /> مدرس‌مارکت</Button>
+                <Button size="sm" variant="soft" onClick={() => { onClose(); nav('/courses') }}>دوره‌های آموزشی</Button>
+              </div>
             </div>
           )}
           {cart.map((item) => (
@@ -60,8 +72,19 @@ export function CartDrawer({ open, onClose }) {
         {cart.length > 0 && (
           <div className="cart-foot">
             {hasMarket && (
+              <div className="ship-bar" style={{ marginBottom: 12 }}>
+                <p className="row g8 small" style={{ marginBottom: 7, color: shipPct >= 100 ? 'var(--green)' : 'var(--muted)' }}>
+                  <Truck size={14} />
+                  {shipPct >= 100
+                    ? <b className="text-green">ارسال این سفارش رایگان است! 🎉</b>
+                    : <span>تا ارسال رایگان فقط <b className="text-amber">{toman(remain)}</b> مانده</span>}
+                </p>
+                <div className="progress teal"><i style={{ width: `${shipPct}%` }} /></div>
+              </div>
+            )}
+            {hasMarket && (
               <p className="row g8 small muted" style={{ marginBottom: 10 }}>
-                <Truck size={14} /> هزینه ارسال در مرحله پرداخت — پیش‌کرایه یا پس‌کرایه
+                <Info size={14} /> هزینه ارسال در مرحله پرداخت — پیش‌کرایه یا پس‌کرایه
               </p>
             )}
             <div className="cart-total"><span>مبلغ قابل پرداخت</span><b>{toman(total)}</b></div>

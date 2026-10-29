@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { Reveal } from '../components/ui'
@@ -19,6 +19,46 @@ export default function LiveClasses() {
  <Seo
   title="کلاس‌های آنلاین زنده"
   description="رزرو کلاس‌های آنلاین زنده با اساتید برتر — کلاس‌های تعاملی با ضبط جلسات، تکلیف و گواهی‌نامه — مدرس‌یار."
+  path="/live"
+  keywords="کلاس آنلاین زنده, کلاس مجازی, رزرو کلاس, کلاس تعاملی, آموزش زنده"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['کلاس‌های آنلاین', '/live']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: 'کلاس‌های آنلاین زنده مدرس‌یار',
+    itemListElement: liveClasses.map((l, i) => {
+     const [h, m] = l.start.split(':').map(Number)
+     const endMin = h * 60 + m + l.dur
+     const endTime = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`
+     return {
+      '@type': 'ListItem',
+      position: i + 1,
+      item: {
+       '@type': 'Event',
+       name: l.title,
+       description: l.desc,
+       startDate: `${l.date}T${l.start}:00+03:30`,
+       endDate: `${l.date}T${endTime}:00+03:30`,
+       eventAttendanceMode: 'https://schema.org/OnlineEventAttendanceMode',
+       eventStatus: l.status === 'full'
+        ? 'https://schema.org/EventSoldOut'
+        : 'https://schema.org/EventScheduled',
+       location: { '@type': 'VirtualLocation', url: `${ORIGIN}/live` },
+       organizer: { '@type': 'Organization', name: 'مدرس‌یار', url: ORIGIN },
+       performer: { '@type': 'Person', name: l.teacher },
+       offers: {
+        '@type': 'Offer',
+        price: l.price * 10,
+        priceCurrency: 'IRR',
+        availability: l.status === 'full' ? 'https://schema.org/SoldOut' : 'https://schema.org/InStock',
+        url: `${ORIGIN}/live`,
+       },
+      },
+     }
+    }),
+   },
+  ]}
  />
  <section className="page-hero">
  <div className="container">

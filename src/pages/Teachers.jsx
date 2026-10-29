@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import Seo, { ORIGIN } from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
 import { teachers } from '../data/mock'
@@ -15,16 +15,23 @@ export default function Teachers() {
  <Seo
   title="اساتید مدرس‌یار"
   description="با اساتید برتر ایران در برنامه‌نویسی، طراحی، زبان‌های خارجی، کنکور و بازاریابی دیجیتال آشنا شوید و کلاس آنلاین رزرو کنید."
-  jsonLd={{
-   '@context': 'https://schema.org',
-   '@type': 'ItemList',
-   itemListElement: teachers.map((t, i) => ({
-    '@type': 'ListItem',
-    position: i + 1,
-    name: t.name,
-    url: `${ORIGIN}/teachers/${t.id}`,
-   })),
-  }}
+  path="/teachers"
+  keywords="مدرس خصوصی, استاد آنلاین, رزرو کلاس خصوصی, اساتید برنامه‌نویسی, استاد کنکور"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['اساتید', '/teachers']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: 'اساتید مدرس‌یار',
+    numberOfItems: teachers.length,
+    itemListElement: teachers.map((t, i) => ({
+     '@type': 'ListItem',
+     position: i + 1,
+     name: t.name,
+     url: `${ORIGIN}/teachers/${t.id}`,
+    })),
+   },
+  ]}
  />
  <section className="page-hero">
  <div className="container">

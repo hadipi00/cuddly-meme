@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { site } from '../config/site'
@@ -27,6 +27,44 @@ export default function Contact() {
  <Seo
   title="تماس با ما"
   description="ارتباط با تیم مدرس‌یار — مشاوره انتخاب دوره، همکاری به‌عنوان مدرس و پشتیبانی سفارش‌ها."
+  path="/contact"
+  keywords="تماس با مدرس‌یار, پشتیبانی, مشاوره آموزشی, همکاری به عنوان مدرس"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['تماس با ما', '/contact']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ContactPage',
+    name: 'تماس با مدرس‌یار',
+    url: `${ORIGIN}/contact`,
+    inLanguage: 'fa-IR',
+   },
+   {
+    '@context': 'https://schema.org',
+    '@type': 'LocalBusiness',
+    '@id': `${ORIGIN}/#org`,
+    name: 'مدرس‌یار',
+    url: `${ORIGIN}/`,
+    image: `${ORIGIN}/og-cover.jpg`,
+    logo: `${ORIGIN}/favicon.svg`,
+    telephone: '+982191097700',
+    email: 'info@modaresyar.ir',
+    priceRange: '$$',
+    currenciesAccepted: 'IRR',
+    paymentAccepted: 'کارت بانکی، پیش‌کرایه، پس‌کرایه',
+    address: {
+     '@type': 'PostalAddress',
+     streetAddress: 'خیابان انقلاب، مجتمع آموزشی مدرس‌یار، طبقه ۳',
+     addressLocality: 'تهران',
+     addressCountry: 'IR',
+    },
+    openingHoursSpecification: [{
+     '@type': 'OpeningHoursSpecification',
+     dayOfWeek: ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'],
+     opens: '08:00',
+     closes: '20:00',
+    }],
+   },
+  ]}
  />
  <section className="page-hero">
  <div className="container">

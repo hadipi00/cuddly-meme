@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
@@ -12,6 +12,36 @@ export default function Blog() {
  <Seo
   title="بلاگ آموزشی"
   description="مقالات روش مطالعه، بهره‌وری، برنامه‌نویسی و آموزش آنلاین — راهنمای یادگیری بهتر در مدرس‌یار."
+  path="/blog"
+  keywords="مقاله آموزشی, تکنیک مطالعه, بهره‌وری, آموزش آنلاین, وبلاگ آموزشی"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['بلاگ آموزشی', '/blog']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'Blog',
+    name: 'بلاگ آموزشی مدرس‌یار',
+    url: `${ORIGIN}/blog`,
+    inLanguage: 'fa-IR',
+    publisher: { '@type': 'Organization', name: 'مدرس‌یار' },
+    blogPost: blogPosts.map((p) => ({
+     '@type': 'BlogPosting',
+     headline: p.title,
+     url: `${ORIGIN}/blog/${p.id}`,
+     datePublished: p.dateISO,
+     articleSection: p.cat,
+    })),
+   },
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    itemListElement: blogPosts.map((p, i) => ({
+     '@type': 'ListItem',
+     position: i + 1,
+     name: p.title,
+     url: `${ORIGIN}/blog/${p.id}`,
+    })),
+   },
+  ]}
  />
  <section className="page-hero" >
  <div className="container">

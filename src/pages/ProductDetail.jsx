@@ -63,13 +63,17 @@ export default function ProductDetail() {
         title={product.name}
         description={`خرید ${product.name} از مدرس‌مارکت — ${product.cat} با ارسال پیش‌کرایه، پس‌کرایه و پیک فوری تهران.`}
         path={`/market/${product.id}`}
+        type="product"
+        keywords={`خرید ${product.name}, ${product.cat}, مدرس مارکت, قیمت ${product.name}`}
         image={`${ORIGIN}/images/products/${product.id}.jpg`}
         jsonLd={[
           {
             '@context': 'https://schema.org',
             '@type': 'Product',
             name: product.name,
+            description: `خرید ${product.name} از مدرس‌مارکت مدرس‌یار — ضمانت اصالت و ۷ روز بازگشت`,
             category: product.cat,
+            sku: product.id.toUpperCase(),
             image: [`${ORIGIN}/images/products/${product.id}.jpg`],
             brand: { '@type': 'Brand', name: 'مدرس‌یار' },
             aggregateRating: product.rating
@@ -89,7 +93,14 @@ export default function ProductDetail() {
                 product.stock > 0
                   ? 'https://schema.org/InStock'
                   : 'https://schema.org/OutOfStock',
+              itemCondition: 'https://schema.org/NewCondition',
               url: `${ORIGIN}/market/${product.id}`,
+              seller: { '@type': 'Organization', name: 'مدرس‌یار' },
+              shippingDetails: {
+                '@type': 'OfferShippingDetails',
+                shippingRate: { '@type': 'MonetaryAmount', value: 0, currency: 'IRR' },
+                shippingDestination: { '@type': 'DefinedRegion', addressCountry: 'IR' },
+              },
             },
           },
           {

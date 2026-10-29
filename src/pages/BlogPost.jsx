@@ -19,6 +19,8 @@ export default function BlogPost() {
   description={post.excerpt}
   path={`/blog/${post.id}`}
   type="article"
+  publishedTime={post.dateISO}
+  keywords={`${post.cat}, مقاله آموزشی, مدرس‌یار`}
   image={`${ORIGIN}/images/blog/b${post.id.replace('b', '')}.jpg`}
   jsonLd={[
    {
@@ -29,6 +31,9 @@ export default function BlogPost() {
     image: [`${ORIGIN}/images/blog/b${post.id.replace('b', '')}.jpg`],
     inLanguage: 'fa-IR',
     articleSection: post.cat,
+    datePublished: post.dateISO,
+    dateModified: post.dateISO,
+    wordCount: post.read * 220,
     author: { '@type': 'Organization', name: 'مدرس‌یار', url: `${ORIGIN}/` },
     publisher: { '@type': 'Organization', name: 'مدرس‌یار', logo: { '@type': 'ImageObject', url: `${ORIGIN}/favicon.svg` } },
     mainEntityOfPage: `${ORIGIN}/blog/${post.id}`,

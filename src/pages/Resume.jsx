@@ -1,6 +1,6 @@
 import Icon from '../components/Icon'
 import { Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import { Reveal, RatingStars } from '../components/ui'
 import { teachers } from '../data/mock'
 import { site } from '../config/site'
@@ -13,6 +13,23 @@ export default function Resume() {
  <Seo
   title="رزومه و افتخارات"
   description="سابقه، افتخارات و دستاوردهای آکادمی مدرس‌یار — دانلود رزومه رسمی مدرس‌یار."
+  path="/resume"
+  keywords="رزومه مدرس‌یار, افتخارات آکادمی, سوابق آموزشی"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['رزومه و افتخارات', '/resume']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ProfilePage',
+    name: 'رزومه و افتخارات مدرس‌یار',
+    url: `${ORIGIN}/resume`,
+    inLanguage: 'fa-IR',
+    mainEntity: {
+     '@type': 'Organization',
+     name: 'مدرس‌یار',
+     url: ORIGIN,
+    },
+   },
+  ]}
  />
  <section className="page-hero">
  <div className="container">

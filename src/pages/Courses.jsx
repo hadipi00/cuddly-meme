@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import Seo, { ORIGIN } from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { CourseCard } from '../components/cards'
@@ -31,16 +31,23 @@ export default function Courses() {
  <Seo
   title="دوره‌های ضبط‌شده"
   description="خرید دوره‌های ضبط‌شده برنامه‌نویسی، طراحی گرافیک، زبان، کنکور و کسب‌وکار با دسترسی مادام‌العمر، تمرین و گواهی‌نامه — مدرس‌یار."
-  jsonLd={{
-   '@context': 'https://schema.org',
-   '@type': 'ItemList',
-   itemListElement: courses.map((c, i) => ({
-    '@type': 'ListItem',
-    position: i + 1,
-    name: c.title,
-    url: `${ORIGIN}/courses/${c.id}`,
-   })),
-  }}
+  path="/courses"
+  keywords="خرید دوره آنلاین, دوره ضبط شده, آموزش برنامه‌نویسی, دوره کنکور, آموزش فتوشاپ"
+  jsonLd={[
+   crumbsJsonLd([['صفحه نخست', '/'], ['دوره‌های ضبط‌شده', '/courses']]),
+   {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: 'دوره‌های ضبط‌شده مدرس‌یار',
+    numberOfItems: courses.length,
+    itemListElement: courses.map((c, i) => ({
+     '@type': 'ListItem',
+     position: i + 1,
+     name: c.title,
+     url: `${ORIGIN}/courses/${c.id}`,
+    })),
+   },
+  ]}
  />
  <section className="page-hero">
  <div className="container">

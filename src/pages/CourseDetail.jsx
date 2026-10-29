@@ -29,6 +29,7 @@ export default function CourseDetail() {
   title={course.title}
   description={course.desc}
   path={`/courses/${course.id}`}
+  keywords={`${course.cat}, ${course.teacher}, دوره آموزشی, مدرس‌یار`}
   image={`${ORIGIN}/images/courses/c${course.id}.jpg`}
   jsonLd={[
    {
@@ -38,7 +39,10 @@ export default function CourseDetail() {
     description: course.desc,
     image: [`${ORIGIN}/images/courses/c${course.id}.jpg`],
     inLanguage: 'fa-IR',
+    courseMode: 'online',
+    courseWorkload: `PT${course.hours}H`,
     provider: { '@type': 'Organization', name: 'مدرس‌یار', sameAs: `${ORIGIN}/` },
+    instructor: { '@type': 'Person', name: course.teacher },
     aggregateRating: {
      '@type': 'AggregateRating',
      ratingValue: course.rating,

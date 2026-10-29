@@ -1,5 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
-import Seo from '../components/Seo'
+import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
@@ -21,14 +21,20 @@ export default function TeacherProfile() {
    title={t.name}
    description={t.bio}
    path={`/teachers/${t.id}`}
-   jsonLd={{
-    '@context': 'https://schema.org',
-    '@type': 'Person',
-    name: t.name,
-    description: t.bio,
-    jobTitle: t.role,
-    worksFor: { '@type': 'Organization', name: 'مدرس‌یار' },
-   }}
+   keywords={`${t.name}, ${t.role}, مدرس, رزرو کلاس`}
+   jsonLd={[
+    crumbsJsonLd([['صفحه نخست', '/'], ['اساتید', '/teachers'], [t.name, `/teachers/${t.id}`]]),
+    {
+     '@context': 'https://schema.org',
+     '@type': 'Person',
+     name: t.name,
+     description: t.bio,
+     jobTitle: t.role,
+     image: `${ORIGIN}/og-cover.jpg`,
+     worksFor: { '@type': 'Organization', name: 'مدرس‌یار', url: ORIGIN },
+     knowsAbout: (t.skills || []).map((s) => s[0]),
+    },
+   ]}
   />
  )}
  <section className="page-hero">

@@ -738,3 +738,87 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
  .mk-detail { grid-template-columns: 1fr; }
  .mk-gallery { position: static; }
 }
+
+/* ================= فاز ۳ — مدرس‌مارکت فروشگاه کامل + ریسپانسیو حرفه‌ای ================= */
+.g6 { gap: 6px; }
+
+/* نوار دسته‌بندی — در موبایل اسکرول افقی یک‌ردیفه */
+.mk-catscroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+.mk-catscroll::-webkit-scrollbar { display: none; }
+.mk-catscroll .chip { flex-shrink: 0; white-space: nowrap; }
+
+/* نوار ابزار: در موبایل جستجو یک ردیف کامل، کنترل‌ها ردیف بعد */
+.mk-toolbar-ctrl { display: flex; gap: 8px; align-items: center; }
+.mk-sortsel { width: 170px; }
+@media (max-width: 760px) {
+ .mk-toolbar { display: grid; grid-template-columns: 1fr; gap: 10px; }
+ .mk-toolbar .search-box { min-width: 0; width: 100%; }
+ .mk-toolbar-ctrl { width: 100%; }
+ .mk-sortsel { flex: 1; min-width: 0; width: auto; }
+ .mk-openfilter { flex-shrink: 0; }
+ .mk-pageinfo { display: none; }
+}
+
+/* چیپ‌های فیلتر فعال */
+.mk-active { margin-bottom: 4px; }
+.mk-activechip {
+ display: inline-flex; align-items: center; gap: 6px;
+ padding: 5px 12px; border-radius: 999px; font-size: 12.5px; cursor: pointer;
+ background: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.3); color: #5eead4;
+ transition: all 0.18s;
+}
+.mk-activechip:hover { background: rgba(251, 113, 133, 0.12); border-color: rgba(251, 113, 133, 0.4); color: var(--red); }
+.mk-activechip.all { background: rgba(148, 163, 184, 0.08); border-color: var(--line); color: var(--muted); }
+.mk-activechip.all:hover { color: var(--red); }
+
+/* صفحه‌بندی فروشگاهی */
+.mk-pag { display: flex; justify-content: center; align-items: center; gap: 7px; margin-top: 30px; flex-wrap: wrap; }
+.mk-pagbtn {
+ min-width: 40px; height: 40px; padding: 0 8px; border-radius: 11px;
+ display: inline-flex; align-items: center; justify-content: center;
+ font-size: 14px; font-weight: 700; cursor: pointer;
+ background: var(--card); border: 1px solid var(--line); color: var(--text);
+ transition: all 0.18s;
+}
+.mk-pagbtn:hover:not(:disabled) { border-color: rgba(45, 212, 191, 0.4); color: var(--teal); }
+.mk-pagbtn.on { background: rgba(45, 212, 191, 0.14); border-color: var(--teal); color: var(--teal); }
+.mk-pagbtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* مشاهده سریع — در موبایل ستونی */
+@media (max-width: 560px) {
+ .mk-quickrow { flex-direction: column; }
+ .mk-quickact { flex-direction: column-reverse; }
+ .mk-quickact .flex-1 { width: 100%; }
+}
+
+/* علاقه‌مندی روی کارت محصول — هم‌اندازه دکمه افزودن */
+.product-card .wish-btn { width: 34px; height: 34px; border-radius: 10px; }
+.mk-quick.wished { color: var(--pink); border-color: rgba(244, 114, 182, 0.5); }
+
+/* نوار پیشرفت ارسال رایگان سبد خرید */
+.ship-bar { padding: 10px 12px; border-radius: 12px; background: rgba(45, 212, 191, 0.06); border: 1px dashed rgba(45, 212, 191, 0.3); }
+.ship-bar .progress { height: 6px; }
+
+/* کارت محصول موبایل — تنفس بهتر محتوا */
+@media (max-width: 560px) {
+ .mk-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+ .product-card .p-body { padding: 12px 12px 13px; min-width: 0; }
+ .product-card .p-body h3 { font-size: 13px !important; line-height: 1.75; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: unset; }
+ .product-card .rating-line span { display: none; }
+ .product-card .p-stock { font-size: 11px; }
+ .product-card .p-foot { flex-wrap: wrap; row-gap: 8px; }
+ .product-card .price-box { font-size: 13px !important; flex-wrap: wrap; max-width: 100%; }
+ .product-card .price-box .old { font-size: 10.5px; }
+ .mk-add, .product-card .wish-btn { width: 36px; height: 36px; border-radius: 11px; }
+ .p-thumb { height: 130px !important; }
+ .p-thumb svg { width: 46px !important; height: 46px !important; }
+}
+
+/* جدول مشخصات — اسکرول افقی در موبایل */
+@media (max-width: 560px) {
+ .dtable { display: block; overflow-x: auto; }
+}
+
+/* رادیوگروه رادیکس — BubbleInput مخفی در RTL به بیرون صفحه سرریز می‌کند؛
+   با clip داخلی نگهش می‌داریم (پدینگ/مارجین جبرانی تا سایه‌ها حفظ شوند) */
+[role="radiogroup"] { position: relative; overflow: clip; padding: 14px; margin: -14px; }
