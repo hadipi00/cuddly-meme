@@ -101,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
 
 /* مهاجرت‌های سبک — افزودن ستون اگر وجود ندارد */
 try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
 /* ---------------- کلید امضای JWT (تولید یک‌بار و ذخیره) ---------------- */
 const secretFile = join(dataDir, '.jwt-secret')

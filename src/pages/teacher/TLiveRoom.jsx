@@ -26,7 +26,8 @@ export default function TLiveRoom() {
    if (!preparing) return
    let stream
    setDevCheck(null)
-   navigator.mediaDevices?.getUserMedia({ video: true, audio: true })
+   if (!navigator.mediaDevices?.getUserMedia) { setDevCheck('denied'); return }
+   navigator.mediaDevices.getUserMedia({ video: true, audio: true })
      .then((s) => {
        stream = s
        setDevCheck({ mic: s.getAudioTracks().length > 0, cam: s.getVideoTracks().length > 0 })

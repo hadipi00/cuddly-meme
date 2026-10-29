@@ -36,6 +36,21 @@ export function AppProvider({ children }) {
 
  const patch = (fn) => setState((s) => ({ ...s, ...fn(s) }))
 
+ /* ---------- خودترمیمی هویت: تطبیق کاربر با توکن همین تب (sessionStorage) ---------- */
+ useEffect(() => {
+   if (!getToken()) return
+   let alive = true
+   req('/auth/me').then((r) => {
+     if (!alive || !r.user) return
+     setState((s) => (s.user?.id === r.user.id ? s : { ...s, user: r.user, token: getToken() }))
+   }).catch((e) => {
+     if (!alive) return
+     if (e.status === 401) { setToken(null); setState((s) => ({ ...s, user: null, token: null })) }
+   })
+   return () => { alive = false }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [])
+
  /** حالت دمو (فقط وقتی بک‌اند در دسترس نیست) */
  const loginDemo = useCallback((role, name) => {
  const u = { ...(DEMO_USERS[role] || DEMO_USERS.student) }
@@ -167,7 +182,10 @@ export function AppProvider({ children }) {
  patch((s) => ({ liveSessions: { ...s.liveSessions, [classId]: { startedAt: Date.now(), ended: false } } }))
  liveRef.current = { ...liveRef.current, [classId]: { startedAt: Date.now(), ended: false } }
  req(`/classes/${classId}/start`, { method: 'POST' }).catch((e) => {
- if (!e.serverDown) toast(e.message || 'شروع کلاس ناموفق بود', 'error')
+ if (!e.serverDown) {
+ if (e.status === 403) toast('با حساب دیگری وارد شده‌اید — با حساب مدرسِ همین کلاس وارد شوید', 'error')
+ else toast(e.message || 'شروع کلاس ناموفق بود', 'error')
+ }
  })
  },
  endLive(classId) {
@@ -177,7 +195,10 @@ export function AppProvider({ children }) {
  })
  liveRef.current = { ...liveRef.current, [classId]: { ...(liveRef.current[classId] || {}), ended: true } }
  req(`/classes/${classId}/end`, { method: 'POST' }).catch((e) => {
- if (!e.serverDown) toast(e.message || 'پایان کلاس ناموفق بود', 'error')
+ if (!e.serverDown) {
+ if (e.status === 403) toast('با حساب دیگری وارد شده‌اید — با حساب مدرسِ همین کلاس وارد شوید', 'error')
+ else toast(e.message || 'پایان کلاس ناموفق بود', 'error')
+ }
  })
  },
  /** ثبت آخرین بازدید محصول/دوره برای ریل «ادامه بده» */

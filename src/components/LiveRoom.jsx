@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { DataIcon } from '../utils/icons'
 import Icon from './Icon'
 import { Avatar } from './ui'
@@ -10,11 +11,12 @@ import { req, getToken } from '../services/http'
 /**
  * اتاق کلاس زنده واقعی — دوربین، میکروفون، اشتراک صفحه و وایت‌برد واقعی
  * ---------------------------------------------------------------------
- * • دوربین/میکروفون: getUserMedia واقعی + ارسال P2P با WebRTC (mesh)
- * • اشتراک صفحه: getDisplayMedia واقعی — تصویر صفحه برای بقیه ارسال می‌شود
- * • وایت‌برد: بوم همگام روی سرور (SSE) — همه بوم را زنده می‌بینند و ذخیره می‌شود
+ * • دوربین/میکروفون: getUserMedia + مرکز دسترسی (دکمه درخواست، تلاش دوباره، باز کردن در تب جدید)
+ * • تعویض دوربین: جابه‌جایی بین دوربین جلو/عقب موبایل و دوربین‌های متعدد دسکتاپ
+ * • تمام‌صفحه: Fullscreen API + حالت شبه‌تمام‌صفحه برای iOS
+ * • اشتراک صفحه: getDisplayMedia — تصویر صفحه برای بقیه ارسال می‌شود
+ * • وایت‌برد: باز/بسته شدن تخته از سرور همگام می‌شود — دانش‌آموز هم تخته مدرس را می‌بیند
  * • تایمر از startedAt سرور • چت و حاضران و دست بلند شده روی دیتابیس
- * • اگر سرور در دسترس نباشد: دوربین محلی کار می‌کند و بقیه غیرفعال می‌ماند
  * variant: 'teacher' | 'student'
  */
 
@@ -51,6 +53,68 @@ function VideoTile({ stream, self, name, camOn, color, big }) {
   )
 }
 
+/** پیش‌نمایش اشتراک صفحه خودم */
+function ScreenPreview({ stream }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const v = ref.current
+    if (v && stream) { v.srcObject = stream; v.play?.().catch(() => {}) }
+  }, [stream])
+  if (!stream) {
+    return <div className="live-screen-mock"><Icon name="monitor" /><b>صفحه در حال اشتراک است</b></div>
+  }
+  return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
+}
+
+/** کارت درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس */
+function PermissionCard({ state, permBusy, onRequest, inIframe, onOpenTab, onGoHttps }) {
+  return (
+    <div className="perm-overlay">
+      <div className="perm-card">
+        <div className="perm-ico"><Icon name="camera" size={30} /></div>
+        <b style={{ fontSize: 15.5 }}>فعال‌سازی دوربین و میکروفون</b>
+        <p className="muted small" style={{ lineHeight: 1.9 }}>
+          برای گفتگوی تصویری زنده، روی دکمه زیر بزنید؛ پنجره‌ای از مرورگر باز می‌شود —
+          <b> «اجازه دادن / Allow» </b> را انتخاب کنید.
+        </p>
+        <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={permBusy} onClick={onRequest}>
+          {permBusy ? 'در حال انتظار برای پاسخ مرورگر…' : (<><Icon name="video" size={17} /> درخواست دسترسی دوربین و میکروفون</>)}
+        </button>
+        {state === 'denied' && (
+          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+            دسترسی رد شده است. روی <b>آیکون قفل/کلید کنار آدرس سایت</b> در نوار مرورگر بزنید،
+            دوربین و میکروفون را روی «اجازه دادن» بگذارید و دوباره تلاش کنید.
+          </p>
+        )}
+        {state === 'nodevice' && (
+          <p className="small" style={{ color: 'var(--red)' }}>دوربین یا میکروفونی روی این دستگاه پیدا نشد.</p>
+        )}
+        {state === 'insecure' && (
+          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9 }}>
+            مرورگر فقط در آدرس امن (HTTPS) اجازه دوربین می‌دهد. با دکمه زیر به آدرس امن بروید.
+          </p>
+        )}
+        {state === 'insecure' && (
+          <button className="btn btn-ghost btn-sm" onClick={onGoHttps}>رفتن به آدرس امن (HTTPS)</button>
+        )}
+        {inIframe && (
+          <>
+            <p className="muted small" style={{ lineHeight: 1.9 }}>
+              اگر پنجره اجازه باز نشد، سایت داخل قاب پیش‌نمایش است — کلاس را در پنجره جداگانه باز کنید:
+            </p>
+            <button className="btn btn-ghost btn-sm" onClick={onOpenTab}>
+              <Icon name="maximize" size={15} /> باز کردن کلاس در پنجره جدید
+            </button>
+          </>
+        )}
+        <span className="muted" style={{ fontSize: 11 }}>
+          بدون دوربین هم می‌توانید در کلاس شرکت کنید — چت، وایت‌برد و حاضران فعال است.
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const isTeacher = variant === 'teacher'
  const { user, toast, startLive, endLive } = useApp()
@@ -63,9 +127,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [screen, setScreen] = useState(false)
  const [board, setBoard] = useState(false)
  const [recording, setRecording] = useState(false)
- const [mediaErr, setMediaErr] = useState(null) // 'denied' | 'nodevice'
  const [hand, setHand] = useState(false)
- const [ended, setEnded] = useState(false)
+ const [endedModal, setEndedModal] = useState(false)
  const [tab, setTab] = useState('chat')
  const [, setTick] = useState(0)
 
@@ -76,6 +139,18 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const screenTrackRef = useRef(null)
  const screenStreamRef = useRef(null)
  const [localStream, setLocalStream] = useState(null)
+ const [mediaErr, setMediaErr] = useState(null) // 'denied' | 'nodevice' | 'insecure'
+ const [permBusy, setPermBusy] = useState(false)
+ const switchingRef = useRef(false)
+ const facingRef = useRef('user')
+ const deviceIdxRef = useRef(0)
+ const devicesRef = useRef([])
+
+ /* تعویض دوربین + تمام‌صفحه */
+ const [fsActive, setFsActive] = useState(false)
+ const [pseudoFs, setPseudoFs] = useState(false)
+ const stageRef = useRef(null)
+ const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
 
  /* ---------- WebRTC mesh ---------- */
  const myPeerIdRef = useRef('p' + Math.random().toString(36).slice(2, 10))
@@ -92,9 +167,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const canvasRef = useRef(null)
  const drawingRef = useRef(null)
  const strokesRef = useRef([])
+ const boardLocalTsRef = useRef(0) // جلوگیری از دوئل با echo سرور بعد از تغییر محلی
  strokesRef.current = strokes
 
- /* ---------- وضعیت زنده + چت (مثل قبل) ---------- */
+ /* ---------- وضعیت زنده + چت ---------- */
  const [live, setLive] = useState(null)
  const [messages, setMessages] = useState([])
  const [input, setInput] = useState('')
@@ -105,47 +181,178 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const signal = (to, kind, data) => {
    req(`/classes/${classId}/signal`, { method: 'POST', body: { from: myPeerIdRef.current, to, kind, data } }).catch(() => {})
  }
+ const canSyncBoard = () => Date.now() - boardLocalTsRef.current > 3000
 
  /* ---------- آغاز کلاس توسط مدرس (فقط اگر هنوز زنده نیست) ---------- */
  useEffect(() => {
    if (!isTeacher || !classId) return
    req(`/classes/${classId}/state`).then((st) => {
      if (st.status === 'live') setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: st.startedAt }))
-     else startLive(classId)
+     else if (st.status !== 'ended') startLive(classId)
+     else setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', startedAt: st.startedAt }))
    }).catch(() => startLive(classId))
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
- /* ---------- میکروفون و دوربین واقعی ---------- */
+ /* ---------- میکروفون و دوربین واقعی — با مرکز دسترسی ---------- */
+ const attachAll = () => {
+   const s = localStreamRef.current
+   const a = s?.getAudioTracks()[0]
+   const v = s?.getVideoTracks()[0]
+   for (const { senders } of pcsRef.current.values()) {
+     if (a) senders.audio.replaceTrack(a).catch(() => {})
+     if (v && !screenTrackRef.current) senders.video.replaceTrack(v).catch(() => {})
+   }
+ }
+
+ const startMedia = async () => {
+   if (permBusy) return
+   if (!navigator.mediaDevices?.getUserMedia) {
+     setMediaErr('insecure')
+     return
+   }
+   setPermBusy(true)
+   try {
+     const video = {
+       facingMode: facingRef.current === 'environment' ? { ideal: 'environment' } : { ideal: 'user' },
+       width: { ideal: 1280 }, height: { ideal: 720 },
+     }
+     const s = await navigator.mediaDevices.getUserMedia({
+       video, audio: { echoCancellation: true, noiseSuppression: true },
+     })
+     localStreamRef.current?.getTracks().forEach((t) => t.stop())
+     localStreamRef.current = s
+     setLocalStream(s)
+     setMediaErr(null)
+     attachAll()
+     navigator.mediaDevices.enumerateDevices()
+       .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
+       .catch(() => {})
+   } catch (e) {
+     setMediaErr(e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError' ? 'nodevice' : 'denied')
+   }
+   setPermBusy(false)
+ }
+
+ /* تلاش خودکار اول — اگر مرورگر اجازه دهد پنجره دسترسی همان اول باز می‌شود */
  useEffect(() => {
    let cancelled = false
-   const attachAll = () => {
-     const s = localStreamRef.current
-     const a = s?.getAudioTracks()[0]
-     const v = s?.getVideoTracks()[0]
-     for (const { senders } of pcsRef.current.values()) {
-       if (a) senders.audio.replaceTrack(a).catch(() => {})
-       if (v) senders.video.replaceTrack(v).catch(() => {})
-     }
-   }
-   navigator.mediaDevices?.getUserMedia({
-     video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+   if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
+   navigator.mediaDevices.getUserMedia({
+     video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
      audio: { echoCancellation: true, noiseSuppression: true },
    }).then((s) => {
      if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
      localStreamRef.current = s
      setLocalStream(s)
+     setMediaErr(null)
      attachAll()
-   }).catch((e) => {
-     if (cancelled) return
-     setMediaErr(e?.name === 'NotFoundError' ? 'nodevice' : 'denied')
-   })
+     navigator.mediaDevices.enumerateDevices()
+       .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
+       .catch(() => {})
+   }).catch(() => { if (!cancelled) setMediaErr('denied') })
    return () => {
      cancelled = true
      localStreamRef.current?.getTracks().forEach((t) => t.stop())
      screenTrackRef.current?.stop()
    }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [])
+
+ /* ---------- تعویض دوربین (جلو/عقب موبایل یا دوربین‌های دسکتاپ) ---------- */
+ const switchCam = async () => {
+   if (switchingRef.current) return
+   if (!localStreamRef.current) { startMedia(); return }
+   switchingRef.current = true
+   let ok = false
+   try {
+     let ds = devicesRef.current
+     if (!ds.length) {
+       ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
+       devicesRef.current = ds
+     }
+     const next = async (constraints) => {
+       const s = await navigator.mediaDevices.getUserMedia(constraints)
+       const newV = s.getVideoTracks()[0]
+       if (!newV) { s.getTracks().forEach((t) => t.stop()); throw new Error('novideo') }
+       const oldV = localStreamRef.current?.getVideoTracks()[0]
+       oldV?.stop()
+       const audio = localStreamRef.current?.getAudioTracks()[0]
+       const nextStream = new MediaStream(audio ? [audio, newV] : [newV])
+       localStreamRef.current = nextStream
+       setLocalStream(nextStream)
+       if (!screenTrackRef.current) {
+         for (const { senders } of pcsRef.current.values()) senders.video.replaceTrack(newV).catch(() => {})
+       }
+     }
+     if (ds.length > 1) {
+       deviceIdxRef.current = (deviceIdxRef.current + 1) % ds.length
+       await next({ video: { deviceId: { exact: ds[deviceIdxRef.current].deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+       ok = true
+       toast('دوربین عوض شد', 'success')
+     } else {
+       // موبایل: فلَپ بین دوربین جلو و عقب
+       const flip = facingRef.current === 'user' ? 'environment' : 'user'
+       facingRef.current = flip
+       try {
+         await next({ video: { facingMode: { exact: flip }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+         ok = true
+         toast(flip === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد', 'success')
+       } catch {
+         try {
+           await next({ video: { facingMode: { ideal: flip }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+           ok = true
+           toast('دوربین عوض شد', 'success')
+         } catch { /* دوربین دیگری نیست */ }
+       }
+     }
+   } catch { /* خطا — پیام زیر */ }
+   if (!ok) toast('دوربین دیگری روی این دستگاه پیدا نشد', 'info')
+   switchingRef.current = false
+ }
+
+ /* ---------- تمام‌صفحه ---------- */
+ const toggleFs = async () => {
+   const el = stageRef.current
+   if (!el) return
+   const doc = document
+   const isFs = !!(doc.fullscreenElement || doc.webkitFullscreenElement)
+   if (isFs || pseudoFs || doc.body.classList.contains('fs-lock')) {
+     try { if (doc.exitFullscreen) await doc.exitFullscreen(); else doc.webkitExitFullscreen?.() } catch { /* noop */ }
+     setPseudoFs(false)
+     doc.body.classList.remove('fs-lock')
+     return
+   }
+   try {
+     if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
+     else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen()
+     else { setPseudoFs(true); doc.body.classList.add('fs-lock') } // iOS Safari
+   } catch {
+     setPseudoFs(true)
+     doc.body.classList.add('fs-lock')
+   }
+ }
+ useEffect(() => {
+   const h = () => setFsActive(!!(document.fullscreenElement || document.webkitFullscreenElement))
+   document.addEventListener('fullscreenchange', h)
+   document.addEventListener('webkitfullscreenchange', h)
+   return () => {
+     document.removeEventListener('fullscreenchange', h)
+     document.removeEventListener('webkitfullscreenchange', h)
+     document.body.classList.remove('fs-lock')
+   }
+ }, [])
+
+ const goHttps = () => {
+   try {
+     const u = new URL(window.location.href)
+     if (u.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(u.hostname)) {
+       u.protocol = 'https:'
+       window.location.href = u.toString()
+     }
+   } catch { /* noop */ }
+ }
+ const openNewTab = () => { try { window.open(window.location.href, '_blank') } catch { /* noop */ } }
 
  /* ---------- SSE: رویدادهای لحظه‌ای (WebRTC + تخته + چت + وضعیت) ---------- */
  useEffect(() => {
@@ -167,7 +374,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      const a = s?.getAudioTracks()[0]
      const v = s?.getVideoTracks()[0]
      if (a) at.sender.replaceTrack(a).catch(() => {})
-     if (v) vt.sender.replaceTrack(v).catch(() => {})
+     if (v && !screenTrackRef.current) vt.sender.replaceTrack(v).catch(() => {})
      if (screenTrackRef.current) vt.sender.replaceTrack(screenTrackRef.current).catch(() => {})
 
      pc.onicecandidate = (ev) => { if (ev.candidate) signal(peerId, 'ice', ev.candidate.toJSON()) }
@@ -240,7 +447,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          toast('کلاس شروع شد', 'success')
          break
        case 'ended':
-         toast('مدرس کلاس را پایان داد', 'info')
+         setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', endedAt: msg.endedAt }))
+         break
+       case 'board-open':
+         if (canSyncBoard()) setBoard(!!msg.open)
          break
        case 'message': {
          const m2 = msg.message
@@ -278,6 +488,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        const st = await req(`/classes/${classId}/state`)
        if (!alive) return
        setLive({ status: st.status, startedAt: st.startedAt, participants: st.participants || [] })
+       if (st.boardOpen != null && canSyncBoard()) setBoard(!!st.boardOpen)
        hbCount++
        if (hbCount % 3 === 0) {
          req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: handRef.current } }).catch(() => {})
@@ -327,6 +538,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' })
  }, [messages])
 
+ /* پایان کلاس از سمت سرور → خاموش کردن رسانه‌ها */
+ useEffect(() => {
+   if (live?.status !== 'ended') return
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   screenTrackRef.current?.stop()
+   screenTrackRef.current = null
+   setLocalStream(null)
+   setScreen(false)
+ }, [live?.status])
+
  /* ---------- محاسبه تایمر ---------- */
  const startedAt = live?.startedAt || null
  const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0
@@ -335,6 +556,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  const participants = live?.participants || []
  const handsUp = participants.filter((p) => p.hand).length
+ const classEnded = live?.status === 'ended'
 
  const send = async (e) => {
    e.preventDefault()
@@ -358,15 +580,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const broadcastState = () => signal('*', 'state', { mic: micRef.current, cam: camRef.current, screen: screenRef.current })
 
  const toggleMic = () => {
+   if (!localStreamRef.current?.getAudioTracks().length) { startMedia(); return }
    const v = !mic
    setMic(v)
-   localStreamRef.current?.getAudioTracks().forEach((t) => { t.enabled = v })
+   localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = v })
    broadcastState()
  }
  const toggleCam = () => {
+   if (!localStreamRef.current?.getVideoTracks().length) { startMedia(); return }
    const v = !cam
    setCam(v)
-   localStreamRef.current?.getVideoTracks().forEach((t) => { t.enabled = v })
+   localStreamRef.current.getVideoTracks().forEach((t) => { t.enabled = v })
    broadcastState()
  }
  const stopScreenShare = () => {
@@ -381,6 +605,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
  const toggleScreenShare = async () => {
    if (screen) { stopScreenShare(); return }
+   if (!navigator.mediaDevices?.getDisplayMedia) {
+     toast(inIframe ? 'اشتراک صفحه داخل قاب پیش‌نمایش ممکن نیست — کلاس را در پنجره جدید باز کنید' : 'مرورگر شما اشتراک صفحه را پشتیبانی نمی‌کند', 'error')
+     return
+   }
    try {
      const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: false })
      const track = s.getVideoTracks()[0]
@@ -391,12 +619,27 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      screenRef.current = true
      setScreen(true)
      setBoard(false)
+     if (isTeacher) {
+       boardLocalTsRef.current = Date.now()
+       req(`/classes/${classId}/board/open`, { method: 'POST', body: { open: false } }).catch(() => {})
+     }
      broadcastState()
-   } catch { toast('اشتراک صفحه لغو شد', 'info') }
+   } catch (e) {
+     if (e?.name === 'NotAllowedError') toast(inIframe ? 'اشتراک صفحه فقط در پنجره کامل کار می‌کند — کلاس را در پنجره جدید باز کنید' : 'اشتراک صفحه لغو شد', 'info')
+     else toast('اشتراک صفحه ممکن نشد', 'error')
+   }
  }
- const toggleBoard = () => {
-   if (!board) stopScreenShare()
-   setBoard(!board)
+ const toggleBoard = async () => {
+   const next = !board
+   setBoard(next)
+   boardLocalTsRef.current = Date.now()
+   if (next) stopScreenShare()
+   if (isTeacher) {
+     try { await req(`/classes/${classId}/board/open`, { method: 'POST', body: { open: next } }) }
+     catch (e) {
+       if (!e.serverDown) { setBoard(!next); toast(e.message || 'تغییر وضعیت تخته ناموفق بود', 'error') }
+     }
+   }
  }
  const toggleBoardLock = async () => {
    const next = !boardLocked
@@ -407,6 +650,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const clearBoard = async () => {
    setStrokes([])
    try { await req(`/classes/${classId}/board`, { method: 'DELETE' }) } catch { /* noop */ }
+ }
+ const endClassNow = () => {
+   setEndedModal(false)
+   endLive(classId)
  }
 
  /* ---------- رسم وایت‌برد ---------- */
@@ -496,6 +743,32 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    }
  }
 
+ /* ---------- صفحه پایان کلاس (هر دو نقش) ---------- */
+ if (classEnded) {
+   return (
+     <div className="card pad" style={{ maxWidth: 560, margin: '30px auto', textAlign: 'center' }}>
+       <div className="sc-icon green" style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+         <Icon name="check" size={28} />
+       </div>
+       <h2 style={{ fontSize: 19 }}>جلسه «{classInfo?.title || 'کلاس'}» به پایان رسید</h2>
+       <p className="muted small mt8">
+         مدت برگزاری: <b dir="ltr">{mm}:{ss}</b> • {faNum(participants.length)} حاضر • {faNum(messages.length)} پیام
+         {isTeacher ? ' — ضبط جلسه برای دانشجوهای غایب منتشر می‌شود.' : ' — حضور شما ثبت شد.'}
+       </p>
+       <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
+         {isTeacher ? (
+           <Link to="/panel/teacher/classes" className="btn btn-primary">کلاس‌های من</Link>
+         ) : (
+           <>
+             <Link to="/panel/student/schedule" className="btn btn-ghost">برنامه هفتگی</Link>
+             <Link to="/panel/student/courses" className="btn btn-primary">دوره‌های من</Link>
+           </>
+         )}
+       </div>
+     </div>
+   )
+ }
+
  /* ---------- چیدمان صحنه ---------- */
  const anyoneScreening = peersList.some((p) => p.screen)
  const remoteVideos = peersList.filter((p) => p.stream)
@@ -521,8 +794,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <span className="badge b-red"><i className="live-red-dot" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99 }} /> پخش زنده</span>
  </div>
 
- <div className="live-grid">
- <div className="live-stage">
+ <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
+ <div className="live-stage" ref={stageRef}>
  <div className={`live-view ${board ? 'board' : screen || anyoneScreening ? 'screen' : 'camera'}`}>
  <span className="live-label"><i className="live-red-dot" /> {board ? 'وایت‌برد مشترک' : screen ? 'اشتراک صفحه شما' : anyoneScreening ? 'اشتراک صفحه مدرس' : 'کلاس زنده'}</span>
  <span className="live-timer" dir="ltr">{mm}:{ss}</span>
@@ -551,6 +824,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        </div>
      )}
      {!isTeacher && boardLocked && <div className="wb-locknote">تخته توسط مدرس قفل است — فقط مشاهده</div>}
+     {!isTeacher && !boardLocked && <div className="wb-locknote">تخته باز است — می‌توانید بنویسید ✍️</div>}
      <canvas
        ref={canvasRef}
        width={WB_W}
@@ -581,12 +855,22 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        <div className="live-tile">
          <Avatar name={classInfo?.teacher || 'مدرس'} color="grad-0" size={110} />
          <b style={{ fontSize: 16 }}>{classInfo?.teacher || 'مدرس'}</b>
-         <span className="muted small">
-           {mediaErr === 'denied' ? 'دسترسی دوربین/میکروفون داده نشد — از تنظیمات مرورگر اجازه دهید' : 'در حال اتصال دوربین…'}
-         </span>
+         <span className="muted small">در حال اتصال…</span>
        </div>
      )}
    </div>
+ )}
+
+ {/* مرکز دسترسی دوربین — فقط وقتی رسانه‌ای نداریم و در حال دیدن تخته/صفحه نیستیم */}
+ {!localStream && !board && !screen && !anyoneScreening && (
+   <PermissionCard
+     state={mediaErr || 'idle'}
+     permBusy={permBusy}
+     onRequest={startMedia}
+     inIframe={inIframe}
+     onOpenTab={openNewTab}
+     onGoHttps={goHttps}
+   />
  )}
 
  {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته */}
@@ -608,6 +892,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <button className={ctl(cam) + (cam ? '' : ' off')} onClick={toggleCam}>
  <Icon name="camera" /> <span className="ctl-tip">{cam ? 'خاموش کردن دوربین' : 'روشن کردن دوربین'}</span>
  </button>
+ <button className={ctl(false)} onClick={switchCam}>
+ <Icon name="camFlip" /> <span className="ctl-tip">تعویض دوربین (جلو/عقب)</span>
+ </button>
  {isTeacher && (
  <button className={ctl(screen)} onClick={toggleScreenShare}>
  <Icon name="monitor" /> <span className="ctl-tip">{screen ? 'قطع اشتراک صفحه' : 'اشتراک صفحه سیستم'}</span>
@@ -618,6 +905,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <Icon name="board" /> <span className="ctl-tip">{board ? 'بستن وایت‌برد' : 'وایت‌برد دیجیتال'}</span>
  </button>
  )}
+ <button className={ctl(fsActive || pseudoFs)} onClick={toggleFs}>
+ <Icon name={fsActive || pseudoFs ? 'minimize' : 'maximize'} /> <span className="ctl-tip">{fsActive || pseudoFs ? 'خروج از تمام‌صفحه' : 'نمایش تمام‌صفحه'}</span>
+ </button>
  {isTeacher ? (
  <button className={ctl(recording)} onClick={() => { setRecording(!recording); toast(recording ? 'ضبط کلاس متوقف شد' : 'ضبط کلاس شروع شد — برای دانشجوهای غایب منتشر می‌شود', 'info') }}>
  <Icon name="activity" /> <span className="ctl-tip">{recording ? 'توقف ضبط' : 'ضبط کلاس'}</span>
@@ -628,11 +918,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </button>
  )}
  {isTeacher ? (
- <button className="ctl danger" onClick={() => setEnded(true)}>
+ <button className="ctl danger" onClick={() => setEndedModal(true)}>
  <Icon name="logout" size={19} /> پایان کلاس
  </button>
  ) : (
- <button className="ctl danger" onClick={() => setEnded(true)}>
+ <button className="ctl danger" onClick={() => setEndedModal(true)}>
  <Icon name="logout" size={19} /> خروج از کلاس
  </button>
  )}
@@ -686,7 +976,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </div>
 
  {/* پایان کلاس */}
- <Modal open={ended} title={isTeacher ? 'پایان کلاس' : 'خروج از کلاس'} onClose={() => setEnded(false)}>
+ <Modal open={endedModal} title={isTeacher ? 'پایان کلاس' : 'خروج از کلاس'} onClose={() => setEndedModal(false)}>
  {isTeacher ? (
  <>
  <p className="muted small mb16">خلاصه جلسه برای ثبت در پنل:</p>
@@ -696,37 +986,25 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <div className="card stat-card" style={{ padding: 14 }}><b className="sc-val">{faNum(messages.length)}</b><span className="sc-label">پیام گفتگو</span></div>
  </div>
  <div className="modal-actions">
- <button className="btn btn-primary" onClick={() => {
- setEnded(false)
- if (classId) endLive(classId)
- toast('کلاس با موفقیت به پایان رسید — وضعیت برای همه کاربران بروز شد')
- }}>ثبت و پایان</button>
- <button className="btn btn-ghost" onClick={() => setEnded(false)}>بازگشت به کلاس</button>
+ <button className="btn btn-primary" onClick={endClassNow}>ثبت و پایان</button>
+ <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت به کلاس</button>
  </div>
  </>
  ) : (
  <>
  <p className="muted small">از کلاس خارج می‌شوید؟ حضور و غیاب شما ثبت شده است.</p>
  <div className="modal-actions">
- <button className="btn btn-primary" onClick={() => { setEnded(false); toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info') }}>بله، خارج شو</button>
- <button className="btn btn-ghost" onClick={() => setEnded(false)}>بازگشت</button>
+ <button className="btn btn-primary" onClick={() => {
+   setEndedModal(false)
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   screenTrackRef.current?.stop()
+   toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info')
+ }}>بله، خارج شو</button>
+ <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت</button>
  </div>
  </>
  )}
  </Modal>
  </div>
  )
-}
-
-/** پیش‌نمایش اشتراک صفحه خودم */
-function ScreenPreview({ stream }) {
- const ref = useRef(null)
- useEffect(() => {
-   const v = ref.current
-   if (v && stream) { v.srcObject = stream; v.play?.().catch(() => {}) }
- }, [stream])
- if (!stream) {
-   return <div className="live-screen-mock"><Icon name="monitor" /><b>صفحه در حال اشتراک است</b></div>
- }
- return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
 }

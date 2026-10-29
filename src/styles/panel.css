@@ -317,6 +317,34 @@
  max-width: calc(100% - 24px); overflow-x: auto; padding-bottom: 2px;
 }
 .cam-strip .cam-tile { min-width: 128px; border-radius: 10px; }
+
+/* ---------- مرکز دسترسی دوربین/میکروفون ---------- */
+.perm-overlay {
+ position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center;
+ background: rgba(2, 6, 23, 0.55); backdrop-filter: blur(5px); padding: 16px;
+}
+.perm-card {
+ background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px;
+ max-width: 430px; width: 100%; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center;
+ box-shadow: 0 22px 60px rgba(0, 0, 0, 0.4);
+}
+.perm-ico {
+ width: 62px; height: 62px; border-radius: 18px; display: flex; align-items: center; justify-content: center;
+ background: rgba(45, 212, 191, 0.13); color: var(--teal); border: 1px solid rgba(45, 212, 191, 0.3); flex-shrink: 0;
+}
+
+/* ---------- تمام‌صفحه کلاس ---------- */
+.live-stage:fullscreen { border-radius: 0; border: none; background: #020617; }
+.live-stage:fullscreen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+.live-stage:fullscreen .live-side { display: none; }
+.live-stage:fullscreen .chat-body { max-height: none; }
+.live-stage:-webkit-full-screen { border-radius: 0; border: none; background: #020617; }
+.live-stage:-webkit-full-screen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+.live-stage.pseudo-fs { position: fixed; inset: 0; z-index: 1400; border-radius: 0; border: none; background: #020617; }
+.live-stage.pseudo-fs .live-view { flex: 1; min-height: 0; aspect-ratio: auto; }
+.live-stage.pseudo-fs .live-side { display: none; }
+body.fs-lock { overflow: hidden; }
+.live-grid.fs-grid { grid-template-columns: 1fr; }
 .live-view.board { background: linear-gradient(160deg, var(--live-a), var(--live-b)); }
 
 /* ---------- certificates ---------- */

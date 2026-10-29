@@ -270,6 +270,17 @@ app.post('/api/classes/:id/board/lock', requireRole('teacher', 'admin'), (req, r
   res.json({ ok: true, locked: !!locked })
 })
 
+/** باز/بسته شدن وایت‌برد توسط مدرس — برای همه کلاس همگام می‌شود (دانش‌آموز هم تخته را می‌بیند) */
+app.post('/api/classes/:id/board/open', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  const open = req.body?.open ? 1 : 0
+  db.prepare('UPDATE classes SET board_open = ? WHERE id = ?').run(open, c.id)
+  broadcast(c.id, { type: 'board-open', open: !!open, at: now() })
+  res.json({ ok: true, open: !!open })
+})
+
 app.post('/api/classes/:id/start', requireRole('teacher', 'admin'), (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
@@ -291,12 +302,13 @@ app.post('/api/classes/:id/end', requireRole('teacher', 'admin'), (req, res) => 
   res.json({ ok: true, endedAt })
 })
 
-/** وضعیت لحظه‌ای کلاس — polling عمومی (تایمر + حاضران) */
+/** وضعیت لحظه‌ای کلاس — polling عمومی (تایمر + حاضران + وضعیت تخته) */
 app.get('/api/classes/:id/state', (req, res) => {
-  const c = db.prepare('SELECT id, status, started_at, ended_at FROM classes WHERE id = ?').get(req.params.id)
+  const c = db.prepare('SELECT id, status, started_at, ended_at, board_open, board_locked FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   res.json({
     id: c.id, status: c.status, startedAt: c.started_at, endedAt: c.ended_at,
+    boardOpen: !!c.board_open, boardLocked: !!c.board_locked,
     participants: liveParticipants(c.id), serverTime: now(),
   })
 })
@@ -385,7 +397,11 @@ function rtcRoom(classId) {
 }
 
 function peerInfo(p) {
-  return { peer: p.id, name: p.user?.name || 'مهمان', role: p.user?.role || 'student', color: p.user?.color || 'grad-1' }
+  const st = p.state || {}
+  return {
+    peer: p.id, name: p.user?.name || 'مهمان', role: p.user?.role || 'student', color: p.user?.color || 'grad-1',
+    mic: st.mic !== false, cam: st.cam !== false, screen: !!st.screen,
+  }
 }
 
 /** اتصال SSE با هویت peer (برای WebRTC) — توکن از کوئری چون EventSource هدر نمی‌فرستد */
@@ -443,6 +459,10 @@ app.post('/api/classes/:id/signal', requireAuth, (req, res) => {
   if (!sender) return res.status(403).json({ error: 'peer نامعتبر — اتصال SSE باز نیست' })
   if (sender.user && sender.user.id !== req.user.id) return res.status(403).json({ error: 'peer متعلق به کاربر دیگری است' })
   const event = { type: 'signal', from: sender.id, kind: String(kind || '').slice(0, 12), data, at: now() }
+  // ذخیره وضعیت mic/cam/screen هر peer — تا تازه‌واردها هم وضعیت درست ببینند
+  if (event.kind === 'state' && data && typeof data === 'object') {
+    sender.state = { mic: !!data.mic, cam: !!data.cam, screen: !!data.screen }
+  }
   if (to === '*') {
     for (const [pid, p] of (room || new Map())) if (pid !== sender.id) { try { p.res.write(`data: ${JSON.stringify(event)}\n\n`) } catch {} }
   } else {
