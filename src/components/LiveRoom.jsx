@@ -127,6 +127,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [screen, setScreen] = useState(false)
  const [board, setBoard] = useState(false)
  const [recording, setRecording] = useState(false)
+ const [recSecs, setRecSecs] = useState(0)
  const [hand, setHand] = useState(false)
  const [endedModal, setEndedModal] = useState(false)
  const [tab, setTab] = useState('chat')
@@ -145,6 +146,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const facingRef = useRef('user')
  const deviceIdxRef = useRef(0)
  const devicesRef = useRef([])
+
+ /* ضبط واقعی کلاس (MediaRecorder) */
+ const recRef = useRef(null)
+ const recChunksRef = useRef([])
+ const recSourceRef = useRef(null)
+ const recStartRef = useRef(0)
 
  /* تعویض دوربین + تمام‌صفحه */
  const [fsActive, setFsActive] = useState(false)
@@ -183,13 +190,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
  const canSyncBoard = () => Date.now() - boardLocalTsRef.current > 3000
 
- /* ---------- آغاز کلاس توسط مدرس (فقط اگر هنوز زنده نیست) ---------- */
+ /* ---------- آغاز/برگزاری مجدد کلاس توسط مدرس ----------
+  * کلاسِ ended (جلسه قبل) با ورود مدرس، جلسه‌ی جدید شروع می‌شود — دیگر صفحه «پایان» گیر نمی‌کند */
  useEffect(() => {
    if (!isTeacher || !classId) return
    req(`/classes/${classId}/state`).then((st) => {
      if (st.status === 'live') setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: st.startedAt }))
-     else if (st.status !== 'ended') startLive(classId)
-     else setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', startedAt: st.startedAt }))
+     else startLive(classId) // scheduled یا ended → برگزاری جلسه‌ی جدید
    }).catch(() => startLive(classId))
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
@@ -353,6 +360,76 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    } catch { /* noop */ }
  }
  const openNewTab = () => { try { window.open(window.location.href, '_blank') } catch { /* noop */ } }
+
+ /* ---------- ضبط واقعی کلاس (MediaRecorder) ----------
+  * تصویر (اشتراک صفحه اگر فعال باشد، وگرنه دوربین) + صدای میکروفون ضبط می‌شود؛
+  * در پایان، فایل ویدیو روی دستگاه مدرس دانلود می‌شود تا لینک مستقیم آن را
+  * در «مدیریت کلاس → جلسات برگزارشده» برای دانش‌آموزها ثبت کند. */
+ const stopRecording = () => {
+   const rec = recRef.current
+   if (rec && rec.state !== 'inactive') { try { rec.stop() } catch { /* noop */ } }
+   else setRecording(false)
+ }
+
+ const startRecording = () => {
+   if (recording) return
+   if (!window.MediaRecorder) { toast('مرورگر شما از ضبط ویدیو پشتیبانی نمی‌کند — از کروم استفاده کنید', 'error'); return }
+   const vTrack = screenTrackRef.current || localStreamRef.current?.getVideoTracks()[0] || null
+   const aTrack = localStreamRef.current?.getAudioTracks()[0] || null
+   if (!vTrack && !aTrack) { toast('برای ضبط، ابتدا دوربین یا میکروفون را وصل کنید', 'error'); return }
+   let mime = ''
+   for (const m of ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']) {
+     try { if (MediaRecorder.isTypeSupported?.(m)) { mime = m; break } } catch { /* noop */ }
+   }
+   try {
+     const stream = new MediaStream([...(vTrack ? [vTrack] : []), ...(aTrack ? [aTrack] : [])])
+     const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 1_500_000 } : undefined)
+     recChunksRef.current = []
+     rec.ondataavailable = (e) => { if (e.data?.size) recChunksRef.current.push(e.data) }
+     rec.onstop = () => {
+       recSourceRef.current?.removeEventListener?.('ended', stopRecording)
+       recSourceRef.current = null
+       recRef.current = null
+       const type = recChunksRef.current[0]?.type || 'video/webm'
+       const blob = new Blob(recChunksRef.current, { type })
+       recChunksRef.current = []
+       try {
+         const url = URL.createObjectURL(blob)
+         const a = document.createElement('a')
+         const stamp = new Date(recStartRef.current || Date.now()).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+         a.href = url
+         a.download = `${String(classInfo?.title || 'modaresyar-class').replace(/\s+/g, '-')}-${stamp}.webm`
+         document.body.appendChild(a)
+         a.click()
+         a.remove()
+         setTimeout(() => URL.revokeObjectURL(url), 120_000)
+       } catch { /* noop */ }
+       setRecording(false)
+       toast('فایل ضبط دانلود شد — لینک مستقیم آن را در «مدیریت کلاس» برای دانش‌آموزها ثبت کنید', 'info')
+     }
+     rec.onerror = () => { setRecording(false); toast('ضبط با خطا متوقف شد', 'error') }
+     rec.start(2000)
+     recRef.current = rec
+     recSourceRef.current = vTrack
+     recStartRef.current = Date.now()
+     setRecSecs(0)
+     setRecording(true)
+     if (vTrack) vTrack.addEventListener('ended', stopRecording)
+     toast('ضبط شروع شد — فایل ویدیو روی همین دستگاه شما ذخیره می‌شود', 'info')
+   } catch { toast('شروع ضبط ممکن نشد', 'error') }
+ }
+
+ /* تایمر ضبط */
+ useEffect(() => {
+   if (!recording) return
+   const t = setInterval(() => setRecSecs((s) => s + 1), 1000)
+   return () => clearInterval(t)
+ }, [recording])
+
+ /* قطع ضبط هنگام بستن صفحه/کلاس — فایل ذخیره‌شده از دست نمی‌رود */
+ useEffect(() => () => {
+   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
+ }, [])
 
  /* ---------- SSE: رویدادهای لحظه‌ای (WebRTC + تخته + چت + وضعیت) ---------- */
  useEffect(() => {
@@ -538,9 +615,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' })
  }, [messages])
 
- /* پایان کلاس از سمت سرور → خاموش کردن رسانه‌ها */
+ /* پایان کلاس از سمت سرور → خاموش کردن رسانه‌ها و قطع ضبط */
  useEffect(() => {
    if (live?.status !== 'ended') return
+   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    screenTrackRef.current?.stop()
    screenTrackRef.current = null
@@ -653,7 +731,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
  const endClassNow = () => {
    setEndedModal(false)
+   if (isTeacher && recording) stopRecording() // فایل ضبط قبل از پایان، ذخیره شود
    endLive(classId)
+ }
+ /** برگزاری جلسه جدید برای کلاسی که قبلاً تمام شده */
+ const restartClass = () => {
+   setLive({ status: 'live', startedAt: Date.now(), participants: participants })
+   startLive(classId)
  }
 
  /* ---------- رسم وایت‌برد ---------- */
@@ -757,11 +841,15 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        </p>
        <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
          {isTeacher ? (
-           <Link to="/panel/teacher/classes" className="btn btn-primary">کلاس‌های من</Link>
+           <>
+             <button className="btn btn-primary" onClick={restartClass}><Icon name="play" filled size={15} /> برگزاری جلسه جدید</button>
+             <Link to="/panel/teacher/classes" className="btn btn-ghost">کلاس‌های من</Link>
+             {classId && <Link to={`/panel/teacher/classes/${classId}`} className="btn btn-ghost">مدیریت کلاس و ضبط‌ها</Link>}
+           </>
          ) : (
            <>
              <Link to="/panel/student/schedule" className="btn btn-ghost">برنامه هفتگی</Link>
-             <Link to="/panel/student/courses" className="btn btn-primary">دوره‌های من</Link>
+             {classId && <Link to={`/panel/student/classes/${classId}`} className="btn btn-primary">جزئیات کلاس و ضبط‌ها</Link>}
            </>
          )}
        </div>
@@ -791,7 +879,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  {classInfo?.teacher || 'مدرس‌یار'} • {classInfo?.dur || 90} دقیقه • {faNum(participants.length)} نفر حاضر
  </span>
  </div>
+ <span className="row g8" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+ {recording && (
+   <span className="badge b-red live-pulse" style={{ padding: '5px 12px' }} dir="ltr">
+   ● REC {String(Math.floor(recSecs / 60)).padStart(2, '0')}:{String(recSecs % 60).padStart(2, '0')}
+   </span>
+ )}
  <span className="badge b-red"><i className="live-red-dot" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99 }} /> پخش زنده</span>
+ </span>
  </div>
 
  <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
@@ -909,8 +1004,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <Icon name={fsActive || pseudoFs ? 'minimize' : 'maximize'} /> <span className="ctl-tip">{fsActive || pseudoFs ? 'خروج از تمام‌صفحه' : 'نمایش تمام‌صفحه'}</span>
  </button>
  {isTeacher ? (
- <button className={ctl(recording)} onClick={() => { setRecording(!recording); toast(recording ? 'ضبط کلاس متوقف شد' : 'ضبط کلاس شروع شد — برای دانشجوهای غایب منتشر می‌شود', 'info') }}>
- <Icon name="activity" /> <span className="ctl-tip">{recording ? 'توقف ضبط' : 'ضبط کلاس'}</span>
+ <button className={ctl(recording)} onClick={() => (recording ? stopRecording() : startRecording())}>
+ <Icon name="activity" /> <span className="ctl-tip">{recording ? 'توقف و ذخیره ضبط' : 'ضبط کلاس'}</span>
  </button>
  ) : (
  <button className={ctl(hand) + (hand ? ' on' : '')} onClick={() => { setHand(!hand); toast(hand ? 'دست شما پایین آمد' : 'دست شما بالا رفت — مدرس متوجه می‌شود', 'info') }}>

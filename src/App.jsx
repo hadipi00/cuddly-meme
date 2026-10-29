@@ -83,6 +83,8 @@ const StudentPanel = lazyPage(() => import('./pages/student/StudentPanel'))
 const SDashboard = lazyPage(() => import('./pages/student/SDashboard'))
 const SSchedule = lazyPage(() => import('./pages/student/SSchedule'))
 const SMyCourses = lazyPage(() => import('./pages/student/SMyCourses'))
+const SMyClasses = lazyPage(() => import('./pages/student/SMyClasses'))
+const SClassDetail = lazyPage(() => import('./pages/student/SClassDetail'))
 const SCoursePlayer = lazyPage(() => import('./pages/student/SCoursePlayer'))
 const SAssignments = lazyPage(() => import('./pages/student/SAssignments'))
 const SCertificates = lazyPage(() => import('./pages/student/SCertificates'))
@@ -96,6 +98,7 @@ const SLiveRoom = lazyPage(() => import('./pages/student/SLiveRoom'))
 const TeacherPanel = lazyPage(() => import('./pages/teacher/TeacherPanel'))
 const TDashboard = lazyPage(() => import('./pages/teacher/TDashboard'))
 const TClasses = lazyPage(() => import('./pages/teacher/TClasses'))
+const TClassDetail = lazyPage(() => import('./pages/teacher/TClassDetail'))
 const TLiveRoom = lazyPage(() => import('./pages/teacher/TLiveRoom'))
 const TStudents = lazyPage(() => import('./pages/teacher/TStudents'))
 const TAssignments = lazyPage(() => import('./pages/teacher/TAssignments'))
@@ -200,6 +203,8 @@ export default function App() {
  <Route path="/panel/student" element={<RouteGuard role="student"><StudentPanel /></RouteGuard>}>
  <Route index element={<SDashboard />} />
  <Route path="schedule" element={<SSchedule />} />
+ <Route path="classes" element={<SMyClasses />} />
+ <Route path="classes/:classId" element={<SClassDetail />} />
  <Route path="courses" element={<SMyCourses />} />
  <Route path="player/:courseId" element={<SCoursePlayer />} />
  <Route path="assignments" element={<SAssignments />} />
@@ -216,6 +221,7 @@ export default function App() {
  <Route path="/panel/teacher" element={<RouteGuard role="teacher"><TeacherPanel /></RouteGuard>}>
  <Route index element={<TDashboard />} />
  <Route path="classes" element={<TClasses />} />
+ <Route path="classes/:classId" element={<TClassDetail />} />
  <Route path="live" element={<TLiveRoom />} />
  <Route path="students" element={<TStudents />} />
  <Route path="assignments" element={<TAssignments />} />

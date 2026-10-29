@@ -132,11 +132,11 @@ export default function SLiveRoom() {
        </div>
        <h2 style={{ fontSize: 18 }}>جلسه «{cls.title}» به پایان رسید</h2>
        <p className="muted small mt8">
-         مدت برگزاری: {fmtDuration(now - session.startedAt)} — ضبط جلسه تا ۲۴ ساعت آینده در بخش «دوره‌های من» منتشر می‌شود.
+         مدت برگزاری: {fmtDuration(now - session.startedAt)} — ضبط جلسه و فایل‌ها در بخش «کلاس‌های من → جلسات برگزارشده» منتشر می‌شود.
        </p>
-       <div className="row g8 mt24" style={{ justifyContent: 'center' }}>
+       <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
          <Link to="/panel/student/schedule" className="btn btn-ghost">برنامه هفتگی</Link>
-         <Link to="/panel/student/courses" className="btn btn-primary">دوره‌های من</Link>
+         <Link to={`/panel/student/classes/${cls.id}`} className="btn btn-primary">جزئیات کلاس و ضبط‌ها</Link>
        </div>
      </div>
    )

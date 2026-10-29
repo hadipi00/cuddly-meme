@@ -103,6 +103,7 @@ export default function TClasses() {
  addLabel="کلاس جدید"
  actions={(row) => (
  <>
+ <button className="icon-btn" title="مدیریت کلاس — ضبط‌ها و فایل‌ها" onClick={() => nav(`/panel/teacher/classes/${row.id}`)}><Icon name="settings" /></button>
  <button className="icon-btn" title="ویرایش" onClick={() => setModal(row)}><Icon name="edit" /></button>
  <button className="icon-btn" title="حذف" onClick={() => remove(row)}><Icon name="trash" /></button>
  <button className="icon-btn" title="شروع کلاس زنده" onClick={() => nav('/panel/teacher/live')}><Icon name="video" /></button>

@@ -94,14 +94,53 @@ CREATE TABLE IF NOT EXISTS board_strokes (
   points     TEXT NOT NULL,                   -- JSON [[x,y],…] نرمال‌شده ۰..۱
   created_at INTEGER NOT NULL
 );
+/* جلسات برگزارشده — هر بار که مدرس کلاس را پایان دهد یک ردیف ثبت می‌شود */
+CREATE TABLE IF NOT EXISTS class_sessions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  class_id      TEXT NOT NULL REFERENCES classes(id),
+  started_at    INTEGER NOT NULL,
+  ended_at      INTEGER NOT NULL,
+  dur           INTEGER NOT NULL DEFAULT 0,    -- ثانیه
+  recording_url TEXT DEFAULT '',               -- لینک مستقیم ویدیوی ضبط‌شده (آپارات/دُرایو/…)
+  created_at    INTEGER NOT NULL,
+  UNIQUE (class_id, started_at)
+);
+/* فایل‌ها و جزوه‌های کلاس — لینک مستقیم فایل (attach به جلسه اختیاری است) */
+CREATE TABLE IF NOT EXISTS class_materials (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  class_id   TEXT NOT NULL REFERENCES classes(id),
+  session_id INTEGER,                           -- NULL = مالِ کل کلاس
+  title      TEXT NOT NULL,
+  url        TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_class ON messages(class_id, id);
 CREATE INDEX IF NOT EXISTS idx_attendance_class ON attendance(class_id, last_seen);
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_sessions_class ON class_sessions(class_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_materials_class ON class_materials(class_id);
 `)
 
 /* مهاجرت‌های سبک — افزودن ستون اگر وجود ندارد */
 try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+
+/* مهاجرت داده: جلسه‌های برگزارشده قدیمی (کلاس‌هایی که قبل از این قابلیت پایان یافتند) */
+try {
+  const ended = db.prepare("SELECT id, started_at, ended_at FROM classes WHERE status='ended' AND started_at IS NOT NULL AND ended_at IS NOT NULL").all()
+  const ins = db.prepare('INSERT OR IGNORE INTO class_sessions (class_id, started_at, ended_at, dur, created_at) VALUES (?,?,?,?,?)')
+  for (const c of ended) ins.run(c.id, c.started_at, c.ended_at, Math.max(1, Math.floor((c.ended_at - c.started_at) / 1000)), c.ended_at)
+} catch { /* noop */ }
+
+/* داده نمونه واقعی: یک جزوه برای کلاس کارگاه React تا بخش «فایل‌ها» از اول دیدنی باشد */
+try {
+  const hasMat = db.prepare('SELECT COUNT(*) AS n FROM class_materials').get().n
+  const hasL2 = db.prepare("SELECT 1 AS x FROM classes WHERE id='l2'").get()
+  if (!hasMat && hasL2) {
+    db.prepare('INSERT INTO class_materials (class_id, session_id, title, url, created_at) VALUES (?,?,?,?,?)')
+      .run('l2', null, 'مستند رسمی هوک‌های React (مرجع جلسه اول)', 'https://react.dev/reference/react/hooks', Date.now())
+  }
+} catch { /* noop */ }
 
 /* ---------------- کلید امضای JWT (تولید یک‌بار و ذخیره) ---------------- */
 const secretFile = join(dataDir, '.jwt-secret')

@@ -296,10 +296,87 @@ app.post('/api/classes/:id/end', requireRole('teacher', 'admin'), (req, res) => 
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند پایان دهد' })
   const endedAt = now()
+  const wasLive = c.status === 'live'
   db.prepare(`UPDATE classes SET status='ended', ended_at=? WHERE id=? AND status='live'`).run(endedAt, c.id)
   db.prepare('UPDATE attendance SET hand=0 WHERE class_id=?').run(c.id)
+  // ثبت جلسه برگزارشده — برای بخش «جلسات قبلی» پنل دانش‌آموز (ضبط + فایل)
+  if (wasLive && c.started_at) {
+    db.prepare(`INSERT OR IGNORE INTO class_sessions (class_id, started_at, ended_at, dur, created_at)
+      VALUES (?,?,?,?,?)`)
+      .run(c.id, c.started_at, endedAt, Math.max(1, Math.floor((endedAt - c.started_at) / 1000)), endedAt)
+  }
   broadcast(c.id, { type: 'ended', status: 'ended', endedAt, at: endedAt })
   res.json({ ok: true, endedAt })
+})
+
+/* ---------------- جزئیات کامل کلاس (جلسات پیش‌رو/برگزارشده + فایل‌ها) ---------------- */
+const httpUrl = (u) => {
+  const s = String(u || '').trim()
+  return /^https?:\/\/.+/i.test(s) ? s.slice(0, 1000) : null
+}
+
+/** نمای کامل کلاس برای دانش‌آموزِ ثبت‌نام‌شده (خریدار) یا مدرس/ادمین */
+app.get('/api/classes/:id/detail', requireAuth, (req, res) => {
+  const c = db.prepare(SELECT_CLASSES + ' WHERE c.id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  const manage = canControl(c, req.user)
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای دیدن جزئیات کلاس باید در آن ثبت‌نام کنید' })
+
+  const sessions = db.prepare(`SELECT s.id, s.started_at AS startedAt, s.ended_at AS endedAt, s.dur, s.recording_url AS recordingUrl,
+      (SELECT COUNT(*) FROM class_materials m WHERE m.session_id = s.id) AS materialsCount
+    FROM class_sessions s WHERE s.class_id = ? ORDER BY s.started_at DESC LIMIT 60`).all(c.id)
+  const materials = db.prepare(`SELECT id, session_id AS sessionId, title, url, created_at AS createdAt
+    FROM class_materials WHERE class_id = ? ORDER BY id DESC LIMIT 200`).all(c.id)
+
+  res.json({
+    class: classWithMeta(c, req.user),
+    canManage: manage,
+    sessions,
+    materials,
+  })
+})
+
+/** ثبت/ویرایش لینک مستقیم ویدیوی ضبط‌شده یک جلسه — فقط مدرس همان کلاس */
+app.post('/api/classes/:id/sessions/:sid/recording', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند ضبط را ثبت کند' })
+  const s = db.prepare('SELECT id FROM class_sessions WHERE id = ? AND class_id = ?').get(Number(req.params.sid) || 0, c.id)
+  if (!s) return res.status(404).json({ error: 'جلسه پیدا نشد' })
+  const url = httpUrl(req.body?.url)
+  if (!url) return res.status(400).json({ error: 'لینک باید با http:// یا https:// شروع شود' })
+  db.prepare('UPDATE class_sessions SET recording_url = ? WHERE id = ?').run(url, s.id)
+  res.json({ ok: true, url })
+})
+
+/** افزودن فایل/جزوه به کلاس (یا به یک جلسه خاص) — فقط مدرس همان کلاس */
+app.post('/api/classes/:id/materials', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند فایل اضافه کند' })
+  const title = String(req.body?.title || '').trim().slice(0, 120)
+  const url = httpUrl(req.body?.url)
+  const sessionId = req.body?.sessionId ? Number(req.body.sessionId) : null
+  if (!title) return res.status(400).json({ error: 'عنوان فایل الزامی است' })
+  if (!url) return res.status(400).json({ error: 'لینک باید با http:// یا https:// شروع شود' })
+  if (sessionId) {
+    const s = db.prepare('SELECT id FROM class_sessions WHERE id = ? AND class_id = ?').get(sessionId, c.id)
+    if (!s) return res.status(404).json({ error: 'جلسه پیدا نشد' })
+  }
+  const info = db.prepare('INSERT INTO class_materials (class_id, session_id, title, url, created_at) VALUES (?,?,?,?,?)')
+    .run(c.id, sessionId, title, url, now())
+  const m = db.prepare('SELECT id, session_id AS sessionId, title, url, created_at AS createdAt FROM class_materials WHERE id = ?').get(info.lastInsertRowid)
+  res.json({ ok: true, material: m })
+})
+
+/** حذف فایل/جزوه — فقط مدرس همان کلاس */
+app.delete('/api/classes/:id/materials/:mid', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند فایل حذف کند' })
+  const info = db.prepare('DELETE FROM class_materials WHERE id = ? AND class_id = ?').run(Number(req.params.mid) || 0, c.id)
+  if (!info.changes) return res.status(404).json({ error: 'فایل پیدا نشد' })
+  res.json({ ok: true })
 })
 
 /** وضعیت لحظه‌ای کلاس — polling عمومی (تایمر + حاضران + وضعیت تخته) */
