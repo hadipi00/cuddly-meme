@@ -66,38 +66,64 @@ function ScreenPreview({ stream }) {
   return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
 }
 
-/** کارت درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس */
-function PermissionCard({ state, permBusy, onRequest, inIframe, onOpenTab, onGoHttps }) {
+/** کارت عیب‌یابی و درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس
+ *  state: 'idle' | 'denied' | 'nodevice' | 'busy' | 'insecure'
+ *  diag: { videoCount, audioCount, lastError } — گزارش واقعی مرورگر برای عیب‌یابی */
+function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, onOpenTab, onGoHttps }) {
+  const dv = diag?.videoCount ?? 0
+  const da = diag?.audioCount ?? 0
+  const errName = diag?.lastError || ''
+  const seesDevices = dv + da > 0
   return (
     <div className="perm-overlay">
       <div className="perm-card">
         <div className="perm-ico"><Icon name="camera" size={30} /></div>
         <b style={{ fontSize: 15.5 }}>فعال‌سازی دوربین و میکروفون</b>
-        <p className="muted small" style={{ lineHeight: 1.9 }}>
-          برای گفتگوی تصویری زنده، روی دکمه زیر بزنید؛ پنجره‌ای از مرورگر باز می‌شود —
-          <b> «اجازه دادن / Allow» </b> را انتخاب کنید.
-        </p>
-        <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={permBusy} onClick={onRequest}>
-          {permBusy ? 'در حال انتظار برای پاسخ مرورگر…' : (<><Icon name="video" size={17} /> درخواست دسترسی دوربین و میکروفون</>)}
-        </button>
-        {state === 'denied' && (
-          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
-            دسترسی رد شده است. روی <b>آیکون قفل/کلید کنار آدرس سایت</b> در نوار مرورگر بزنید،
-            دوربین و میکروفون را روی «اجازه دادن» بگذارید و دوباره تلاش کنید.
+
+        {state === 'idle' && (
+          <p className="muted small" style={{ lineHeight: 1.9 }}>
+            برای گفتگوی تصویری زنده، روی دکمه زیر بزنید؛ پنجره‌ای از مرورگر باز می‌شود —
+            <b> «اجازه دادن / Allow» </b> را انتخاب کنید.
           </p>
         )}
-        {state === 'nodevice' && (
-          <p className="small" style={{ color: 'var(--red)' }}>دوربین یا میکروفونی روی این دستگاه پیدا نشد.</p>
+
+        {state === 'denied' && (
+          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+            {inIframe
+              ? 'سایت داخل قاب پیش‌نمایش است و مرورگر اجازه دوربین در قاب را نمی‌دهد — با دکمه زیر کلاس را در پنجره کامل باز کنید.'
+              : 'دسترسی رد شده است. روی آیکون قفل/کلید کنار آدرس سایت بزنید، دوربین و میکروفون را روی «اجازه دادن» بگذارید و دوباره تلاش کنید.'}
+          </p>
         )}
+
+        {state === 'busy' && (
+          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+            دوربین/میکروفون توسط برنامه دیگری اشغال شده است — Zoom، Skype، Teams یا هر برنامه دیگری که از دوربین استفاده می‌کند را ببندید و دوباره تلاش کنید.
+          </p>
+        )}
+
+        {state === 'nodevice' && (
+          <>
+            <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+              {seesDevices
+                ? 'مرورگر دستگاه‌هایی را می‌بیند ولی اجازه استفاده از آن‌ها را نمی‌دهد — معمولاً تنظیمات حریم خصوصی سیستم‌عامل یا اشغال بودن دستگاه است.'
+                : 'مرورگر روی این دستگاه هیچ دوربین یا میکروفونی پیدا نکرد. این موارد را بررسی کنید:'}
+            </p>
+            <ul className="small" style={{ textAlign: 'right', lineHeight: 2.1, paddingInlineStart: 20, margin: '4px 0 10px', color: 'var(--text-2)' }}>
+              <li>اگر از داخل اپ پیام‌رسان (تلگرام، اینستاگرام…) باز کرده‌اید، لینک را در <b>Chrome</b> یا <b>Safari</b> اصلی باز کنید.</li>
+              <li>ویندوز: <b dir="ltr">Settings → Privacy & security → Camera / Microphone</b> را برای مرورگر روشن کنید.</li>
+              <li>وب‌کم خارجی را بررسی کنید و برنامه‌های دیگر (Zoom/Skype) را ببندید.</li>
+              <li>دستگاه شما واقعاً دوربین ندارد؟ کلاس را بدون دوربین ادامه دهید — چت و تخته فعال است.</li>
+            </ul>
+          </>
+        )}
+
         {state === 'insecure' && (
           <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9 }}>
             مرورگر فقط در آدرس امن (HTTPS) اجازه دوربین می‌دهد. با دکمه زیر به آدرس امن بروید.
           </p>
         )}
-        {state === 'insecure' && (
-          <button className="btn btn-ghost btn-sm" onClick={onGoHttps}>رفتن به آدرس امن (HTTPS)</button>
-        )}
-        {inIframe && (
+
+        {inIframe && state !== 'denied' && (
           <>
             <p className="muted small" style={{ lineHeight: 1.9 }}>
               اگر پنجره اجازه باز نشد، سایت داخل قاب پیش‌نمایش است — کلاس را در پنجره جداگانه باز کنید:
@@ -107,9 +133,30 @@ function PermissionCard({ state, permBusy, onRequest, inIframe, onOpenTab, onGoH
             </button>
           </>
         )}
-        <span className="muted" style={{ fontSize: 11 }}>
-          بدون دوربین هم می‌توانید در کلاس شرکت کنید — چت، وایت‌برد و حاضران فعال است.
-        </span>
+
+        {state === 'insecure' ? (
+          <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={onGoHttps}>
+            <Icon name="maximize" size={17} /> رفتن به آدرس امن (HTTPS)
+          </button>
+        ) : (
+          <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={permBusy} onClick={onRequest}>
+            {permBusy ? 'در حال انتظار برای پاسخ مرورگر…' : (
+              <><Icon name="video" size={17} /> {state === 'idle' ? 'درخواست دسترسی دوربین و میکروفون' : 'تلاش دوباره'}</>
+            )}
+          </button>
+        )}
+
+        {onSkip && state !== 'insecure' && (
+          <button className="btn btn-ghost btn-sm" style={{ width: '100%', marginTop: 8 }} onClick={onSkip}>
+            ادامه بدون دوربین — چت، وایت‌برد و حاضران فعال است
+          </button>
+        )}
+
+        {errName ? (
+          <span className="muted" style={{ fontSize: 10.5 }}>
+            کد خطا: <b dir="ltr">{errName}</b> • دوربین‌های شناسایی‌شده: {faNum(dv)} • میکروفون‌ها: {faNum(da)}
+          </span>
+        ) : null}
       </div>
     </div>
   )
@@ -140,8 +187,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const screenTrackRef = useRef(null)
  const screenStreamRef = useRef(null)
  const [localStream, setLocalStream] = useState(null)
- const [mediaErr, setMediaErr] = useState(null) // 'denied' | 'nodevice' | 'insecure'
+ const [mediaErr, setMediaErr] = useState(null) // 'denied' | 'nodevice' | 'busy' | 'insecure'
  const [permBusy, setPermBusy] = useState(false)
+ const [mediaDiag, setMediaDiag] = useState({ videoCount: 0, audioCount: 0, lastError: null })
+ const [mediaSkipped, setMediaSkipped] = useState(false)
  const switchingRef = useRef(false)
  const facingRef = useRef('user')
  const deviceIdxRef = useRef(0)
@@ -212,8 +261,26 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    }
  }
 
+ /* دسته‌بندی دقیق خطای رسانه + عیب‌یابی محیط (تعداد دستگاه‌هایی که مرورگر می‌بیند) */
+ const classifyMediaErr = (e) => {
+   const n = e?.name || ''
+   if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError') return 'nodevice'
+   if (n === 'NotReadableError' || n === 'TrackStartError') return 'busy'
+   return 'denied' // NotAllowedError | SecurityError | PermissionDeniedError | …
+ }
+ const collectMediaDiag = async (err) => {
+   const d = { videoCount: 0, audioCount: 0, lastError: err?.name || null }
+   try {
+     const ds = (await navigator.mediaDevices?.enumerateDevices?.()) || []
+     d.videoCount = ds.filter((x) => x.kind === 'videoinput').length
+     d.audioCount = ds.filter((x) => x.kind === 'audioinput').length
+   } catch { /* noop */ }
+   setMediaDiag(d)
+ }
+
  const startMedia = async () => {
    if (permBusy) return
+   setMediaSkipped(false)
    if (!navigator.mediaDevices?.getUserMedia) {
      setMediaErr('insecure')
      return
@@ -231,12 +298,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      localStreamRef.current = s
      setLocalStream(s)
      setMediaErr(null)
+     setMediaDiag({ videoCount: 1, audioCount: s.getAudioTracks().length, lastError: null })
      attachAll()
      navigator.mediaDevices.enumerateDevices()
        .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
        .catch(() => {})
    } catch (e) {
-     setMediaErr(e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError' ? 'nodevice' : 'denied')
+     setMediaErr(classifyMediaErr(e))
+     collectMediaDiag(e)
    }
    setPermBusy(false)
  }
@@ -257,7 +326,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      navigator.mediaDevices.enumerateDevices()
        .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
        .catch(() => {})
-   }).catch(() => { if (!cancelled) setMediaErr('denied') })
+   }).catch(async (e) => {
+     if (cancelled) return
+     setMediaErr(classifyMediaErr(e))
+     await collectMediaDiag(e)
+   })
+   /* مجوز ذخیره‌شده مرورگر — اگر قبلاً رد شده همان اول راهنمای درست نمایش داده شود */
+   try {
+     navigator.permissions?.query?.({ name: 'camera' })
+       .then((p) => { if (!cancelled && p.state === 'denied') setMediaErr((cur) => cur || 'denied') })
+       .catch(() => {})
+   } catch { /* noop */ }
    return () => {
      cancelled = true
      localStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -360,6 +439,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    } catch { /* noop */ }
  }
  const openNewTab = () => { try { window.open(window.location.href, '_blank') } catch { /* noop */ } }
+
+ /** ادامه کلاس بدون دوربین — کارت بسته می‌شود؛ با دکمه دوربین در نوار کنترل دوباره فعال می‌شود */
+ const skipMedia = () => {
+   setMediaSkipped(true)
+   setMediaErr(null)
+   toast('کلاس بدون دوربین ادامه پیدا می‌کند — چت، وایت‌برد و حاضران فعال است', 'info')
+ }
 
  /* ---------- ضبط واقعی کلاس (MediaRecorder) ----------
   * تصویر (اشتراک صفحه اگر فعال باشد، وگرنه دوربین) + صدای میکروفون ضبط می‌شود؛
@@ -957,15 +1043,28 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  )}
 
  {/* مرکز دسترسی دوربین — فقط وقتی رسانه‌ای نداریم و در حال دیدن تخته/صفحه نیستیم */}
- {!localStream && !board && !screen && !anyoneScreening && (
+ {!localStream && !mediaSkipped && !board && !screen && !anyoneScreening && (
    <PermissionCard
      state={mediaErr || 'idle'}
      permBusy={permBusy}
+     diag={mediaDiag}
      onRequest={startMedia}
+     onSkip={skipMedia}
      inIframe={inIframe}
      onOpenTab={openNewTab}
      onGoHttps={goHttps}
    />
+ )}
+
+ {/* بعد از «ادامه بدون دوربین» — دکمه کوچک فعال‌سازی مجدد گوشه صحنه */}
+ {mediaSkipped && !localStream && (
+   <button
+     className="btn btn-ghost btn-sm"
+     style={{ position: 'absolute', bottom: 12, insetInlineStart: 12, zIndex: 6, background: 'var(--card)', boxShadow: 'var(--shadow-1)' }}
+     onClick={startMedia}
+   >
+     <Icon name="camera" size={14} /> فعال‌سازی دوربین و میکروفون
+   </button>
  )}
 
  {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته */}
