@@ -347,6 +347,22 @@ body.fs-lock { overflow: hidden; }
 .live-grid.fs-grid { grid-template-columns: 1fr; }
 .live-view.board { background: linear-gradient(160deg, var(--live-a), var(--live-b)); }
 
+/* ---------- رله رسانه: نوار درخواست صحبت + دکمه صدا ---------- */
+.speak-req-bar {
+ position: absolute; bottom: 14px; left: 0; right: 0; display: flex; justify-content: center; z-index: 6; pointer-events: none;
+}
+.speak-req-bar > * { pointer-events: auto; }
+.speak-req-bar > span {
+ background: var(--card); box-shadow: var(--shadow-2, 0 8px 24px rgba(2, 6, 23, 0.18));
+ border-radius: 999px; padding: 8px 18px; border: 1px solid var(--line2);
+}
+.tap-unmute {
+ position: absolute; left: 50%; transform: translateX(-50%); bottom: 46px; z-index: 5;
+ background: rgba(2, 6, 23, 0.72); color: #fff; border: none; border-radius: 999px;
+ padding: 7px 16px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.cam-tile video { width: 100%; height: 100%; object-fit: cover; background: #020617; }
+
 /* ---------- certificates ---------- */
 .cert-card { padding: 26px; position: relative; overflow: hidden; }
 .cert-card::before { content: ''; position: absolute; inset-inline-start: 0; top: 0; bottom: 0; width: 4px; background: var(--grad); }

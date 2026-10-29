@@ -27,6 +27,7 @@ app.use(express.json({ limit: '12mb' }))
 
 const PORT = process.env.PORT || 4000
 const now = () => Date.now()
+const b64 = (buf) => Buffer.from(buf).toString('base64')
 
 /* ---------------- هلپرهای احراز هویت ---------------- */
 const signToken = (u) => jwt.sign({ uid: u.id, role: u.role }, JWT_SECRET, { expiresIn: '7d' })
@@ -224,6 +225,17 @@ app.get('/api/me/orders', requireAuth, (req, res) => {
 })
 
 /* ---------------- وایت‌برد همگام کلاس ---------------- */
+/* رسم زنده (draft) هر کاربر در حافظه نگه داشته می‌شود تا گیرنده‌هایی که
+   SSE آن‌ها بافر شده با polling هم قلم زنده را ببینند */
+const wbDrafts = new Map() // classId → Map<uid, { userId, stroke, ts }>
+const wbBgRev = new Map()  // classId → شماره نسخه پس‌زمینه (عکس/PDF)
+
+function wbDraftRoom(classId) {
+  let m = wbDrafts.get(classId)
+  if (!m) { m = new Map(); wbDrafts.set(classId, m) }
+  return m
+}
+
 app.get('/api/classes/:id/board', requireAuth, (req, res) => {
   const c = db.prepare('SELECT id, teacher_id, board_locked, board_bg FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
@@ -282,7 +294,8 @@ app.post('/api/classes/:id/board/open', requireRole('teacher', 'admin'), (req, r
   res.json({ ok: true, open: !!open })
 })
 
-/** رسم زنده (لحظه‌ای) — ذخیره نمی‌شود، فقط به بقیه رله می‌شود تا قلم از اول دیده شود */
+/** رسم زنده (لحظه‌ای) — ذخیره نمی‌شود، فقط به بقیه رله می‌شود تا قلم از اول دیده شود
+ *  آخرین draft هر کاربر در حافظه هم می‌ماند (تا ۴ ثانیه) برای گیرنده‌های polling */
 app.post('/api/classes/:id/board/draft', requireAuth, (req, res) => {
   const c = db.prepare('SELECT id, teacher_id, board_locked FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
@@ -290,16 +303,38 @@ app.post('/api/classes/:id/board/draft', requireAuth, (req, res) => {
   if (c.board_locked && !canControl(c, req.user)) return res.status(403).json({ error: 'تخته قفل است' })
   const { color, size, tool, points } = req.body || {}
   if (!Array.isArray(points) || !points.length || points.length > 600) return res.json({ ok: false })
-  broadcast(c.id, {
-    type: 'board-draft', userId: req.user.id, at: now(),
-    stroke: {
-      color: /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a',
-      size: Math.min(40, Math.max(1, Number(size) || 4)),
-      tool: tool === 'erase' ? 'erase' : 'pen',
-      points: points.slice(-600),
-    },
-  })
+  const stroke = {
+    color: /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a',
+    size: Math.min(40, Math.max(1, Number(size) || 4)),
+    tool: tool === 'erase' ? 'erase' : 'pen',
+    points: points.slice(-600),
+  }
+  /* نگهداری آخرین draft هر کاربر برای polling + رله لحظه‌ای با SSE */
+  const dm = wbDraftRoom(c.id)
+  dm.set(req.user.id, { userId: req.user.id, stroke, ts: now() })
+  for (const [uid, d] of dm) if (now() - d.ts > 4_000) dm.delete(uid)
+  broadcast(c.id, { type: 'board-draft', userId: req.user.id, at: now(), stroke })
   res.json({ ok: true })
+})
+
+/** وضعیت زنده تخته — polling مستقل از SSE (مقاوم در برابر پروکسی‌های بافر) */
+app.get('/api/classes/:id/board/live', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id, board_locked, board_open, board_bg FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'فقط ثبت‌نام‌شده‌های کلاس' })
+  const after = Number(req.query.after) || 0
+  const dt = Number(req.query.dt) || 0
+  const bgr = req.query.bgr == null || req.query.bgr === '' ? -1 : Number(req.query.bgr)
+  const strokes = db.prepare(`SELECT id, user_id AS userId, color, size, tool, points FROM board_strokes
+    WHERE class_id = ? AND id > ? ORDER BY id LIMIT 200`).all(c.id, after)
+    .map((s) => ({ ...s, points: JSON.parse(s.points) }))
+  const dmap = wbDrafts.get(c.id)
+  const drafts = []
+  if (dmap) for (const [uid, d] of dmap) if (d.ts > dt && uid !== req.user.id) drafts.push({ userId: uid, ...d.stroke })
+  const rev = wbBgRev.get(c.id) || 0
+  const out = { serverTime: now(), open: !!c.board_open, locked: !!c.board_locked, bgRev: rev, strokes, drafts }
+  if (bgr !== rev) out.bg = c.board_bg || null
+  res.json(out)
 })
 
 /** پس‌زمینه تخته (عکس یا صفحه‌ای از PDF) — فقط مدرس؛ dataURL ذخیره و به همه broadcast می‌شود */
@@ -312,6 +347,7 @@ app.post('/api/classes/:id/board/bg', requireRole('teacher', 'admin'), (req, res
   if (img.length > 9_000_000) return res.status(413).json({ error: 'فایل خیلی بزرگ است — حداکثر حدود ۶ مگابایت' })
   if (img && !BG_RE.test(img)) return res.status(400).json({ error: 'فرمت تصویر پشتیبانی نمی‌شود' })
   db.prepare('UPDATE classes SET board_bg = ? WHERE id = ?').run(img, c.id)
+  wbBgRev.set(c.id, (wbBgRev.get(c.id) || 0) + 1)
   broadcast(c.id, { type: 'board-bg', img: img || null, at: now() })
   res.json({ ok: true })
 })
@@ -320,6 +356,7 @@ app.delete('/api/classes/:id/board/bg', requireRole('teacher', 'admin'), (req, r
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
   db.prepare("UPDATE classes SET board_bg = '' WHERE id = ?").run(c.id)
+  wbBgRev.set(c.id, (wbBgRev.get(c.id) || 0) + 1)
   broadcast(c.id, { type: 'board-bg', img: null, at: now() })
   res.json({ ok: true })
 })
@@ -435,12 +472,6 @@ app.get('/api/classes/:id/state', (req, res) => {
   })
 })
 
-/** حاضران فعلی اتاق (برای WebRTC — ثبت‌نام‌شده‌ها با اتصال باز) */
-app.get('/api/classes/:id/room', (req, res) => {
-  const room = rtcPeers.get(req.params.id)
-  res.json({ peers: room ? [...room.values()].map(peerInfo) : [] })
-})
-
 /** نمای کلی برای poller فرانت — همه کلاس‌های live/ended اخیر */
 app.get('/api/live/overview', (req, res) => {
   const rows = db.prepare(`SELECT id, status, started_at, ended_at FROM classes
@@ -517,9 +548,8 @@ app.get('/api/me/teaching', requireRole('teacher', 'admin'), (req, res) => {
   res.json({ classes: rows.map((c) => classWithMeta(c, req.user)) })
 })
 
-/* ---------------- SSE + سیگنالینگ WebRTC ---------------- */
+/* ---------------- SSE — رویدادهای لحظه‌ای (چت/تخته/وضعیت) ---------------- */
 const sseClients = new Map() // classId → Set(res)
-const rtcPeers = new Map()   // classId → Map(peerId → { res, user })
 
 function broadcast(classId, event) {
   const set = sseClients.get(classId)
@@ -528,30 +558,10 @@ function broadcast(classId, event) {
   for (const r of set) { try { r.write(payload) } catch { set.delete(r) } }
 }
 
-function rtcRoom(classId) {
-  if (!rtcPeers.has(classId)) rtcPeers.set(classId, new Map())
-  return rtcPeers.get(classId)
-}
-
-function peerInfo(p) {
-  const st = p.state || {}
-  return {
-    peer: p.id, name: p.user?.name || 'مهمان', role: p.user?.role || 'student', color: p.user?.color || 'grad-1',
-    mic: st.mic !== false, cam: st.cam !== false, screen: !!st.screen,
-  }
-}
-
-/** اتصال SSE با هویت peer (برای WebRTC) — توکن از کوئری چون EventSource هدر نمی‌فرستد */
+/** اتصال SSE — توکن از کوئری چون EventSource هدر نمی‌فرستد */
 app.get('/api/classes/:id/events', (req, res) => {
   const c = db.prepare('SELECT id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).end()
-
-  const peerId = String(req.query.peer || '').slice(0, 24)
-  let user = null
-  try {
-    const t = String(req.query.token || '')
-    if (t) user = jwt.verify(t, JWT_SECRET) ? db.prepare('SELECT * FROM users WHERE id = ?').get(jwt.verify(t, JWT_SECRET).uid) : null
-  } catch { user = null }
 
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
   res.flushHeaders()
@@ -560,55 +570,122 @@ app.get('/api/classes/:id/events', (req, res) => {
   if (!sseClients.has(c.id)) sseClients.set(c.id, new Set())
   sseClients.get(c.id).add(res)
 
-  // ثبت peer و اطلاع‌رسانی به بقیه + معرفی حاضران فعلی به تازه‌وارد
-  if (peerId) {
-    const room = rtcRoom(c.id)
-    for (const [oldId, p] of room) if (p.res === res) room.delete(oldId) // اتصال تازه همان کلاینت
-    const entry = { res, id: peerId, user }
-    room.set(peerId, entry)
-    res.write(`data: ${JSON.stringify({ type: 'peers', peers: [...room.values()].filter((p) => p.id !== peerId).map(peerInfo) })}\n\n`)
-    broadcast(c.id, { type: 'peer-join', ...peerInfo(entry), at: now() })
-    // peer-join برای خودش هم ارسال شد؛ کلاینت خودش را با peer id فیلتر می‌کند
-  }
-
   const ping = setInterval(() => { try { res.write(`: ping\n\n`) } catch {} }, 20_000)
   req.on('close', () => {
     clearInterval(ping)
     sseClients.get(c.id)?.delete(res)
-    const room = rtcPeers.get(c.id)
-    if (room) {
-      for (const [pid, p] of room) {
-        if (p.res === res) { room.delete(pid); broadcast(c.id, { type: 'peer-leave', peer: pid, at: now() }) }
-      }
-      if (!room.size) rtcPeers.delete(c.id)
-    }
   })
 })
 
-/** رله سیگنال‌های WebRTC (offer/answer/ice/state) بین هم‌کلاسی‌ها */
-app.post('/api/classes/:id/signal', requireAuth, (req, res) => {
+/* ================================================================
+   رله رسانه زنده — جایگزین قطعیِ WebRTC (بدون دردسر NAT/TURN)
+   ----------------------------------------------------------------
+   • فرستنده (مدرس یا دانش‌آموزِ دارای اجازه) استریمش را با MediaRecorder
+     به تکه‌های ~۱ ثانیه‌ای webm می‌شکند و با POST (octet-stream) می‌فرستد.
+   • گیرنده با GET /media/feeds و «کرسر» (شماره آخرین تکه) تکه‌های تازه
+     را می‌گیرد و به MediaSource اضافه می‌کند — تاخیر ~۱.۵ ثانیه.
+   • این روش از همان مسیر HTTP چت عبور می‌کند؛ اگر چت کار کند، صدا و
+     تصویر هم صددرصد کار می‌کند (برخلاف WebRTC که پشت NAT گیر می‌کند).
+   ================================================================ */
+const MEDIA_CHUNK_TTL = 9_000 // نگهداری تکه‌های اخیر برای تازه‌واردها
+const mediaRooms = new Map()  // classId → { teacher: Feed|null, students: Map<uid, Feed>, lastActivity }
+
+function mediaRoom(classId) {
+  let r = mediaRooms.get(classId)
+  if (!r) { r = { teacher: null, students: new Map(), lastActivity: now() }; mediaRooms.set(classId, r) }
+  r.lastActivity = now()
+  return r
+}
+
+function feedPush(feed, buf, isInit, meta) {
+  const t = now()
+  if (isInit) { feed.sess = (feed.sess || 0) + 1; feed.init = buf; feed.chunks = []; feed.seq = 0 }
+  if (!feed.seq) feed.seq = 0
+  feed.seq += 1
+  feed.chunks.push({ seq: feed.seq, buf, ts: t })
+  if (meta) feed.meta = meta
+  feed.updatedAt = t
+  while (feed.chunks.length && t - feed.chunks[0].ts > MEDIA_CHUNK_TTL) feed.chunks.shift()
+}
+
+function feedAlive(f) { return f && f.init && f.updatedAt && now() - f.updatedAt < 6_000 }
+
+app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'application/octet-stream', limit: '4mb' }), (req, res) => {
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
-  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای اتصال به کلاس باید ثبت‌نام کنید' })
-  const { from, to, kind, data } = req.body || {}
-  const room = rtcPeers.get(c.id)
-  const sender = room?.get(String(from || '').slice(0, 24))
-  if (!sender) return res.status(403).json({ error: 'peer نامعتبر — اتصال SSE باز نیست' })
-  if (sender.user && sender.user.id !== req.user.id) return res.status(403).json({ error: 'peer متعلق به کاربر دیگری است' })
-  const event = { type: 'signal', from: sender.id, kind: String(kind || '').slice(0, 12), data, at: now() }
-  // ذخیره وضعیت mic/cam/screen هر peer — تا تازه‌واردها هم وضعیت درست ببینند
-  if (event.kind === 'state' && data && typeof data === 'object') {
-    sender.state = { mic: !!data.mic, cam: !!data.cam, screen: !!data.screen }
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای حضور در کلاس باید ثبت‌نام کنید' })
+  if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
+  const room = mediaRoom(c.id)
+  const meta = { mic: req.query.mic !== '0', cam: req.query.cam !== '0', screen: req.query.screen === '1' }
+  if (req.query.k === 'teacher') {
+    if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+    if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0 }
+    feedPush(room.teacher, req.body, req.query.init === '1', meta)
+    return res.json({ ok: true })
   }
-  if (to === '*') {
-    for (const [pid, p] of (room || new Map())) if (pid !== sender.id) { try { p.res.write(`data: ${JSON.stringify(event)}\n\n`) } catch {} }
-  } else {
-    const target = room?.get(String(to || '').slice(0, 24))
-    if (!target) return res.status(404).json({ error: 'مخاطب پیدا نشد — شاید خارج شده باشد' })
-    try { target.res.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
-  }
+  // دانش‌آموز — فقط با اجازه فعال مدرس (گیت سمت سرور؛ دور زدن کلاینت بی‌فایده است)
+  const att = db.prepare('SELECT can_speak FROM attendance WHERE class_id = ? AND user_id = ?').get(c.id, req.user.id)
+  if (!att?.can_speak) return res.status(403).json({ error: 'مدرس اجازه فعال‌سازی صدا/تصویر نداده است', noPerm: true })
+  let feed = room.students.get(req.user.id)
+  if (!feed) { feed = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, name: req.user.name }; room.students.set(req.user.id, feed) }
+  feed.name = req.user.name
+  feedPush(feed, req.body, req.query.init === '1', meta)
   res.json({ ok: true })
 })
+
+app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای حضور در کلاس باید ثبت‌نام کنید' })
+  let cur = {}
+  try { cur = JSON.parse(req.query.cur || '{}') || {} } catch { cur = {} }
+  const room = mediaRooms.get(c.id)
+  const out = { serverTime: now(), teacher: null, students: [] }
+
+  const shapeFeed = (c0, f) => {
+    if (!feedAlive(f)) return null
+    // اگر گیرنده تازه وارد است یا جا مانده (گپ) → از سر: init + چند تکه اخیر
+    const stale = !c0 || c0.s !== f.sess || (f.chunks.length && c0.q < f.chunks[0].seq - 1)
+    const base = { sess: f.sess, seq: f.seq, mic: !!f.meta?.mic, cam: !!f.meta?.cam, screen: !!f.meta?.screen }
+    if (stale) {
+      return { ...base, reset: true, init: b64(f.init), chunks: f.chunks.slice(-6).map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
+    }
+    const fresh = f.chunks.filter((x) => x.seq > (c0.q || 0)).slice(0, 12)
+    return { ...base, init: null, chunks: fresh.map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
+  }
+
+  if (room) {
+    const t = shapeFeed(cur.t, room.teacher)
+    if (t) out.teacher = t
+    for (const [uid, f] of room.students) {
+      if (!feedAlive(f)) { room.students.delete(uid); continue }
+      if (uid === req.user.id) continue // استریم خودم را نمی‌خواهم
+      const sf = shapeFeed(cur.s?.[uid], f)
+      if (sf) out.students.push({ uid, name: f.name, ...sf })
+    }
+  }
+  res.json(out)
+})
+
+/** قطع پخش خودم (خروج از کلاس / خاموشی کامل) */
+app.post('/api/classes/:id/media/stop', requireAuth, (req, res) => {
+  const room = mediaRooms.get(req.params.id)
+  if (!room) return res.json({ ok: true })
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (c && canControl(c, req.user)) room.teacher = null
+  else room.students.delete(req.user.id)
+  res.json({ ok: true })
+})
+
+/* پاک‌سازی خودکار اتاق‌های رسانه‌ای بی‌مصرف */
+setInterval(() => {
+  const t = now()
+  for (const [cid, room] of mediaRooms) {
+    for (const [uid, f] of room.students) if (t - (f.updatedAt || 0) > 10_000) room.students.delete(uid)
+    if (room.teacher && t - (room.teacher.updatedAt || 0) > 10_000) room.teacher = null
+    if (!room.teacher && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
+  }
+}, 10_000).unref()
 
 /* ---------------- سلام سرور ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))

@@ -9,32 +9,167 @@ import { faNum } from '../utils/format'
 import { req, getToken } from '../services/http'
 
 /**
- * اتاق کلاس زنده واقعی — دوربین، میکروفون، اشتراک صفحه و وایت‌برد واقعی
+ * اتاق کلاس زنده — نسخه رله رسانه (بدون WebRTC)
  * ---------------------------------------------------------------------
- * • دوربین/میکروفون: getUserMedia + مرکز دسترسی (دکمه درخواست، تلاش دوباره، باز کردن در تب جدید)
- * • تعویض دوربین: جابه‌جایی بین دوربین جلو/عقب موبایل و دوربین‌های متعدد دسکتاپ
- * • تمام‌صفحه: Fullscreen API + حالت شبه‌تمام‌صفحه برای iOS
- * • اشتراک صفحه: getDisplayMedia — تصویر صفحه برای بقیه ارسال می‌شود
- * • وایت‌برد: باز/بسته شدن تخته از سرور همگام می‌شود — دانش‌آموز هم تخته مدرس را می‌بیند
- * • تایمر از startedAt سرور • چت و حاضران و دست بلند شده روی دیتابیس
+ * چرا رله؟ WebRTC حتی با TURN رایگان پشت NAT اپراتور موبایل گیر می‌کند و
+ * «بی‌صدا» شکست می‌خورد. اینجا صدا/تصویر با MediaRecorder به تکه‌های ۱
+ * ثانیه‌ای webm شکسته می‌شود و از همان مسیر HTTP چت عبور می‌کند:
+ *   • ارسال:  POST /media/up  (binary)
+ *   • دریافت: GET  /media/feeds?cur=…  (polling با کرسر — ۸۰۰ms)
+ * نتیجه: اگر چت کار کند، صدا و تصویر هم صددرصد می‌رسد (تاخیر ~۱.۵ ثانیه).
+ *
+ * قواعد مهم:
+ *   • صدا/تصویر مدرس → همه • صدا/تصویر دانش‌آموز → فقط با اجازه مدرس
+ *     (گیت سمت سرور: بدون can_speak، آپلود ۴۰۳ می‌خورد)
+ *   • دکمه میکروفون/دوربین فقط track.enabled را عوض می‌کند — رله قطع نمی‌شود
+ *   • تعویض دوربین با facingMode دقیق (جلو/عقب موبایل) + fallback چندمرحله‌ای
+ *   • وایت‌برد: علاوه بر SSE، polling مستقل دارد → حتی با پروکسی بافر لایو است
+ *   • پس‌زمینه تخته: عکس یا صفحه‌ای از PDF + نوشتن روی آن
  * variant: 'teacher' | 'student'
  */
 
-const RTC_CFG = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-    // TURN رایگان برای عبور از NATهای سخت‌گیرانه (موبایل/اپراتور) — اگر در دسترس نبود نادیده گرفته می‌شود
-    { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'], username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-  ],
-  iceCandidatePoolSize: 2,
-}
 const WB_W = 1600
 const WB_H = 900
 const PEN_COLORS = ['#0f172a', '#dc2626', '#2563eb', '#16a34a', '#d97706']
 const PEN_SIZES = [3, 6, 12]
 
-/** ویدیوی یک شرکت‌کننده — srcObject با useEffect ست می‌شود */
+/* ================= ابزارهای رله رسانه ================= */
+
+const b64ToBuf = (b64) => {
+  const bin = atob(b64)
+  const u = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i)
+  return u.buffer
+}
+
+/** بهترین MIME پخش (MediaSource) — روی iOS قدیمی null می‌شود → پیام جایگزین */
+const pickSrcMime = () => {
+  if (!window.MediaSource) return null
+  for (const m of ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']) {
+    try { if (MediaSource.isTypeSupported(m)) return m } catch { /* noop */ }
+  }
+  return null
+}
+
+/** بهترین MIME ضبط (MediaRecorder) */
+const pickRecMime = () => {
+  if (!window.MediaRecorder) return ''
+  for (const m of ['video/webm;codecs=vp8,opus', 'video/webm']) {
+    try { if (MediaRecorder.isTypeSupported(m)) return m } catch { /* noop */ }
+  }
+  return ''
+}
+
+/**
+ * پلیر یک استریم رله‌شده — تکه‌های webm را به ترتیب در MediaSource می‌ریزد،
+ * خودش را روی «لبه زنده» نگه می‌دهد و حافظه را تمیز می‌کند.
+ */
+function createFeedPlayer() {
+  const mime = pickSrcMime()
+  const p = {
+    mime, el: null, objUrl: null, ms: null, sb: null, sess: null,
+    queue: [], alive: true, keepT: null, trimT: null,
+  }
+  const pump = () => {
+    if (!p.sb || p.sb.updating || !p.queue.length || !p.alive) return
+    const buf = p.queue.shift()
+    try { p.sb.appendBuffer(buf) } catch {
+      /* صف پر/حجم — کمی از عقب پخش‌شده پاک و دوباره صف */
+      try {
+        const el = p.el
+        const b = el?.buffered
+        if (b?.length && el.currentTime - b.start(0) > 4) {
+          p.sb.remove(b.start(0), el.currentTime - 3)
+          p.queue.unshift(buf)
+        }
+      } catch { /* noop */ }
+    }
+  }
+  const rebuild = (sess) => {
+    if (!p.mime) return
+    p.sess = sess
+    p.queue = []
+    try { p.sb?.abort?.() } catch { /* noop */ }
+    p.sb = null
+    const ms = new MediaSource()
+    p.ms = ms
+    ms.addEventListener('sourceopen', () => {
+      if (!p.alive || p.ms !== ms) return
+      try {
+        p.sb = ms.addSourceBuffer(p.mime)
+        try { p.sb.mode = 'segments' } catch { /* noop */ }
+        p.sb.addEventListener('updateend', pump)
+        pump()
+      } catch { /* noop */ }
+    })
+    if (p.el) {
+      try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+      p.objUrl = URL.createObjectURL(ms)
+      p.el.src = p.objUrl
+      p.el.play?.().catch(() => {})
+    }
+  }
+  /** تکه تازه — اگر سشن عوض شده بود، خودکار از نو ساخته می‌شود */
+  p.push = (sess, b64) => {
+    if (!p.mime || !p.alive || !b64) return
+    if (p.sess !== sess) rebuild(sess)
+    p.queue.push(b64ToBuf(b64))
+    pump()
+  }
+  /** شروع از سر (گپ یا تازه‌وارد) — حتی اگر سشن همان باشد */
+  p.hardReset = (sess) => {
+    if (!p.mime) return
+    p.queue = []
+    rebuild(sess)
+  }
+  p.attach = (el) => {
+    p.el = el
+    if (el && p.ms) {
+      try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+      p.objUrl = URL.createObjectURL(p.ms)
+      el.src = p.objUrl
+      el.play?.().catch(() => {})
+    }
+  }
+  p.destroy = () => {
+    p.alive = false
+    clearInterval(p.keepT)
+    clearInterval(p.trimT)
+    try { p.sb?.abort?.() } catch { /* noop */ }
+    try { if (p.ms && p.ms.readyState === 'open') p.ms.endOfStream?.() } catch { /* noop */ }
+    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
+    p.el = null
+    p.sb = null
+    p.ms = null
+    p.queue = []
+  }
+  /* نگه‌داشتن پخش روی لبه زنده + پاک‌سازی عقب‌مانده‌ها */
+  p.keepT = setInterval(() => {
+    const el = p.el
+    if (!el || el.readyState < 1 || !p.alive) return
+    try {
+      const b = el.buffered
+      if (b.length) {
+        const end = b.end(b.length - 1)
+        if (end - el.currentTime > 3.5) el.currentTime = Math.max(0, end - 1.2)
+        if (el.paused) el.play?.().catch(() => {})
+      }
+    } catch { /* noop */ }
+  }, 1200)
+  p.trimT = setInterval(() => {
+    const el = p.el
+    const sb = p.sb
+    if (!el || !sb || sb.updating || !p.alive) return
+    try {
+      const b = el.buffered
+      if (b.length && el.currentTime - b.start(0) > 15) sb.remove(b.start(0), el.currentTime - 8)
+    } catch { /* noop */ }
+  }, 6000)
+  return p
+}
+
+/** ویدیوی یک شرکت‌کننده با استریم محلی — srcObject با useEffect ست می‌شود */
 function VideoTile({ stream, self, name, camOn, color, big }) {
   const ref = useRef(null)
   useEffect(() => {
@@ -70,6 +205,58 @@ function ScreenPreview({ stream }) {
   return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
 }
 
+const MSE_OK = (() => { try { return !!pickSrcMime() } catch { return false } })()
+
+/** ویدیوی یک استریمِ رله‌شده (مدرس یا هم‌کلاسی) — با MediaSource پخش می‌شود */
+function RelayVideo({ player, name, color, camOff, screen, big }) {
+  const ref = useRef(null)
+  const [needTap, setNeedTap] = useState(false)
+  useEffect(() => {
+    const v = ref.current
+    if (!v || !player) return
+    player.attach(v)
+    const pr = v.play?.()
+    if (pr?.catch) pr.catch(() => {
+      v.muted = true
+      setNeedTap(true)
+      v.play?.().catch(() => {})
+    })
+  }, [player])
+  const unmute = () => {
+    const v = ref.current
+    if (!v) return
+    v.muted = false
+    setNeedTap(false)
+    v.play?.().catch(() => { v.muted = true; setNeedTap(true) })
+  }
+  if (!MSE_OK) {
+    return (
+      <div className={`cam-tile ${big ? 'big' : ''}`}>
+        <div className="cam-off" style={{ padding: 14, textAlign: 'center' }}>
+          <Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} />
+          <div className="muted" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.8 }}>
+            پخش زنده در این مرورگر پشتیبانی نمی‌شود — با Chrome باز کنید
+          </div>
+        </div>
+        <span className="ct-name">{name}</span>
+      </div>
+    )
+  }
+  return (
+    <div className={`cam-tile ${big ? 'big' : ''}`}>
+      {!camOff && player ? (
+        <video ref={ref} autoPlay playsInline onClick={unmute} style={screen ? { objectFit: 'contain' } : undefined} />
+      ) : (
+        <div className="cam-off"><Avatar name={name || '؟'} color={color || 'grad-1'} size={big ? 64 : 34} /></div>
+      )}
+      <span className="ct-name">{screen ? 'اشتراک صفحه — ' : ''}{name}</span>
+      {!camOff && needTap && (
+        <button className="tap-unmute" onClick={unmute}>🔊 کلیک برای صدا</button>
+      )}
+    </div>
+  )
+}
+
 /** کارت عیب‌یابی و درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس
  *  state: 'idle' | 'denied' | 'nodevice' | 'busy' | 'insecure'
  *  diag: { videoCount, audioCount, lastError } — گزارش واقعی مرورگر برای عیب‌یابی */
@@ -91,7 +278,7 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
             </p>
             {handSent ? (
               <p className="small" style={{ color: '#d97706', lineHeight: 1.9, textAlign: 'center' }}>
-                ✋ درخواست شما برای مدرس ارسال شد — به‌محض تایید، دکمه‌های دوربین و میکروفون فعال می‌شوند.
+                ✋ درخواست شما برای مدرس ارسال شد — به‌محض تایید، دوربین و میکروفون به‌صورت خودکار فعال می‌شود.
               </p>
             ) : (
               <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={onRequest}>
@@ -190,6 +377,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const { user, toast, startLive, endLive } = useApp()
  const me = user?.name || (isTeacher ? 'مدرس' : 'دانش‌آموز')
  const classId = classInfo?.liveId || classInfo?.id
+ const userIdRef = useRef(null)
+ userIdRef.current = user?.id
 
  /* ---------- کنترل‌های رسانه ---------- */
  const [mic, setMic] = useState(true)
@@ -217,8 +406,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const canSpeakRef = useRef(false) // اجازه فعال صدا/تصویر (مدرس همیشه true)
  const switchingRef = useRef(false)
  const facingRef = useRef('user')
- const deviceIdxRef = useRef(0)
  const devicesRef = useRef([])
+
+ /* ---------- رله رسانه — فرستنده ---------- */
+ const outRef = useRef(null) // { rec, kind, stopping }
+ const pendingInitRef = useRef(true)
+ const upChainRef = useRef(Promise.resolve())
+
+ /* ---------- رله رسانه — گیرنده ---------- */
+ const feedPlayersRef = useRef(new Map()) // key 't' | uid → FeedPlayer
+ const [feedInfo, setFeedInfo] = useState({}) // key → { sess, mic, cam, screen, name, color }
+ const esRef = useRef(null) // EventSource — برای بستن تمیز
 
  /* ضبط واقعی کلاس (MediaRecorder) */
  const recRef = useRef(null)
@@ -232,12 +430,6 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const stageRef = useRef(null)
  const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
 
- /* ---------- WebRTC mesh ---------- */
- const myPeerIdRef = useRef('p' + Math.random().toString(36).slice(2, 10))
- const pcsRef = useRef(new Map()) // peerId → { pc, senders, polite, makingOffer, ignoreOffer }
- const esRef = useRef(null)
- const [peersList, setPeersList] = useState([]) // [{ peer, name, role, color, stream, mic, cam, screen }]
-
  /* ---------- وایت‌برد ---------- */
  const [strokes, setStrokes] = useState([])
  const [boardLocked, setBoardLocked] = useState(false)
@@ -248,6 +440,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const drawingRef = useRef(null)
  const strokesRef = useRef([])
  const boardLocalTsRef = useRef(0) // جلوگیری از دوئل با echo سرور بعد از تغییر محلی
+ const lockLocalTsRef = useRef(0)
+ const liveWbCurRef = useRef({ after: 0, dt: 0, bgr: -1 }) // کرسر polling تخته
  strokesRef.current = strokes
 
  /* پس‌زمینه تخته (عکس/PDF) + رسم زنده (draft) بقیه */
@@ -269,10 +463,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const chatRef = useRef(null)
  const lastIdRef = useRef(0)
 
- const signal = (to, kind, data) => {
-   req(`/classes/${classId}/signal`, { method: 'POST', body: { from: myPeerIdRef.current, to, kind, data } }).catch(() => {})
- }
  const canSyncBoard = () => Date.now() - boardLocalTsRef.current > 3000
+ const canSyncLock = () => Date.now() - lockLocalTsRef.current > 3000
 
  /* ---------- آغاز/برگزاری مجدد کلاس توسط مدرس ----------
   * کلاسِ ended (جلسه قبل) با ورود مدرس، جلسه‌ی جدید شروع می‌شود — دیگر صفحه «پایان» گیر نمی‌کند */
@@ -285,23 +477,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
- /* ---------- میکروفون و دوربین واقعی — با مرکز دسترسی ---------- */
- const attachAll = () => {
-   const s = localStreamRef.current
-   const a = s?.getAudioTracks()[0]
-   const v = s?.getVideoTracks()[0]
-   for (const { senders } of pcsRef.current.values()) {
-     if (a) senders.audio.replaceTrack(a).catch(() => {})
-     if (v && !screenTrackRef.current) senders.video.replaceTrack(v).catch(() => {})
-   }
- }
-
  /* دسته‌بندی دقیق خطای رسانه + عیب‌یابی محیط (تعداد دستگاه‌هایی که مرورگر می‌بیند) */
  const classifyMediaErr = (e) => {
    const n = e?.name || ''
-   if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError') return 'nodevice'
+   if (n === 'NotFoundError' || n === 'DevicesNotFoundError') return 'nodevice'
    if (n === 'NotReadableError' || n === 'TrackStartError') return 'busy'
-   return 'denied' // NotAllowedError | SecurityError | PermissionDeniedError | …
+   return 'denied' // NotAllowedError | SecurityError | … — OverconstrainedError عمداً اینجا نیست
  }
  const collectMediaDiag = async (err) => {
    const d = { videoCount: 0, audioCount: 0, lastError: err?.name || null }
@@ -313,32 +494,54 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setMediaDiag(d)
  }
 
+ /** گرفتن دوربین با facingMode دقیق (جلو/عقب موبایل) + زنجیره fallback
+  *  دوربین دقیق → facingMode عادی → هر دوربینی — تا هیچ‌وقت «پیدا نشدن» دروغ نگوید */
+ const gumVideo = async (facing, wantAudio = true) => {
+   const base = { width: { ideal: 1280 }, height: { ideal: 720 } }
+   const tries = []
+   if (facing) {
+     tries.push({ ...base, facingMode: { exact: facing } })
+     tries.push({ ...base, facingMode: facing })
+   }
+   tries.push(base)
+   let lastErr = null
+   for (const video of tries) {
+     try {
+       return await navigator.mediaDevices.getUserMedia({
+         video,
+         audio: wantAudio ? { echoCancellation: true, noiseSuppression: true } : false,
+       })
+     } catch (e) { lastErr = e }
+   }
+   throw lastErr
+ }
+
+ const rememberDevices = () => {
+   navigator.mediaDevices.enumerateDevices()
+     .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
+     .catch(() => {})
+ }
+
+ /* ---------- درخواست/قطع رسانه محلی ---------- */
  const startMedia = async () => {
    if (permBusy) return
    if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // گیت اجازه مدرس
    setMediaSkipped(false)
-   if (!navigator.mediaDevices?.getUserMedia) {
-     setMediaErr('insecure')
-     return
-   }
+   if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    setPermBusy(true)
    try {
-     const video = {
-       facingMode: facingRef.current === 'environment' ? { ideal: 'environment' } : { ideal: 'user' },
-       width: { ideal: 1280 }, height: { ideal: 720 },
-     }
-     const s = await navigator.mediaDevices.getUserMedia({
-       video, audio: { echoCancellation: true, noiseSuppression: true },
-     })
+     const s = await gumVideo(facingRef.current)
      localStreamRef.current?.getTracks().forEach((t) => t.stop())
+     const vt = s.getVideoTracks()[0]
+     if (vt) { facingRef.current = vt.getSettings?.().facingMode || facingRef.current; vt.enabled = camRef.current }
+     const at = s.getAudioTracks()[0]
+     if (at) at.enabled = micRef.current
      localStreamRef.current = s
      setLocalStream(s)
      setMediaErr(null)
-     setMediaDiag({ videoCount: 1, audioCount: s.getAudioTracks().length, lastError: null })
-     attachAll()
-     navigator.mediaDevices.enumerateDevices()
-       .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
-       .catch(() => {})
+     setMediaDiag({ videoCount: s.getVideoTracks().length, audioCount: s.getAudioTracks().length, lastError: null })
+     rebuildOutgoing()
+     rememberDevices()
    } catch (e) {
      setMediaErr(classifyMediaErr(e))
      collectMediaDiag(e)
@@ -349,20 +552,20 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* تلاش خودکار اول — فقط برای مدرس؛ دانش‌آموز باید اول از مدرس اجازه بگیرد */
  useEffect(() => {
    let cancelled = false
-   if (!isTeacher) return // دانش‌آموز: بدون اجازه مدرس رسانه‌ای باز نمی‌شود
+   if (!isTeacher) return
    if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    navigator.mediaDevices.getUserMedia({
      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
      audio: { echoCancellation: true, noiseSuppression: true },
    }).then((s) => {
      if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
+     const vt = s.getVideoTracks()[0]
+     if (vt) facingRef.current = vt.getSettings?.().facingMode || 'user'
      localStreamRef.current = s
      setLocalStream(s)
      setMediaErr(null)
-     attachAll()
-     navigator.mediaDevices.enumerateDevices()
-       .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
-       .catch(() => {})
+     rebuildOutgoing()
+     rememberDevices()
    }).catch(async (e) => {
      if (cancelled) return
      setMediaErr(classifyMediaErr(e))
@@ -374,64 +577,516 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        .then((p) => { if (!cancelled && p.state === 'denied') setMediaErr((cur) => cur || 'denied') })
        .catch(() => {})
    } catch { /* noop */ }
-   return () => {
-     cancelled = true
-     localStreamRef.current?.getTracks().forEach((t) => t.stop())
-     screenTrackRef.current?.stop()
-   }
+   return () => { cancelled = true }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [])
 
- /* ---------- تعویض دوربین (جلو/عقب موبایل یا دوربین‌های دسکتاپ) ---------- */
+ /* پاک‌سازی نهایی هنگام بستن کلاس — رله و رسانه‌ها قطع و سرور مطلع می‌شود */
+ useEffect(() => () => {
+   const o = outRef.current
+   if (o) { o.stopping = true; try { if (o.rec.state !== 'inactive') o.rec.stop() } catch { /* noop */ } }
+   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   screenTrackRef.current?.stop()
+   if (classId) req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [])
+
+ /* ---------- فرستنده رله — تکه‌های webm به سرور ----------
+  * آپلودها زنجیره‌ای‌اند (ترتیب تکه‌ها حیاتی است) و هر تکه ۳ بار تلاش می‌شود؛
+  * اگر هر سه شکست خورد، سشن با init تازه از سر شروع می‌شود تا گیرنده‌ها سالم بمانند */
+ const uploadChunk = async (kind, blob, isInit) => {
+   if (!classId) return false
+   const q = `?k=${kind}&init=${isInit ? 1 : 0}&mic=${micRef.current ? 1 : 0}&cam=${camRef.current ? 1 : 0}&screen=${screenRef.current ? 1 : 0}`
+   for (let i = 0; i < 3; i++) {
+     try {
+       const res = await fetch(`/api/classes/${classId}/media/up${q}`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() || ''}` },
+         body: blob,
+       })
+       if (res.ok) return true
+       if (res.status === 403) {
+         const d = await res.json().catch(() => ({}))
+         if (d.noPerm && !isTeacher) { revokeMyMedia(); return false } // اجازه لغو شده
+       }
+     } catch { /* شبکه — تلاش دوباره */ }
+     await new Promise((r) => setTimeout(r, 350))
+   }
+   return false
+ }
+
+ const stopOutgoing = () => {
+   const o = outRef.current
+   if (!o) return
+   outRef.current = null
+   o.stopping = true
+   try { if (o.rec.state !== 'inactive') o.rec.stop() } catch { /* noop */ }
+ }
+
+ const startOutgoing = () => {
+   if (!classId || outRef.current) return
+   if (!isTeacher && !canSpeakRef.current) return
+   const mime = pickRecMime()
+   if (!mime) return
+   const s = localStreamRef.current
+   const v = screenRef.current && screenTrackRef.current ? screenTrackRef.current : s?.getVideoTracks()[0]
+   const a = s?.getAudioTracks()[0]
+   if (!v && !a) return
+   let rec
+   try {
+     rec = new MediaRecorder(new MediaStream([...(v ? [v] : []), ...(a ? [a] : [])]), {
+       mimeType: mime, videoBitsPerSecond: 1_100_000, audioBitsPerSecond: 48_000,
+     })
+   } catch { return }
+   const o = { rec, kind: isTeacher ? 'teacher' : 'student', stopping: false }
+   outRef.current = o
+   rec.ondataavailable = (e) => {
+     if (!e.data?.size || o.stopping || outRef.current !== o) return
+     const isInit = pendingInitRef.current
+     pendingInitRef.current = false
+     const blob = e.data
+     upChainRef.current = upChainRef.current.then(() => uploadChunk(o.kind, blob, isInit)).then((ok) => {
+       if (!ok && outRef.current === o && !o.stopping) pendingInitRef.current = true // سشن تازه در اولین فرصت
+     }).catch(() => {})
+   }
+   rec.onerror = () => { /* ادامه — تکه بعدی */ }
+   try { rec.start(1000) } catch { /* noop */ }
+ }
+
+ /** ساخت/بازسازی استریم خروجی — بعد از هر تغییر ترکیب (شروع رسانه، اشتراک صفحه، تعویض دوربین) */
+ const rebuildOutgoing = () => {
+   pendingInitRef.current = true
+   stopOutgoing()
+   startOutgoing()
+ }
+
+ /** قطع کامل رسانه خودم — لغو اجازه توسط مدرس یا ۴۰۳ سرور */
+ const revokeMyMedia = () => {
+   stopOutgoing()
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   localStreamRef.current = null
+   setLocalStream(null)
+   setMic(false)
+   setCam(false)
+ }
+
+  /* ---------- گیرنده رله — polling استریم‌ها (۸۰۰ms) ----------
+  * با «کرسر» فقط تکه‌های تازه می‌آیند؛ اگر گیرنده جا مانده باشد سرور init می‌فرستد
+  * و پلیر خودش از نو ساخته می‌شود — هیچ حالتی تصویر را برای همیشه نمی‌شکند */
+ useEffect(() => {
+   if (!classId || !user?.id) return
+   let alive = true
+   const players = feedPlayersRef.current
+   const cur = { t: null, s: {} }
+   let timer = null
+
+   const applyFeed = (key, f) => {
+     let p = players.get(key)
+     if (!p) { p = createFeedPlayer(); players.set(key, p) }
+     if (f.reset) p.hardReset(f.sess)
+     if (f.init) p.push(f.sess, f.init)
+     for (const c of f.chunks) p.push(f.sess, c.b64)
+   }
+
+   const loop = async () => {
+     if (!alive) return
+     try {
+       const r = await req(`/classes/${classId}/media/feeds?cur=${encodeURIComponent(JSON.stringify(cur))}`)
+       const next = {}
+       if (!isTeacher && r.teacher) {
+         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, name: classInfo?.teacher || 'مدرس', color: 'grad-0' }
+         applyFeed('t', r.teacher)
+         cur.t = { s: r.teacher.sess, q: r.teacher.seq }
+       } else if (cur.t) cur.t = null
+       for (const sf of r.students || []) {
+         next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, name: sf.name || 'هم‌کلاسی', color: 'grad-2' }
+         applyFeed(sf.uid, sf)
+         cur.s[sf.uid] = { s: sf.sess, q: sf.seq }
+       }
+       for (const k of Object.keys(cur.s)) if (!(k in next)) delete cur.s[k]
+       for (const k of [...players.keys()]) {
+         if (!(k in next)) { try { players.get(k).destroy() } catch { /* noop */ } players.delete(k) }
+       }
+       setFeedInfo((prev) => (feedsEq(prev, next) ? prev : next))
+     } catch { /* شبکه — دوباره */ }
+     finally { if (alive) timer = setTimeout(loop, 800) }
+   }
+   loop()
+   return () => {
+     alive = false
+     clearTimeout(timer)
+     for (const [k, p] of players) { try { p.destroy() } catch { /* noop */ } }
+     players.clear()
+   }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classId, user?.id, isTeacher])
+
+ const feedsEq = (a, b) => {
+   const ka = Object.keys(a)
+   const kb = Object.keys(b)
+   if (ka.length !== kb.length) return false
+   for (const k of ka) {
+     const x = a[k]
+     const y = b[k]
+     if (!y || x.sess !== y.sess || x.mic !== y.mic || x.cam !== y.cam || x.screen !== y.screen || x.name !== y.name) return false
+   }
+   return true
+ }
+
+ /* ---------- SSE: رویدادهای لحظه‌ای (شتاب‌دهنده — همه‌چیز با polling هم پوشش داده شده) ---------- */
+ useEffect(() => {
+   if (!classId) return
+   const token = getToken() || ''
+   const es = new EventSource(`/api/classes/${classId}/events?token=${encodeURIComponent(token)}`)
+   esRef.current = es
+
+   const handleSse = (msg) => {
+     switch (msg.type) {
+       case 'live':
+         setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: msg.startedAt }))
+         toast('کلاس شروع شد', 'success')
+         break
+       case 'ended':
+         setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', endedAt: msg.endedAt }))
+         break
+       case 'board-open':
+         if (!isTeacher && canSyncBoard()) setBoard(!!msg.open)
+         break
+       case 'board-lock':
+         if (canSyncLock()) setBoardLocked(!!msg.locked)
+         break
+       case 'message': {
+         const m2 = msg.message
+         setMessages((list) => (m2?.id != null && list.some((x) => x.id === m2.id)) ? list : [...list, m2].slice(-80))
+         if (m2?.id != null) lastIdRef.current = Math.max(lastIdRef.current, m2.id)
+         break
+       }
+       case 'board':
+         if (msg.stroke) {
+           draftsRef.current.delete(msg.stroke.userId) // رسم زنده همان نفر تمام شده است
+           setStrokes((list) => (msg.stroke.id != null && list.some((s) => s.id === msg.stroke.id)) ? list : [...list, msg.stroke])
+           if (msg.stroke.id != null) liveWbCurRef.current.after = Math.max(liveWbCurRef.current.after, msg.stroke.id)
+         }
+         break
+       case 'board-draft':
+         if (msg.userId && msg.userId !== userIdRef.current && msg.stroke) {
+           draftsRef.current.set(msg.userId, { ...msg.stroke, userId: msg.userId, ts: Date.now() })
+           redrawBoard()
+         }
+         break
+       case 'board-bg':
+         if (msg.img === null) loadBg(null)
+         else if (msg.img) loadBg(msg.img)
+         break
+       case 'perm': {
+         const cs = !!msg.canSpeak
+         setLive((l) => ({ ...(l || { participants: [] }), participants: (l?.participants || []).map((p) => (p.id === msg.userId ? { ...p, canSpeak: cs, hand: false } : p)) }))
+         if (!isTeacher && msg.userId === userIdRef.current) {
+           if (cs) { setHand(false); toast('مدرس اجازه داد — دوربین و میکروفون به‌صورت خودکار فعال می‌شود ✅', 'success') }
+           else toast('مدرس دسترسی صدا/تصویر شما را لغو کرد', 'info')
+         }
+         break
+       }
+       default: break
+     }
+   }
+
+   es.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data) } catch { return } handleSse(m) }
+   return () => { es.close() }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classId])
+
+ /* ---------- poll وضعیت کلاس + heartbeat + چت (پایدار در کنار SSE) ---------- */
+ useEffect(() => {
+   if (!classId) return
+   let alive = true
+   let hbCount = 0
+   const poll = async () => {
+     try {
+       const st = await req(`/classes/${classId}/state`)
+       if (!alive) return
+       setLive({ status: st.status, startedAt: st.startedAt, participants: st.participants || [] })
+       if (!isTeacher && st.boardOpen != null && canSyncBoard()) setBoard(!!st.boardOpen)
+       hbCount++
+       if (hbCount % 3 === 0) {
+         req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: handRef.current } }).catch(() => {})
+       }
+       const r = await req(`/classes/${classId}/messages?after=${lastIdRef.current}`)
+       if (!alive || !r.messages?.length) return
+       setMessages((m) => {
+         const known = new Set(m.filter((x) => x.id != null).map((x) => x.id))
+         const fresh = r.messages.filter((x) => !known.has(x.id))
+         return fresh.length ? [...m, ...fresh].slice(-80) : m
+       })
+       lastIdRef.current = Math.max(lastIdRef.current, ...r.messages.map((x) => x.id))
+     } catch { /* سرور قطع — حالت محلی */ }
+   }
+   poll()
+   const t = setInterval(poll, 2500)
+   return () => { alive = false; clearInterval(t) }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classId])
+
+ const handRef = useRef(false); handRef.current = hand
+
+ /* دست بلند شده — بلافاصله به سرور */
+ useEffect(() => {
+   if (!classId || !user) return
+   req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand } }).catch(() => {})
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [hand])
+
+ /* ---------- وایت‌برد زنده — polling مستقل از SSE (۶۵۰ms وقتی باز است) ---------- */
+ useEffect(() => {
+   if (!classId || !user?.id) return
+   let alive = true
+   const cur = liveWbCurRef.current
+   let timer = null
+   const tick = async () => {
+     if (!alive) return
+     try {
+       const r = await req(`/classes/${classId}/board/live?after=${cur.after}&dt=${cur.dt}&bgr=${cur.bgr}`)
+       if (r.strokes?.length) {
+         setStrokes((list) => {
+           const known = new Set(list.filter((s) => s.id != null).map((s) => s.id))
+           const fresh = r.strokes.filter((s) => !known.has(s.id))
+           return fresh.length ? [...list, ...fresh] : list
+         })
+         cur.after = Math.max(cur.after, ...r.strokes.map((s) => s.id))
+       }
+       if (r.drafts?.length) {
+         for (const d of r.drafts) {
+           if (d.userId === userIdRef.current) continue
+           draftsRef.current.set(d.userId, { ...d, ts: Date.now() })
+         }
+         redrawBoard()
+       }
+       if (!isTeacher && canSyncBoard()) setBoard(!!r.open)
+       if (canSyncLock()) setBoardLocked(!!r.locked)
+       if (typeof r.bgRev === 'number' && r.bgRev !== cur.bgr) {
+         cur.bgr = r.bgRev
+         if (r.bg !== undefined) loadBg(r.bg || null)
+       }
+       cur.dt = r.serverTime || Date.now()
+     } catch { /* شبکه */ }
+     finally { if (alive) timer = setTimeout(tick, board ? 650 : 2200) }
+   }
+   tick()
+   return () => { alive = false; clearTimeout(timer) }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classId, user?.id, isTeacher, board])
+
+ /* تایمر محلی هر ثانیه */
+ useEffect(() => {
+   const t = setInterval(() => setTick((x) => x + 1), 1000)
+   return () => clearInterval(t)
+ }, [])
+
+ useEffect(() => {
+   chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' })
+ }, [messages])
+
+ /* پایان کلاس از سمت سرور → قطع رله و رسانه‌ها و ثبت ضبط */
+ useEffect(() => {
+   if (live?.status !== 'ended') return
+   stopOutgoing()
+   try { req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {}) } catch { /* noop */ }
+   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   screenTrackRef.current?.stop()
+   screenTrackRef.current = null
+   setLocalStream(null)
+   setScreen(false)
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [live?.status])
+
+ /* ---------- گیت اجازه مدرس — فعال‌سازی/لغو خودکار رسانه دانش‌آموز ---------- */
+ const participantsPre = live?.participants || []
+ const myPartPre = participantsPre.find((p) => p.id === user?.id)
+ const canSpeakPre = isTeacher || !!myPartPre?.canSpeak
+ canSpeakRef.current = canSpeakPre
+ const prevCanSpeakRef = useRef(canSpeakPre)
+ useEffect(() => {
+   if (!user?.id) return
+   if (canSpeakPre && !prevCanSpeakRef.current) {
+     // اجازه داده شد — رسانه به‌صورت خودکار باز و رله شروع می‌شود
+     if (localStreamRef.current) { setMediaErr(null); setMediaSkipped(false); rebuildOutgoing() }
+     else if (!isTeacher) startMedia()
+   }
+   if (!canSpeakPre && prevCanSpeakRef.current && !isTeacher) revokeMyMedia()
+   prevCanSpeakRef.current = canSpeakPre
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [canSpeakPre, user?.id])
+
+ /* ---------- محاسبه تایمر ---------- */
+ const startedAt = live?.startedAt || null
+ const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0
+ const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
+ const ss = String(elapsed % 60).padStart(2, '0')
+
+ const participants = live?.participants || []
+ const handsUp = participants.filter((p) => p.hand).length
+ const classEnded = live?.status === 'ended'
+
+ /* اجازه فعال‌سازی صدا/تصویر — مدرس همیشه دارد؛ دانش‌آموز فقط با تایید مدرس */
+ const myPart = participants.find((p) => p.id === user?.id)
+ const myHand = !!myPart?.hand
+ const canSpeak = isTeacher || !!myPart?.canSpeak
+ const needsApproval = !isTeacher && !canSpeak
+ canSpeakRef.current = canSpeak
+
+ /** مدرس: دادن/لغو اجازه صدا/تصویر به یک دانش‌آموز */
+ const grantPerm = async (userId, allow) => {
+   try {
+     const r = await req(`/classes/${classId}/permit`, { method: 'POST', body: { userId, allow } })
+     if (r.participants) setLive((l) => ({ ...(l || { participants: [] }), participants: r.participants }))
+     toast(allow ? 'اجازه داده شد — دوربین و میکروفون دانش‌آموز خودکار فعال می‌شود' : 'اجازه لغو شد', 'success')
+   } catch (e) { if (!e.serverDown) toast(e.message || 'عملیات ناموفق بود', 'error') }
+ }
+
+  const send = async (e) => {
+   e.preventDefault()
+   const body = input.trim()
+   if (!body || sending) return
+   setSending(true)
+   const optimistic = { id: 'tmp-' + Date.now(), name: `${me} (شما)`, body, role: user?.role || 'student', self: true, created_at: Date.now() }
+   setMessages((m) => [...m, optimistic])
+   setInput('')
+   try {
+     const r = await req(`/classes/${classId}/messages`, { method: 'POST', body: { body } })
+     setMessages((m) => m.map((x) => (x === optimistic ? { ...r.message, self: true } : x)))
+     lastIdRef.current = Math.max(lastIdRef.current, r.message.id)
+   } catch (err) {
+     if (!err.serverDown) toast(err.message || 'ارسال پیام ناموفق بود', 'error')
+   }
+   setSending(false)
+ }
+
+ /* ---------- عملیات رسانه ---------- */
+
+ /* درخواست اجازه صدا/تصویر از مدرس — دست بلند کردن + ثبت روی سرور */
+ const requestSpeakPermission = () => {
+   if (isTeacher || canSpeakRef.current) return
+   if (!handRef.current) {
+     setHand(true)
+     req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: true } }).catch(() => {})
+   }
+   toast('درخواست شما برای مدرس ارسال شد ✋ — به‌محض تایید، دوربین و میکروفون خودکار فعال می‌شود', 'info')
+ }
+
+ /** میکروفون — فقط enabled عوض می‌شود (رله هرگز قطع نمی‌شود)؛ اگر ترک نیست فقط همان گرفته می‌شود */
+ const toggleMic = async () => {
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
+   const s = localStreamRef.current
+   if (!s?.getAudioTracks().length) {
+     try {
+       const g = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
+       const at = g.getAudioTracks()[0]
+       at.enabled = true
+       if (localStreamRef.current) localStreamRef.current.addTrack(at)
+       else { localStreamRef.current = g; setLocalStream(g) }
+       setMic(true)
+       setMediaErr(null)
+       setMediaSkipped(false)
+       setMediaDiag({ videoCount: 0, audioCount: 1, lastError: null })
+       rebuildOutgoing()
+       toast('میکروفون وصل شد', 'success')
+     } catch (err) {
+       setMediaErr(classifyMediaErr(err))
+       collectMediaDiag(err)
+       setMediaSkipped(false)
+     }
+     return
+   }
+   const at = s.getAudioTracks()[0]
+   const v = !at.enabled
+   at.enabled = v
+   setMic(v)
+   toast(v ? 'میکروفون وصل شد' : 'میکروفون قطع شد', v ? 'success' : 'info')
+ }
+
+ /** دوربین — فقط enabled عوض می‌شود؛ اگر ترک نیست فقط دوربین گرفته می‌شود (با facingMode درست) */
+ const toggleCam = async () => {
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
+   const s = localStreamRef.current
+   if (!s?.getVideoTracks().length) {
+     try {
+       const g = await gumVideo(facingRef.current, false)
+       const vt = g.getVideoTracks()[0]
+       vt.enabled = true
+       facingRef.current = vt.getSettings?.().facingMode || facingRef.current
+       if (localStreamRef.current) localStreamRef.current.addTrack(vt)
+       else { localStreamRef.current = g; setLocalStream(g) }
+       setCam(true)
+       setMediaErr(null)
+       setMediaSkipped(false)
+       setMediaDiag({ videoCount: 1, audioCount: 0, lastError: null })
+       rebuildOutgoing()
+       rememberDevices()
+       toast('دوربین روشن شد', 'success')
+     } catch (err) {
+       setMediaErr(classifyMediaErr(err))
+       collectMediaDiag(err)
+       setMediaSkipped(false)
+     }
+     return
+   }
+   const vt = s.getVideoTracks()[0]
+   const v = !vt.enabled
+   vt.enabled = v
+   setCam(v)
+ }
+
+ /* ---------- تعویض دوربین — جلو/عقب موبایل با facingMode دقیق + دوربین‌های دسکتاپ ---------- */
  const switchCam = async () => {
    if (switchingRef.current) return
    if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
-   if (!localStreamRef.current) { startMedia(); return }
+   const cur = localStreamRef.current
+   if (!cur?.getVideoTracks().length) { startMedia(); return }
    switchingRef.current = true
-   let ok = false
+   const track = cur.getVideoTracks()[0]
+   const curFacing = track.getSettings?.().facingMode || facingRef.current || 'user'
+   const isTouch = (navigator.maxTouchPoints || 0) > 0
+   const candidates = []
+   if (isTouch) {
+     const flip = curFacing === 'environment' ? 'user' : 'environment'
+     candidates.push({ facingMode: { exact: flip }, width: { ideal: 1280 }, height: { ideal: 720 } })
+     candidates.push({ facingMode: flip, width: { ideal: 1280 }, height: { ideal: 720 } })
+   }
    try {
      let ds = devicesRef.current
      if (!ds.length) {
        ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
        devicesRef.current = ds
      }
-     const next = async (constraints) => {
-       const s = await navigator.mediaDevices.getUserMedia(constraints)
-       const newV = s.getVideoTracks()[0]
-       if (!newV) { s.getTracks().forEach((t) => t.stop()); throw new Error('novideo') }
-       const oldV = localStreamRef.current?.getVideoTracks()[0]
-       oldV?.stop()
+     if (ds.length > 1) {
+       const i = ds.findIndex((d) => d.deviceId === track.getSettings?.().deviceId)
+       candidates.push({ deviceId: { exact: ds[(i + 1 + ds.length) % ds.length].deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } })
+     }
+   } catch { /* noop */ }
+   candidates.push({ facingMode: { ideal: curFacing === 'environment' ? 'user' : 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } })
+
+   for (const video of candidates) {
+     try {
+       const g = await navigator.mediaDevices.getUserMedia({ video, audio: false })
+       const nv = g.getVideoTracks()[0]
+       if (!nv) { g.getTracks().forEach((t) => t.stop()); continue }
+       const old = localStreamRef.current?.getVideoTracks()[0]
+       old?.stop()
        const audio = localStreamRef.current?.getAudioTracks()[0]
-       const nextStream = new MediaStream(audio ? [audio, newV] : [newV])
+       const nextStream = new MediaStream([...(audio ? [audio] : []), nv])
+       nv.enabled = camRef.current // وضعیت روشن/خاموش دوربین حفظ شود
+       facingRef.current = nv.getSettings?.().facingMode || curFacing
        localStreamRef.current = nextStream
        setLocalStream(nextStream)
-       if (!screenTrackRef.current) {
-         for (const { senders } of pcsRef.current.values()) senders.video.replaceTrack(newV).catch(() => {})
-       }
-     }
-     if (ds.length > 1) {
-       deviceIdxRef.current = (deviceIdxRef.current + 1) % ds.length
-       await next({ video: { deviceId: { exact: ds[deviceIdxRef.current].deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-       ok = true
-       toast('دوربین عوض شد', 'success')
-     } else {
-       // موبایل: فلَپ بین دوربین جلو و عقب
-       const flip = facingRef.current === 'user' ? 'environment' : 'user'
-       facingRef.current = flip
-       try {
-         await next({ video: { facingMode: { exact: flip }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-         ok = true
-         toast(flip === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد', 'success')
-       } catch {
-         try {
-           await next({ video: { facingMode: { ideal: flip }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-           ok = true
-           toast('دوربین عوض شد', 'success')
-         } catch { /* دوربین دیگری نیست */ }
-       }
-     }
-   } catch { /* خطا — پیام زیر */ }
-   if (!ok) toast('دوربین دیگری روی این دستگاه پیدا نشد', 'info')
+       rebuildOutgoing()
+       toast(isTouch ? (facingRef.current === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد') : 'دوربین عوض شد', 'success')
+       switchingRef.current = false
+       return
+     } catch { /* گزینه بعدی */ }
+   }
+   toast('دوربین دیگری روی این دستگاه پیدا نشد', 'info')
    switchingRef.current = false
  }
 
@@ -485,20 +1140,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    toast('کلاس بدون دوربین ادامه پیدا می‌کند — چت، وایت‌برد و حاضران فعال است', 'info')
  }
 
- /** درخواست اجازه صدا/تصویر از مدرس — دست بلند کردن + ثبت روی سرور */
- const requestSpeakPermission = () => {
-   if (isTeacher || canSpeakRef.current) return
-   if (!handRef.current) {
-     setHand(true)
-     req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: true } }).catch(() => {})
-   }
-   toast('درخواست شما برای مدرس ارسال شد ✋ — تا اجازه ندهد دوربین/میکروفون باز نمی‌شود', 'info')
- }
-
  /* ---------- ضبط واقعی کلاس (MediaRecorder) ----------
   * تصویر (اشتراک صفحه اگر فعال باشد، وگرنه دوربین) + صدای میکروفون ضبط می‌شود؛
-  * در پایان، فایل ویدیو روی دستگاه مدرس دانلود می‌شود تا لینک مستقیم آن را
-  * در «مدیریت کلاس → جلسات برگزارشده» برای دانش‌آموزها ثبت کند. */
+  * در پایان، فایل ویدیو روی دستگاه مدرس دانلود می‌شود. */
  const stopRecording = () => {
    const rec = recRef.current
    if (rec && rec.state !== 'inactive') { try { rec.stop() } catch { /* noop */ } }
@@ -560,317 +1204,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    return () => clearInterval(t)
  }, [recording])
 
- /* قطع ضبط هنگام بستن صفحه/کلاس — فایل ذخیره‌شده از دست نمی‌رود */
- useEffect(() => () => {
-   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
- }, [])
-
- /* ---------- SSE: رویدادهای لحظه‌ای (WebRTC + تخته + چت + وضعیت) ---------- */
- useEffect(() => {
-   if (!classId) return
-   const token = getToken() || ''
-   const es = new EventSource(`/api/classes/${classId}/events?peer=${myPeerIdRef.current}&token=${encodeURIComponent(token)}`)
-   esRef.current = es
-
-   const ensurePc = (peerId) => {
-     let entry = pcsRef.current.get(peerId)
-     if (entry) return entry
-     const pc = new RTCPeerConnection(RTC_CFG)
-     const at = pc.addTransceiver('audio', { direction: 'sendrecv' })
-     const vt = pc.addTransceiver('video', { direction: 'sendrecv' })
-     entry = { pc, senders: { audio: at.sender, video: vt.sender }, polite: myPeerIdRef.current < peerId, makingOffer: false, ignoreOffer: false, pendingIce: [] }
-     pcsRef.current.set(peerId, entry)
-
-     const s = localStreamRef.current
-     const a = s?.getAudioTracks()[0]
-     const v = s?.getVideoTracks()[0]
-     if (a) at.sender.replaceTrack(a).catch(() => {})
-     if (v && !screenTrackRef.current) vt.sender.replaceTrack(v).catch(() => {})
-     if (screenTrackRef.current) vt.sender.replaceTrack(screenTrackRef.current).catch(() => {})
-
-     pc.onicecandidate = (ev) => { if (ev.candidate) signal(peerId, 'ice', ev.candidate.toJSON()) }
-     pc.ontrack = (ev) => {
-       const stream = ev.streams[0] || new MediaStream([ev.track])
-       // اگر متای peer هنوز در لیست نیست، همین‌جا اضافه شود وگرنه استریم گم می‌شود
-       setPeersList((list) => list.some((p) => p.peer === peerId)
-         ? list.map((p) => (p.peer === peerId ? { ...p, stream } : p))
-         : [...list, { peer: peerId, name: 'هم‌کلاسی', mic: true, cam: true, screen: false, stream }])
-     }
-     pc.onconnectionstatechange = () => {
-       if (pc.connectionState === 'failed') { try { pc.restartIce() } catch { /* noop */ } }
-     }
-     return entry
-   }
-
-   const addPeerMeta = (m) => setPeersList((list) =>
-     list.some((x) => x.peer === m.peer)
-       ? list.map((x) => (x.peer === m.peer ? { ...x, ...m, stream: x.stream } : x))
-       : [...list, { mic: true, cam: true, screen: false, stream: null, ...m }]
-   )
-
-   const makeOffer = async (peerId) => {
-     const entry = ensurePc(peerId)
-     try {
-       entry.makingOffer = true
-       await entry.pc.setLocalDescription()
-       signal(peerId, 'offer', entry.pc.localDescription)
-     } catch { /* noop */ } finally { entry.makingOffer = false }
-   }
-
-   const handleSignal = async (m) => {
-     if (m.kind === 'state') {
-       addPeerMeta({ peer: m.from, ...(m.data || {}) })
-       return
-     }
-     // متای peer باید قبل از ساخت/استفاده از PC در لیست باشد — وگرنه ontrack استریم را گم می‌کند
-     setPeersList((list) => list.some((x) => x.peer === m.from) ? list : [...list, { peer: m.from, name: m.name || 'هم‌کلاسی', mic: true, cam: true, screen: false, stream: null }])
-     const entry = ensurePc(m.from)
-     const pc = entry.pc
-     try {
-       if (m.kind === 'offer') {
-         const collision = entry.makingOffer || pc.signalingState !== 'stable'
-         entry.ignoreOffer = !entry.polite && collision
-         if (entry.ignoreOffer) return
-         if (collision) await pc.setLocalDescription({ type: 'rollback' })
-         await pc.setRemoteDescription(m.data)
-         for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(c) } catch { /* noop */ } }
-         await pc.setLocalDescription()
-         signal(m.from, 'answer', pc.localDescription)
-       } else if (m.kind === 'answer') {
-         if (pc.signalingState === 'have-local-offer') {
-           await pc.setRemoteDescription(m.data)
-           for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(c) } catch { /* noop */ } }
-         }
-       } else if (m.kind === 'ice' && m.data) {
-         if (!pc.remoteDescription) { entry.pendingIce.push(m.data); return } // قبل از SDP ریموت — صف می‌شود
-         try { await pc.addIceCandidate(m.data) } catch { /* بعد از ignore طبیعی است */ }
-       }
-     } catch { /* اتصال ناپایدار — ignore */ }
-   }
-
-   const handleSse = (msg) => {
-     switch (msg.type) {
-       case 'peers':
-         (msg.peers || []).forEach((p) => { addPeerMeta(p); makeOffer(p.peer) })
-         break
-       case 'peer-join':
-         if (msg.peer && msg.peer !== myPeerIdRef.current) addPeerMeta(msg)
-         break
-       case 'peer-leave': {
-         const e = pcsRef.current.get(msg.peer)
-         if (e) { try { e.pc.close() } catch { /* noop */ } pcsRef.current.delete(msg.peer) }
-         setPeersList((list) => list.filter((p) => p.peer !== msg.peer))
-         break
-       }
-       case 'signal': handleSignal(msg); break
-       case 'live':
-         setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: msg.startedAt }))
-         toast('کلاس شروع شد', 'success')
-         break
-       case 'ended':
-         setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', endedAt: msg.endedAt }))
-         break
-       case 'board-open':
-         if (canSyncBoard()) setBoard(!!msg.open)
-         break
-       case 'message': {
-         const m2 = msg.message
-         setMessages((list) => (m2?.id != null && list.some((x) => x.id === m2.id)) ? list : [...list, m2].slice(-80))
-         if (m2?.id != null) lastIdRef.current = Math.max(lastIdRef.current, m2.id)
-         break
-       }
-       case 'board':
-         if (msg.stroke) {
-           draftsRef.current.delete(msg.stroke.userId) // رسم زنده همان نفر تمام شده است
-           setStrokes((list) => (msg.stroke.id != null && list.some((s) => s.id === msg.stroke.id)) ? list : [...list, msg.stroke])
-         }
-         break
-       case 'board-draft':
-         if (msg.userId && msg.userId !== user?.id && msg.stroke) {
-           draftsRef.current.set(msg.userId, { ...msg.stroke, uid: msg.userId, ts: Date.now() })
-           redrawBoard()
-         }
-         break
-       case 'board-bg':
-         if (msg.img === null) loadBg(null)
-         else if (msg.img) loadBg(msg.img)
-         break
-       case 'board-clear': setStrokes([]); break
-       case 'board-lock': setBoardLocked(!!msg.locked); break
-       case 'perm': {
-         const cs = !!msg.canSpeak
-         setLive((l) => ({ ...(l || { participants: [] }), participants: (l?.participants || []).map((p) => (p.id === msg.userId ? { ...p, canSpeak: cs, hand: false } : p)) }))
-         if (!isTeacher && msg.userId === user?.id) {
-           if (cs) toast('مدرس اجازه داد — حالا دکمه دوربین/میکروفون را بزنید ✅', 'success')
-           else {
-             toast('مدرس دسترسی صدا/تصویر شما را لغو کرد', 'info')
-             localStreamRef.current?.getTracks().forEach((t) => t.stop())
-             localStreamRef.current = null
-             setLocalStream(null)
-             setMic(false); setCam(false)
-           }
-         }
-         break
-       }
-       default: break
-     }
-   }
-
-   es.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data) } catch { return } handleSse(m) }
-
-   return () => {
-     es.close()
-     for (const { pc } of pcsRef.current.values()) { try { pc.close() } catch { /* noop */ } }
-     pcsRef.current.clear()
-     setPeersList([])
-   }
-   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [classId])
-
- /* ---------- poll وضعیت کلاس + heartbeat + چت (پایدار در کنار SSE) ---------- */
- useEffect(() => {
-   if (!classId) return
-   let alive = true
-   let hbCount = 0
-   const poll = async () => {
-     try {
-       const st = await req(`/classes/${classId}/state`)
-       if (!alive) return
-       setLive({ status: st.status, startedAt: st.startedAt, participants: st.participants || [] })
-       if (st.boardOpen != null && canSyncBoard()) setBoard(!!st.boardOpen)
-       hbCount++
-       if (hbCount % 3 === 0) {
-         req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: handRef.current } }).catch(() => {})
-       }
-       const r = await req(`/classes/${classId}/messages?after=${lastIdRef.current}`)
-       if (!alive || !r.messages?.length) return
-       setMessages((m) => {
-         const known = new Set(m.filter((x) => x.id != null).map((x) => x.id))
-         const fresh = r.messages.filter((x) => !known.has(x.id))
-         return fresh.length ? [...m, ...fresh].slice(-80) : m
-       })
-       lastIdRef.current = Math.max(lastIdRef.current, ...r.messages.map((x) => x.id))
-     } catch { /* سرور قطع — حالت محلی */ }
-   }
-   poll()
-   const t = setInterval(poll, 2500)
-   return () => { alive = false; clearInterval(t) }
-   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [classId])
-
- const handRef = useRef(false); handRef.current = hand
-
- /* دست بلند شده — بلافاصله به سرور */
- useEffect(() => {
-   if (!classId || !user) return
-   req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand } }).catch(() => {})
-   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [hand])
-
- /* ---------- تخته: بارگذاری اولیه ---------- */
- useEffect(() => {
-   if (!classId || !user) return
-   req(`/classes/${classId}/board`).then((r) => {
-     setStrokes(r.strokes || [])
-     setBoardLocked(!!r.locked)
-     loadBg(r.bg || null)
-   }).catch(() => {})
-   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [classId, user?.id])
-
- /* تایمر محلی هر ثانیه */
- useEffect(() => {
-   const t = setInterval(() => setTick((x) => x + 1), 1000)
-   return () => clearInterval(t)
- }, [])
-
- useEffect(() => {
-   chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' })
- }, [messages])
-
- /* پایان کلاس از سمت سرور → خاموش کردن رسانه‌ها و قطع ضبط */
- useEffect(() => {
-   if (live?.status !== 'ended') return
-   try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
-   localStreamRef.current?.getTracks().forEach((t) => t.stop())
-   screenTrackRef.current?.stop()
-   screenTrackRef.current = null
-   setLocalStream(null)
-   setScreen(false)
- }, [live?.status])
-
- /* ---------- محاسبه تایمر ---------- */
- const startedAt = live?.startedAt || null
- const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0
- const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
- const ss = String(elapsed % 60).padStart(2, '0')
-
- const participants = live?.participants || []
- const handsUp = participants.filter((p) => p.hand).length
- const classEnded = live?.status === 'ended'
-
- /* اجازه فعال‌سازی صدا/تصویر — مدرس همیشه دارد؛ دانش‌آموز فقط با تایید مدرس */
- const myPart = participants.find((p) => p.id === user?.id)
- const myHand = !!myPart?.hand
- const canSpeak = isTeacher || !!myPart?.canSpeak
- const needsApproval = !isTeacher && !canSpeak
- canSpeakRef.current = canSpeak
-
- /** مدرس: دادن/لغو اجازه صدا/تصویر به یک دانش‌آموز */
- const grantPerm = async (userId, allow) => {
-   try {
-     const r = await req(`/classes/${classId}/permit`, { method: 'POST', body: { userId, allow } })
-     if (r.participants) setLive((l) => ({ ...(l || { participants: [] }), participants: r.participants }))
-     toast(allow ? 'اجازه داده شد — دانش‌آموز می‌تواند دوربین و میکروفون را روشن کند' : 'اجازه لغو شد', 'success')
-   } catch (e) { if (!e.serverDown) toast(e.message || 'عملیات ناموفق بود', 'error') }
- }
-
- const send = async (e) => {
-   e.preventDefault()
-   const body = input.trim()
-   if (!body || sending) return
-   setSending(true)
-   const optimistic = { id: 'tmp-' + Date.now(), name: `${me} (شما)`, body, role: user?.role || 'student', self: true, created_at: Date.now() }
-   setMessages((m) => [...m, optimistic])
-   setInput('')
-   try {
-     const r = await req(`/classes/${classId}/messages`, { method: 'POST', body: { body } })
-     setMessages((m) => m.map((x) => (x === optimistic ? { ...r.message, self: true } : x)))
-     lastIdRef.current = Math.max(lastIdRef.current, r.message.id)
-   } catch (err) {
-     if (!err.serverDown) toast(err.message || 'ارسال پیام ناموفق بود', 'error')
-   }
-   setSending(false)
- }
-
- /* ---------- عملیات رسانه ---------- */
- const broadcastState = () => signal('*', 'state', { mic: micRef.current, cam: camRef.current, screen: screenRef.current })
-
- const toggleMic = () => {
-   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // بدون اجازه مدرس نه
-   if (!localStreamRef.current?.getAudioTracks().length) { startMedia(); return }
-   const v = !mic
-   setMic(v)
-   localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = v })
-   broadcastState()
- }
- const toggleCam = () => {
-   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // بدون اجازه مدرس نه
-   if (!localStreamRef.current?.getVideoTracks().length) { startMedia(); return }
-   const v = !cam
-   setCam(v)
-   localStreamRef.current.getVideoTracks().forEach((t) => { t.enabled = v })
-   broadcastState()
- }
+ /* ---------- اشتراک صفحه (مدرس) ---------- */
  const stopScreenShare = () => {
    screenTrackRef.current?.stop()
    screenTrackRef.current = null
    screenStreamRef.current = null
-   const camTrack = localStreamRef.current?.getVideoTracks()[0]
-   for (const { senders } of pcsRef.current.values()) senders.video.replaceTrack(camTrack || null).catch(() => {})
    screenRef.current = false
    setScreen(false)
-   broadcastState()
+   rebuildOutgoing()
  }
  const toggleScreenShare = async () => {
    if (screen) { stopScreenShare(); return }
@@ -884,7 +1225,6 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      screenTrackRef.current = track
      screenStreamRef.current = s
      track.addEventListener('ended', () => stopScreenShare())
-     for (const { senders } of pcsRef.current.values()) senders.video.replaceTrack(track).catch(() => {})
      screenRef.current = true
      setScreen(true)
      setBoard(false)
@@ -892,7 +1232,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        boardLocalTsRef.current = Date.now()
        req(`/classes/${classId}/board/open`, { method: 'POST', body: { open: false } }).catch(() => {})
      }
-     broadcastState()
+     rebuildOutgoing()
    } catch (e) {
      if (e?.name === 'NotAllowedError') toast(inIframe ? 'اشتراک صفحه فقط در پنجره کامل کار می‌کند — کلاس را در پنجره جدید باز کنید' : 'اشتراک صفحه لغو شد', 'info')
      else toast('اشتراک صفحه ممکن نشد', 'error')
@@ -913,11 +1253,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const toggleBoardLock = async () => {
    const next = !boardLocked
    setBoardLocked(next)
+   lockLocalTsRef.current = Date.now()
    try { await req(`/classes/${classId}/board/lock`, { method: 'POST', body: { locked: next } }) }
    catch (e) { if (!e.serverDown) { setBoardLocked(!next); toast(e.message || 'عملیات ناموفق بود', 'error') } }
  }
  const clearBoard = async () => {
    setStrokes([])
+   liveWbCurRef.current.after = 0
    try { await req(`/classes/${classId}/board`, { method: 'DELETE' }) } catch { /* noop */ }
  }
  const endClassNow = () => {
@@ -931,7 +1273,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    startLive(classId)
  }
 
- /* ---------- رسم وایت‌برد ---------- */
+  /* ---------- رسم وایت‌برد ---------- */
  const drawStroke = (ctx, s) => {
    const pts = s.points || []
    if (!pts.length) return
@@ -994,6 +1336,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const sendBg = async (dataUrl) => {
    try {
      await req(`/classes/${classId}/board/bg`, { method: 'POST', body: { img: dataUrl } })
+     liveWbCurRef.current.bgr = -1 // polling دوباره bg تازه را می‌گیرد
      loadBg(dataUrl)
      toast('تصویر روی تخته نمایش داده شد — می‌توانید رویش بکشید', 'success')
    } catch (e) { if (!e.serverDown) toast(e.message || 'ارسال تصویر ناموفق بود', 'error') }
@@ -1042,7 +1385,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
  const clearBoardBg = async () => {
    pdfDocRef.current = null; setPdfPages(0); setPdfPage(1)
-   try { await req(`/classes/${classId}/board/bg`, { method: 'DELETE' }); loadBg(null) } catch { /* noop */ }
+   try { await req(`/classes/${classId}/board/bg`, { method: 'DELETE' }); liveWbCurRef.current.bgr = -1; loadBg(null) } catch { /* noop */ }
  }
  useEffect(() => { redrawBoard() }, [strokes, board, boardBg])
 
@@ -1092,7 +1435,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (points.length === 1) points = [points[0], [points[0][0] + 0.0015, points[0][1] + 0.0015]]
    try {
      const r = await req(`/classes/${classId}/board`, { method: 'POST', body: { color: cur.color, size: cur.size, tool: cur.tool, points } })
-     if (r.stroke) setStrokes((list) => (list.some((s) => s.id === r.stroke.id)) ? list : [...list, r.stroke])
+     if (r.stroke) {
+       setStrokes((list) => (list.some((s) => s.id === r.stroke.id)) ? list : [...list, r.stroke])
+       if (r.stroke.id != null) liveWbCurRef.current.after = Math.max(liveWbCurRef.current.after, r.stroke.id)
+     }
      redrawBoard()
    } catch (e) {
      if (!e.serverDown) toast(e.message || 'ثبت روی تخته ناموفق بود', 'error')
@@ -1131,12 +1477,21 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
 
  /* ---------- چیدمان صحنه ---------- */
- const anyoneScreening = peersList.some((p) => p.screen)
- const remoteVideos = peersList.filter((p) => p.stream)
- const showVideosGrid = !board && !screen && !anyoneScreening
+ const tFeed = !isTeacher ? feedInfo.t : null           // استریم مدرس (برای دانش‌آموز)
+ const sFeeds = Object.entries(feedInfo).filter(([k]) => k !== 't') // استریم دانش‌آموزانِ دارای اجازه
+ const watchingBoard = board
+ const watchingScreen = isTeacher && screen
+ const watchingFeed = !isTeacher && !!tFeed
+ const stageBusy = watchingBoard || watchingScreen || watchingFeed
+
+ const feedTile = (key, f, big) => (
+   <RelayVideo key={key} player={feedPlayersRef.current.get(key)} name={f.name} color={f.color} camOff={!f.cam} screen={f.screen} big={big} />
+ )
+
+ /* کاشی‌های حالت عادی: رسانه خودم + استریم دانش‌آموزان (برای مدرس) یا استریم بقیه (برای دانش‌آموز) */
  const allTiles = [
-   ...(localStream ? [{ peer: 'me', name: me, stream: localStream, self: true, camOn: cam, color: user?.color || 'grad-3' }] : []),
-   ...peersList.map((p) => ({ peer: p.peer, name: p.name || 'هم‌کلاسی', stream: p.stream, self: false, camOn: p.cam, color: p.color })),
+   ...(localStream ? [{ key: 'me', self: true, name: me, stream: localStream, camOn: cam, color: user?.color || 'grad-3' }] : []),
+   ...sFeeds.map(([uid, f]) => ({ key: uid, relay: true, f })),
  ]
  const canDraw = user && (!boardLocked || isTeacher)
 
@@ -1164,11 +1519,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
  <div className="live-stage" ref={stageRef}>
- <div className={`live-view ${board ? 'board' : screen || anyoneScreening ? 'screen' : 'camera'}`}>
- <span className="live-label"><i className="live-red-dot" /> {board ? 'وایت‌برد مشترک' : screen ? 'اشتراک صفحه شما' : anyoneScreening ? 'اشتراک صفحه مدرس' : 'کلاس زنده'}</span>
+ <div className={`live-view ${watchingBoard ? 'board' : watchingScreen || watchingFeed ? 'screen' : 'camera'}`}>
+ <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? 'اشتراک صفحه شما' : watchingFeed ? (tFeed.screen ? 'اشتراک صفحه مدرس' : 'کلاس زنده') : 'کلاس زنده'}</span>
  <span className="live-timer" dir="ltr">{mm}:{ss}</span>
 
- {board ? (
+ {watchingBoard ? (
    <div className="wb-wrap">
      {isTeacher && (
        <div className="wb-toolbar" dir="rtl">
@@ -1221,32 +1576,28 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        onPointerLeave={canDraw ? onWbUp : undefined}
      />
    </div>
- ) : screen ? (
+ ) : watchingScreen ? (
    <ScreenPreview stream={screenStreamRef.current} />
- ) : anyoneScreening ? (
-   <div className="cam-grid">
-     {remoteVideos.length ? remoteVideos.map((p) => (
-       <VideoTile key={p.peer} stream={p.stream} name={p.name} camOn color={p.color} big />
-     )) : (
-       <div className="live-tile"><Avatar name={classInfo?.teacher || 'مدرس'} color="grad-0" size={110} /><b style={{ fontSize: 16 }}>{classInfo?.teacher || 'مدرس'}</b><span className="muted small">در حال اشتراک صفحه…</span></div>
-     )}
-   </div>
+ ) : watchingFeed ? (
+   feedTile('t', tFeed, true)
  ) : (
    <div className="cam-grid">
      {allTiles.length ? allTiles.map((t) => (
-       <VideoTile key={t.peer} stream={t.stream} self={t.self} name={t.name} camOn={t.camOn} color={t.color} big={allTiles.length <= 2} />
+       t.relay
+         ? feedTile(t.key, t.f, allTiles.length <= 2)
+         : <VideoTile key={t.key} stream={t.stream} self={t.self} name={t.name} camOn={t.camOn} color={t.color} big={allTiles.length <= 2} />
      )) : (
        <div className="live-tile">
          <Avatar name={classInfo?.teacher || 'مدرس'} color="grad-0" size={110} />
          <b style={{ fontSize: 16 }}>{classInfo?.teacher || 'مدرس'}</b>
-         <span className="muted small">در حال اتصال…</span>
+         <span className="muted small">{isTeacher ? 'دوربین خود را روشن کنید تا دانش‌آموزان شما را ببینند' : 'در حال اتصال به کلاس…'}</span>
        </div>
      )}
    </div>
  )}
 
- {/* مرکز دسترسی دوربین — فقط وقتی رسانه‌ای نداریم و در حال دیدن تخته/صفحه نیستیم */}
- {!localStream && !mediaSkipped && !board && !screen && !anyoneScreening && (
+ {/* مرکز دسترسی دوربین — فقط وقتی رسانه‌ای نداریم و در حال دیدن تخته/صفحه/استریم مدرس نیستیم */}
+ {!localStream && !mediaSkipped && !stageBusy && (
    <PermissionCard
      state={mediaErr || 'idle'}
      permBusy={permBusy}
@@ -1261,6 +1612,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    />
  )}
 
+ {/* در حال دیدن استریم مدرس ولی بدون اجازه صحبت — نوار باریک درخواست (کارت بزرگ وسط تصویر را نمی‌گیرد) */}
+ {!isTeacher && needsApproval && stageBusy && !mediaSkipped && (
+   <div className="speak-req-bar">
+     {(myHand || hand) ? (
+       <span className="small" style={{ color: '#d97706' }}>✋ درخواست شما برای مدرس ارسال شد — منتظر تایید…</span>
+     ) : (
+       <button className="btn btn-primary btn-sm" onClick={requestSpeakPermission}>
+         <Icon name="hand" size={14} /> درخواست اجازه صدا و تصویر از مدرس
+       </button>
+     )}
+   </div>
+ )}
+
  {/* بعد از «ادامه بدون دوربین» — دکمه کوچک فعال‌سازی مجدد گوشه صحنه */}
  {mediaSkipped && !localStream && (
    <button
@@ -1272,14 +1636,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    </button>
  )}
 
- {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته */}
- {(board || screen || anyoneScreening) && allTiles.length > 0 && (
+ {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته/دیدن استریم مدرس */}
+ {stageBusy && (localStream || tFeed || sFeeds.length > 0) && (
    <div className="cam-strip">
-     {allTiles.map((t) => (
-       <div key={t.peer} style={{ width: 128, flexShrink: 0 }}>
-         <VideoTile stream={t.stream} self={t.self} name={t.name} camOn={t.camOn} color={t.color} />
+     {localStream && (
+       <div style={{ width: 128, flexShrink: 0 }}>
+         <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
        </div>
-     ))}
+     )}
+     {watchingFeed && feedTile('t', tFeed, false)}
+     {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}
  </div>
@@ -1402,8 +1768,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <div className="modal-actions">
  <button className="btn btn-primary" onClick={() => {
    setEndedModal(false)
+   stopOutgoing()
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    screenTrackRef.current?.stop()
+   req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
    toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info')
  }}>بله، خارج شو</button>
  <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت</button>
@@ -1414,3 +1782,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </div>
  )
 }
+
+
+
+
