@@ -7,18 +7,18 @@ import { useApp } from '../store/AppContext'
  * و مسیر مقصد در state.from ذخیره می‌شود تا بعد از ورود، همان‌جا برگردد.
  */
 export function RouteGuard({ role, children }) {
-  const { user } = useApp()
-  const loc = useLocation()
-  const allowed = user?.role === role
+ const { user } = useApp()
+ const loc = useLocation()
+ const allowed = user?.role === role
 
-  if (!allowed) {
-    return (
-      <Navigate
-        to={`/auth?role=${role}`}
-        replace
-        state={{ from: loc.pathname, needRole: role }}
-      />
-    )
-  }
-  return children
+ if (!allowed) {
+ return (
+ <Navigate
+ to={`/auth?role=${role}`}
+ replace
+ state={{ from: loc.pathname, needRole: role }}
+ />
+ )
+ }
+ return children
 }

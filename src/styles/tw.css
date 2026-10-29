@@ -1,0 +1,43 @@
+/* ============================================================
+ Tailwind 4 + توکن‌های shadcn — هماهنگ با تم سرمه‌ای/فیروزه‌ای مدرس‌یار
+ نکته: preflight عمداً لود نمی‌شود تا استایل‌های فعلی سایت دست‌نخورده بمانند.
+ ============================================================ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme {
+ /* رنگ‌های پایه مدرس‌یار */
+ --color-background: #070d18;
+ --color-surface: #0d1626;
+ --color-surface-2: #101b2f;
+ --color-foreground: #e7eef9;
+ --color-muted-foreground: #93a5bb;
+ --color-faint: #64748b;
+
+ --color-primary: #2dd4bf;
+ --color-primary-foreground: #052018;
+
+ --color-secondary: rgba(148, 163, 184, 0.1);
+ --color-secondary-foreground: #e7eef9;
+
+ --color-accent: rgba(45, 212, 191, 0.12);
+ --color-accent-foreground: #5eead4;
+
+ --color-destructive: #fb7185;
+ --color-destructive-foreground: #2b0710;
+
+ --color-success: #34d399;
+ --color-warning: #fbbf24;
+ --color-sky: #38bdf8;
+ --color-violet: #a78bfa;
+
+ --color-border: rgba(148, 163, 184, 0.16);
+ --color-input: rgba(148, 163, 184, 0.16);
+ --color-ring: #2dd4bf;
+
+ --radius-sm: 8px;
+ --radius-md: 10px;
+ --radius-lg: 14px;
+ --radius-xl: 20px;
+}

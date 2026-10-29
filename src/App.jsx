@@ -66,141 +66,141 @@ const ASettings = lazy(() => import('./pages/admin/ASettings'))
 
 /* ---------- عنوان داینامیک هر مسیر (سئو و تجربه کاربری) ---------- */
 const ROUTE_TITLES = {
-  '/': 'خانه',
-  '/resume': 'رزومه‌ساز',
-  '/courses': 'دوره‌های آموزشی',
-  '/live': 'کلاس‌های آنلاین',
-  '/teachers': 'اساتید',
-  '/market': 'مدرس‌مارکت',
-  '/blog': 'بلاگ آموزشی',
-  '/checkout': 'تسویه حساب',
-  '/order-success': 'ثبت سفارش',
-  '/contact': 'تماس با ما',
-  '/auth': 'ورود و ثبت‌نام',
+ '/': 'خانه',
+ '/resume': 'رزومه‌ساز',
+ '/courses': 'دوره‌های آموزشی',
+ '/live': 'کلاس‌های آنلاین',
+ '/teachers': 'اساتید',
+ '/market': 'مدرس‌مارکت',
+ '/blog': 'بلاگ آموزشی',
+ '/checkout': 'تسویه حساب',
+ '/order-success': 'ثبت سفارش',
+ '/contact': 'تماس با ما',
+ '/auth': 'ورود و ثبت‌نام',
 }
 
 function titleFor(pathname) {
-  if (pathname.startsWith('/panel/student')) return 'پنل دانش‌آموز'
-  if (pathname.startsWith('/panel/teacher')) return 'پنل مدرس'
-  if (pathname.startsWith('/panel/admin')) return 'پنل مدیریت'
-  for (const base of Object.keys(ROUTE_TITLES)) {
-    if (base !== '/' && pathname.startsWith(base)) return ROUTE_TITLES[base]
-  }
-  return ROUTE_TITLES[pathname]
+ if (pathname.startsWith('/panel/student')) return 'پنل دانش‌آموز'
+ if (pathname.startsWith('/panel/teacher')) return 'پنل مدرس'
+ if (pathname.startsWith('/panel/admin')) return 'پنل مدیریت'
+ for (const base of Object.keys(ROUTE_TITLES)) {
+ if (base !== '/' && pathname.startsWith(base)) return ROUTE_TITLES[base]
+ }
+ return ROUTE_TITLES[pathname]
 }
 
 const DEFAULT_TITLE = 'مدرس‌یار | پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی'
 
 /** عنوان تب مرورگر را بر اساس مسیر فعلی به‌روز می‌کند */
 function TitleSync() {
-  const { pathname } = useLocation()
-  useEffect(() => {
-    const t = titleFor(pathname)
-    document.title = t ? `${t} | مدرس‌یار` : DEFAULT_TITLE
-  }, [pathname])
-  return null
+ const { pathname } = useLocation()
+ useEffect(() => {
+ const t = titleFor(pathname)
+ document.title = t ? `${t} | مدرس‌یار` : DEFAULT_TITLE
+ }, [pathname])
+ return null
 }
 
 function ScrollToTop() {
-  const { pathname } = useLocation()
-  useEffect(() => { window.scrollTo(0, 0) }, [pathname])
-  return null
+ const { pathname } = useLocation()
+ useEffect(() => { window.scrollTo(0, 0) }, [pathname])
+ return null
 }
 
 function Public({ children }) {
-  return (
-    <>
-      <ScrollToTop />
-      <Navbar />
-      {children}
-      <Footer />
-    </>
-  )
+ return (
+ <>
+ <ScrollToTop />
+ <Navbar />
+ {children}
+ <Footer />
+ </>
+ )
 }
 
 export default function App() {
-  return (
-    <ErrorBoundary>
-      <TitleSync />
-      <Suspense fallback={<LoadingScreen />}>
-        <Routes>
-          {/* سایت عمومی */}
-          <Route path="/" element={<Public><Home /></Public>} />
-          <Route path="/resume" element={<Public><Resume /></Public>} />
-          <Route path="/courses" element={<Public><Courses /></Public>} />
-          <Route path="/courses/:id" element={<Public><CourseDetail /></Public>} />
-          <Route path="/live" element={<Public><LiveClasses /></Public>} />
-          <Route path="/teachers" element={<Public><Teachers /></Public>} />
-          <Route path="/teachers/:id" element={<Public><TeacherProfile /></Public>} />
-          <Route path="/market" element={<Public><Market /></Public>} />
-          <Route path="/market/:id" element={<Public><ProductDetail /></Public>} />
-          <Route path="/blog" element={<Public><Blog /></Public>} />
-          <Route path="/blog/:id" element={<Public><BlogPost /></Public>} />
-          <Route path="/checkout" element={<Public><Checkout /></Public>} />
-          <Route path="/order-success" element={<Public><OrderSuccess /></Public>} />
-          <Route path="/contact" element={<Public><Contact /></Public>} />
-          <Route path="/auth" element={<Auth />} />
+ return (
+ <ErrorBoundary>
+ <TitleSync />
+ <Suspense fallback={<LoadingScreen />}>
+ <Routes>
+ {/* سایت عمومی */}
+ <Route path="/" element={<Public><Home /></Public>} />
+ <Route path="/resume" element={<Public><Resume /></Public>} />
+ <Route path="/courses" element={<Public><Courses /></Public>} />
+ <Route path="/courses/:id" element={<Public><CourseDetail /></Public>} />
+ <Route path="/live" element={<Public><LiveClasses /></Public>} />
+ <Route path="/teachers" element={<Public><Teachers /></Public>} />
+ <Route path="/teachers/:id" element={<Public><TeacherProfile /></Public>} />
+ <Route path="/market" element={<Public><Market /></Public>} />
+ <Route path="/market/:id" element={<Public><ProductDetail /></Public>} />
+ <Route path="/blog" element={<Public><Blog /></Public>} />
+ <Route path="/blog/:id" element={<Public><BlogPost /></Public>} />
+ <Route path="/checkout" element={<Public><Checkout /></Public>} />
+ <Route path="/order-success" element={<Public><OrderSuccess /></Public>} />
+ <Route path="/contact" element={<Public><Contact /></Public>} />
+ <Route path="/auth" element={<Auth />} />
 
-          {/* پنل دانش‌آموز — محافظت‌شده */}
-          <Route path="/panel/student" element={<RouteGuard role="student"><StudentPanel /></RouteGuard>}>
-            <Route index element={<SDashboard />} />
-            <Route path="schedule" element={<SSchedule />} />
-            <Route path="courses" element={<SMyCourses />} />
-            <Route path="player/:courseId" element={<SCoursePlayer />} />
-            <Route path="assignments" element={<SAssignments />} />
-            <Route path="certificates" element={<SCertificates />} />
-            <Route path="study" element={<SStudy />} />
-            <Route path="orders" element={<SOrders />} />
-            <Route path="wishlist" element={<SWishlist />} />
-            <Route path="tickets" element={<STickets />} />
-            <Route path="live/:classId" element={<SLiveRoom />} />
-            <Route path="*" element={<Navigate to="/panel/student" replace />} />
-          </Route>
+ {/* پنل دانش‌آموز — محافظت‌شده */}
+ <Route path="/panel/student" element={<RouteGuard role="student"><StudentPanel /></RouteGuard>}>
+ <Route index element={<SDashboard />} />
+ <Route path="schedule" element={<SSchedule />} />
+ <Route path="courses" element={<SMyCourses />} />
+ <Route path="player/:courseId" element={<SCoursePlayer />} />
+ <Route path="assignments" element={<SAssignments />} />
+ <Route path="certificates" element={<SCertificates />} />
+ <Route path="study" element={<SStudy />} />
+ <Route path="orders" element={<SOrders />} />
+ <Route path="wishlist" element={<SWishlist />} />
+ <Route path="tickets" element={<STickets />} />
+ <Route path="live/:classId" element={<SLiveRoom />} />
+ <Route path="*" element={<Navigate to="/panel/student" replace />} />
+ </Route>
 
-          {/* پنل مدرس — محافظت‌شده */}
-          <Route path="/panel/teacher" element={<RouteGuard role="teacher"><TeacherPanel /></RouteGuard>}>
-            <Route index element={<TDashboard />} />
-            <Route path="classes" element={<TClasses />} />
-            <Route path="live" element={<TLiveRoom />} />
-            <Route path="students" element={<TStudents />} />
-            <Route path="assignments" element={<TAssignments />} />
-            <Route path="earnings" element={<TEarnings />} />
-            <Route path="reviews" element={<TReviews />} />
-            <Route path="profile" element={<TProfile />} />
-            <Route path="*" element={<Navigate to="/panel/teacher" replace />} />
-          </Route>
+ {/* پنل مدرس — محافظت‌شده */}
+ <Route path="/panel/teacher" element={<RouteGuard role="teacher"><TeacherPanel /></RouteGuard>}>
+ <Route index element={<TDashboard />} />
+ <Route path="classes" element={<TClasses />} />
+ <Route path="live" element={<TLiveRoom />} />
+ <Route path="students" element={<TStudents />} />
+ <Route path="assignments" element={<TAssignments />} />
+ <Route path="earnings" element={<TEarnings />} />
+ <Route path="reviews" element={<TReviews />} />
+ <Route path="profile" element={<TProfile />} />
+ <Route path="*" element={<Navigate to="/panel/teacher" replace />} />
+ </Route>
 
-          {/* پنل مدیریت — محافظت‌شده */}
-          <Route path="/panel/admin" element={<RouteGuard role="admin"><AdminPanel /></RouteGuard>}>
-            <Route index element={<ADashboard />} />
-            <Route path="students" element={<AUsers kind="student" />} />
-            <Route path="teachers" element={<AUsers kind="teacher" />} />
-            <Route path="courses" element={<ACourses />} />
-            <Route path="classes" element={<AClasses />} />
-            <Route path="market" element={<AMarket />} />
-            <Route path="finance" element={<AFinance />} />
-            <Route path="support" element={<ASupport />} />
-            <Route path="content" element={<AContent />} />
-            <Route path="reports" element={<AReports />} />
-            <Route path="settings" element={<ASettings />} />
-            <Route path="*" element={<Navigate to="/panel/admin" replace />} />
-          </Route>
+ {/* پنل مدیریت — محافظت‌شده */}
+ <Route path="/panel/admin" element={<RouteGuard role="admin"><AdminPanel /></RouteGuard>}>
+ <Route index element={<ADashboard />} />
+ <Route path="students" element={<AUsers kind="student" />} />
+ <Route path="teachers" element={<AUsers kind="teacher" />} />
+ <Route path="courses" element={<ACourses />} />
+ <Route path="classes" element={<AClasses />} />
+ <Route path="market" element={<AMarket />} />
+ <Route path="finance" element={<AFinance />} />
+ <Route path="support" element={<ASupport />} />
+ <Route path="content" element={<AContent />} />
+ <Route path="reports" element={<AReports />} />
+ <Route path="settings" element={<ASettings />} />
+ <Route path="*" element={<Navigate to="/panel/admin" replace />} />
+ </Route>
 
-          {/* هر آدرس ناشناخته → صفحه ۴۰۴ */}
-          <Route path="*" element={<Public><NotFound /></Public>} />
-        </Routes>
-      </Suspense>
-      <CartDrawerHolder />
-      <Toasts />
-    </ErrorBoundary>
-  )
+ {/* هر آدرس ناشناخته → صفحه ۴۰۴ */}
+ <Route path="*" element={<Public><NotFound /></Public>} />
+ </Routes>
+ </Suspense>
+ <CartDrawerHolder />
+ <Toasts />
+ </ErrorBoundary>
+ )
 }
 
 function CartDrawerHolder() {
-  const loc = useLocation()
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (loc.state?.openCart) setOpen(true)
-  }, [loc.state])
-  return <CartDrawer open={open} onClose={() => setOpen(false)} />
+ const loc = useLocation()
+ const [open, setOpen] = useState(false)
+ useEffect(() => {
+ if (loc.state?.openCart) setOpen(true)
+ }, [loc.state])
+ return <CartDrawer open={open} onClose={() => setOpen(false)} />
 }
