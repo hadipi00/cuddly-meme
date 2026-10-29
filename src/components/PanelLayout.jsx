@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Icon from './Icon'
 import { Logo, Avatar } from './ui'
@@ -12,12 +12,11 @@ import { notifications } from '../data/mock'
 export default function PanelLayout({ role, roleLabel, nav }) {
   const [open, setOpen] = useState(false)      // سایدبار موبایل
   const [notiOpen, setNotiOpen] = useState(false)
-  const { user, logout, ensureRole, toast } = useApp()
+  const { user, logout, toast } = useApp()
   const loc = useLocation()
   const nav2 = useNavigate()
   const me = user?.role === role ? user : null
-  // حالت دمو: اگر کاربر با نقش فعال وارد پنل نشده، خودکار همان نقش فعال می‌شود
-  useEffect(() => { ensureRole(role) }, [role])
+  // دسترسی پنل‌ها توسط RouteGuard در App.jsx کنترل می‌شود
   const notis = notifications[role] || []
   const current = nav.flatMap((g) => g.items).find((i) => loc.pathname.startsWith(i.to))
 

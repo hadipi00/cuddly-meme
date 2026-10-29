@@ -42,10 +42,6 @@ export function AppProvider({ children }) {
       return u
     },
     logout() { patch(() => ({ user: null })) },
-    /** ورود خودکار دمو — اگر کاربر وارد نشده باشد، نقش متناسب را فعال می‌کند */
-    ensureRole(role) {
-      setState((s) => (s.user && s.user.role === role ? s : { ...s, user: DEMO_USERS[role] }))
-    },
     addToCart(item) {
       setState((s) => {
         if (s.cart.some((i) => i.id === item.id)) return s
@@ -86,7 +82,8 @@ export function AppProvider({ children }) {
     addMinutes(min) { patch((s) => ({ extraMinutes: s.extraMinutes + min })) },
     placeOrder(order) {
       const code = 'ORD-' + Math.floor(7900 + Math.random() * 90)
-      patch((s) => ({ orders: [...(s.orders || []), { code, date: '1404/09/13', ...order }], cart: [] }))
+      const today = new Date().toLocaleDateString('fa-IR')
+      patch((s) => ({ orders: [...(s.orders || []), { code, date: today, ...order }], cart: [] }))
       return code
     },
   }), [state, toasts, toast])

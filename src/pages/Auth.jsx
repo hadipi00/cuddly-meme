@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom'
 import Icon from '../components/Icon'
 import { Brand } from '../components/ui'
 import { useApp } from '../store/AppContext'
@@ -16,6 +16,10 @@ export default function Auth() {
   const [mode, setMode] = useState('login') // login | register
   const { login } = useApp()
   const nav = useNavigate()
+  const loc = useLocation()
+
+  // اگر RouteGuard کاربر را برای ورود به پنل فرستاده، بعد از ورود به همان مسیر برمی‌گردیم
+  const from = loc.state?.from
 
   useEffect(() => {
     if (params.get('role')) setRole(params.get('role'))
@@ -27,7 +31,9 @@ export default function Auth() {
   const submit = (e) => {
     e.preventDefault()
     login(role)
-    nav(active.panel)
+    // فقط اگر مسیر ذخیره‌شده متعلق به همین نقش باشد، به آن برمی‌گردیم
+    const target = from && from.startsWith(`/panel/${role}`) ? from : active.panel
+    nav(target)
   }
 
   return (
