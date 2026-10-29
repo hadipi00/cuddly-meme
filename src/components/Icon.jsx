@@ -67,6 +67,7 @@ const P = {
  minimize: <><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3" /></>,
  camFlip: <><path d="M20 5h-3.2L15 3H9L7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z" /><path d="M9.5 13a2.5 2.5 0 0 0 4.6 1.4M14.5 13a2.5 2.5 0 0 0-4.6-1.4" /><path d="M9.6 9.6 8.4 11.4M14.4 16.4l1.2-1.8" /></>,
  unlock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></>,
+image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></>,
 }
 
 export default function Icon({ name, size = 20, className = '', filled = false, ...rest }) {

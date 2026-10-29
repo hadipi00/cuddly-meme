@@ -22,7 +22,8 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 app.use(cors())
-app.use(express.json({ limit: '256kb' }))
+// برای تصویر پس‌زمینه وایت‌برد (base64) лимیت بالاتر لازم است
+app.use(express.json({ limit: '12mb' }))
 
 const PORT = process.env.PORT || 4000
 const now = () => Date.now()
@@ -224,12 +225,12 @@ app.get('/api/me/orders', requireAuth, (req, res) => {
 
 /* ---------------- وایت‌برد همگام کلاس ---------------- */
 app.get('/api/classes/:id/board', requireAuth, (req, res) => {
-  const c = db.prepare('SELECT id, teacher_id, board_locked FROM classes WHERE id = ?').get(req.params.id)
+  const c = db.prepare('SELECT id, teacher_id, board_locked, board_bg FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!classAccess(c, req.user)) return res.status(403).json({ error: 'فقط ثبت‌نام‌شده‌های کلاس' })
   const strokes = db.prepare('SELECT id, user_id AS userId, color, size, tool, points, created_at AS createdAt FROM board_strokes WHERE class_id = ? ORDER BY id').all(c.id)
     .map((s) => ({ ...s, points: JSON.parse(s.points) }))
-  res.json({ strokes, locked: !!c.board_locked })
+  res.json({ strokes, locked: !!c.board_locked, bg: c.board_bg || null })
 })
 
 app.post('/api/classes/:id/board', requireAuth, (req, res) => {
@@ -281,12 +282,56 @@ app.post('/api/classes/:id/board/open', requireRole('teacher', 'admin'), (req, r
   res.json({ ok: true, open: !!open })
 })
 
+/** رسم زنده (لحظه‌ای) — ذخیره نمی‌شود، فقط به بقیه رله می‌شود تا قلم از اول دیده شود */
+app.post('/api/classes/:id/board/draft', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id, board_locked FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'فقط ثبت‌نام‌شده‌های کلاس' })
+  if (c.board_locked && !canControl(c, req.user)) return res.status(403).json({ error: 'تخته قفل است' })
+  const { color, size, tool, points } = req.body || {}
+  if (!Array.isArray(points) || !points.length || points.length > 600) return res.json({ ok: false })
+  broadcast(c.id, {
+    type: 'board-draft', userId: req.user.id, at: now(),
+    stroke: {
+      color: /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a',
+      size: Math.min(40, Math.max(1, Number(size) || 4)),
+      tool: tool === 'erase' ? 'erase' : 'pen',
+      points: points.slice(-600),
+    },
+  })
+  res.json({ ok: true })
+})
+
+/** پس‌زمینه تخته (عکس یا صفحه‌ای از PDF) — فقط مدرس؛ dataURL ذخیره و به همه broadcast می‌شود */
+const BG_RE = /^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=]+$/
+app.post('/api/classes/:id/board/bg', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  const img = String(req.body?.img || '')
+  if (img.length > 9_000_000) return res.status(413).json({ error: 'فایل خیلی بزرگ است — حداکثر حدود ۶ مگابایت' })
+  if (img && !BG_RE.test(img)) return res.status(400).json({ error: 'فرمت تصویر پشتیبانی نمی‌شود' })
+  db.prepare('UPDATE classes SET board_bg = ? WHERE id = ?').run(img, c.id)
+  broadcast(c.id, { type: 'board-bg', img: img || null, at: now() })
+  res.json({ ok: true })
+})
+app.delete('/api/classes/:id/board/bg', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  db.prepare("UPDATE classes SET board_bg = '' WHERE id = ?").run(c.id)
+  broadcast(c.id, { type: 'board-bg', img: null, at: now() })
+  res.json({ ok: true })
+})
+
 app.post('/api/classes/:id/start', requireRole('teacher', 'admin'), (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند شروع کند' })
   const startedAt = now()
   db.prepare(`UPDATE classes SET status='live', started_at=?, ended_at=NULL WHERE id=?`).run(startedAt, c.id)
+  // جلسه جدید — دست‌ها و اجازه‌های جلسه قبل پاک می‌شود
+  db.prepare('UPDATE attendance SET hand=0, can_speak=0 WHERE class_id=?').run(c.id)
   broadcast(c.id, { type: 'live', status: 'live', startedAt, at: startedAt })
   res.json({ ok: true, startedAt })
 })
@@ -418,11 +463,26 @@ app.post('/api/classes/:id/heartbeat', requireAuth, (req, res) => {
 
 const ONLINE_WINDOW = 25_000 // ۲۵ ثانیه — با heartbeat هر ۸ ثانیه
 function liveParticipants(classId) {
-  return db.prepare(`SELECT a.user_id AS id, u.name, u.role, u.color, a.hand, a.first_seen
+  return db.prepare(`SELECT a.user_id AS id, u.name, u.role, u.color, a.hand, a.can_speak, a.first_seen
     FROM attendance a JOIN users u ON u.id = a.user_id
     WHERE a.class_id = ? AND a.last_seen > ? ORDER BY a.first_seen`).all(classId, now() - ONLINE_WINDOW)
-    .map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, hand: !!p.hand, joinedAt: p.first_seen }))
+    .map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, hand: !!p.hand, canSpeak: !!p.can_speak, joinedAt: p.first_seen }))
 }
+
+/** اجازه صدا/تصویر به دانش‌آموز — فقط مدرس همان کلاس (یا ادمین)
+ *  دانش‌آموز بدون این اجازه نمی‌تواند دوربین/میکروفونش را باز کند */
+app.post('/api/classes/:id/permit', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند اجازه بدهد' })
+  const userId = String(req.body?.userId || '')
+  const allow = req.body?.allow ? 1 : 0
+  const info = db.prepare('UPDATE attendance SET can_speak=?, hand=0 WHERE class_id=? AND user_id=?').run(allow, c.id, userId)
+  if (!info.changes) return res.status(404).json({ error: 'این دانش‌آموز در کلاس حاضر نیست' })
+  const u = db.prepare('SELECT name FROM users WHERE id = ?').get(userId)
+  broadcast(c.id, { type: 'perm', userId, name: u?.name || '', canSpeak: !!allow, at: now() })
+  res.json({ ok: true, participants: liveParticipants(c.id) })
+})
 
 /* ---------------- چت زنده کلاس ---------------- */
 app.get('/api/classes/:id/messages', (req, res) => {

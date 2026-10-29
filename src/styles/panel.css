@@ -423,3 +423,90 @@ body.fs-lock { overflow: hidden; }
  .form-grid { grid-template-columns: 1fr; }
  .user-chip .uc-txt { display: none; }
 }
+
+/* ================= فاز ۹ — ریسپانسیو کامل موبایل (پنل + اتاق زنده) ================= */
+/* تولبار وایت‌برد با دکمه‌های جدید در صفحات باریک نمی‌شکند */
+.wb-toolbar {
+ max-width: calc(100% - 12px);
+ flex-wrap: wrap; justify-content: center; row-gap: 6px;
+}
+
+@media (max-width: 900px) {
+ .p-content { padding: 16px; }
+ .stat-cards { gap: 12px; }
+ /* جدول‌های پنل — اسکرول افقی به‌جای ریختن صفحه */
+ .p-content table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+ .grids.g2, .grids.g3, .grids.g4 { gap: 14px; }
+}
+
+@media (max-width: 560px) {
+ /* ---------- شِل پنل ---------- */
+ .p-content { padding: 12px 10px 80px; }
+ .p-topbar { padding: 10px 12px; gap: 8px; }
+ .p-topbar h1 { font-size: 15px; }
+ .p-topbar .crumb { font-size: 10.5px; }
+ .p-topbar-actions { gap: 6px; }
+ .noti-pop { width: min(320px, calc(100vw - 20px)); }
+ .user-chip { padding: 4px 8px 4px 6px; }
+ .theme-toggle .tt-btn { width: 27px; height: 27px; }
+
+ /* ---------- کارت‌ها، دکمه‌ها، فرم‌ها ---------- */
+ .card { padding: 14px; }
+ .card.pad { padding: 14px; }
+ .btn { min-height: 44px; font-size: 13.5px; }
+ .btn-sm { min-height: 36px; }
+ .btn-lg { min-height: 50px; font-size: 14.5px; }
+ .modal-actions { flex-wrap: wrap; }
+ .modal-actions .btn { flex: 1 1 auto; }
+ .modal { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px) !important; max-height: 86vh; overflow-y: auto; padding: 16px; }
+ .form-grid { gap: 10px; }
+ .row.g8 { flex-wrap: wrap; }
+ .row.g12 { flex-wrap: wrap; }
+ .between.wrap { row-gap: 10px; }
+ .input, .select { font-size: 13.5px; }
+
+ /* ---------- اتاق کلاس زنده ---------- */
+ .live-grid { gap: 12px; }
+ .live-view { aspect-ratio: 4 / 3; } /* تصویر بلندتر برای صفحه باریک */
+ .live-stage:fullscreen .live-view, .live-stage:-webkit-full-screen .live-view, .live-stage.pseudo-fs .live-view { aspect-ratio: auto; }
+ .live-label { font-size: 10.5px; padding: 4px 10px; top: 10px; inset-inline-start: 10px; }
+ .live-timer { font-size: 11.5px; padding: 4px 10px; top: 10px; inset-inline-end: 10px; }
+ .live-controls { gap: 7px; padding: 12px 6px 20px; }
+ .ctl { width: 46px; height: 46px; border-radius: 12px; }
+ .ctl svg { width: 19px; height: 19px; }
+ .ctl .ctl-tip { display: none; } /* راهنمای شناور در موبایل جا ندارد */
+ .ctl.danger { padding-inline: 14px; font-size: 12.5px; }
+ .cam-grid { gap: 10px; padding: 0 10px; }
+ .cam-tile.big { width: 100%; max-width: 330px; }
+ .cam-tile { min-width: 130px; }
+
+ /* وایت‌برد */
+ .wb-wrap { inset: 44px 8px 10px; }
+ .wb-toolbar { padding: 6px 8px; gap: 5px; top: 6px; }
+ .wb-locknote { font-size: 10.5px; padding: 4px 10px; max-width: calc(100% - 14px); text-align: center; line-height: 1.6; }
+ .cam-strip { bottom: 8px; inset-inline-start: 8px; }
+
+ /* کارت دسترسی دوربین */
+ .perm-overlay { padding: 12px; }
+ .perm-card { padding: 18px 14px; gap: 9px; max-height: 100%; overflow-y: auto; }
+ .perm-card ul { paddingInlineStart: 18px !important; }
+
+ /* چت و حاضران */
+ .side-tabs { padding: 6px; }
+ .side-tabs .tab-btn { font-size: 12px; padding: 9px 6px; }
+ .chat-body { max-height: 320px; min-height: 180px; padding: 12px 10px; }
+ .chat-input { padding: 10px; }
+ .part-row { flex-wrap: wrap; row-gap: 6px; }
+ .part-row .pr-icons { margin-inline-start: auto; }
+ .part-row .btn { padding: 4px 10px !important; }
+
+ /* استت‌کارت و نمودار */
+ .stat-card { padding: 14px; }
+ .stat-card .sc-val { font-size: 20px !important; }
+}
+
+/* لمس — حذف هاورهای گمراه‌کننده روی موبایل */
+@media (hover: none) {
+ .ctl:hover { transform: none; }
+ .mk-card:hover { transform: none; }
+}

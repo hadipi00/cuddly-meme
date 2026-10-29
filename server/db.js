@@ -124,6 +124,8 @@ CREATE INDEX IF NOT EXISTS idx_materials_class ON class_materials(class_id);
 /* مهاجرت‌های سبک — افزودن ستون اگر وجود ندارد */
 try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE classes ADD COLUMN board_bg TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
 /* مهاجرت داده: جلسه‌های برگزارشده قدیمی (کلاس‌هایی که قبل از این قابلیت پایان یافتند) */
 try {

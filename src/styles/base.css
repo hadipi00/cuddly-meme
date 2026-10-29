@@ -895,3 +895,25 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
   .mk-promo { padding: 22px 20px; }
   .hscroll .mk-flash { flex-basis: 158px; }
 }
+
+/* ================= فاز ۹ — ریسپانسیو کامل موبایل (صفحات عمومی) ================= */
+@media (max-width: 560px) {
+ .container { width: min(1240px, calc(100% - 20px)); }
+ .section { padding-block: 44px; }
+ .hero-mini-stats { flex-wrap: wrap; row-gap: 12px; }
+ .card, .card.pad { padding: 14px; }
+ .btn { min-height: 44px; }
+ .btn-lg { min-height: 50px; font-size: 14.5px; }
+ .modal { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px) !important; max-height: 86vh; overflow-y: auto; padding: 16px; }
+ .stats-band { grid-template-columns: 1fr 1fr; }
+ .cd-cell { min-width: 50px; padding: 6px 4px 5px; }
+ .cd-cell b { font-size: 17px; }
+ /* جداول عمومی — اسکرول افقی */
+ table { max-width: 100%; }
+ .dtable { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+ .stat-cards { gap: 10px; }
+ .countdown-box { flex-wrap: wrap; }
+}
+@media (max-width: 860px) {
+ .p-content, .section { min-width: 0; }
+}

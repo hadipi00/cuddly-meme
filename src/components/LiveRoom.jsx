@@ -23,7 +23,11 @@ import { req, getToken } from '../services/http'
 const RTC_CFG = {
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    // TURN رایگان برای عبور از NATهای سخت‌گیرانه (موبایل/اپراتور) — اگر در دسترس نبود نادیده گرفته می‌شود
+    { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443'], username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
   ],
+  iceCandidatePoolSize: 2,
 }
 const WB_W = 1600
 const WB_H = 900
@@ -69,7 +73,7 @@ function ScreenPreview({ stream }) {
 /** کارت عیب‌یابی و درخواست دسترسی دوربین/میکروفون — وسط صحنه کلاس
  *  state: 'idle' | 'denied' | 'nodevice' | 'busy' | 'insecure'
  *  diag: { videoCount, audioCount, lastError } — گزارش واقعی مرورگر برای عیب‌یابی */
-function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, onOpenTab, onGoHttps }) {
+function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, onOpenTab, onGoHttps, needsApproval, handSent }) {
   const dv = diag?.videoCount ?? 0
   const da = diag?.audioCount ?? 0
   const errName = diag?.lastError || ''
@@ -80,47 +84,84 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
         <div className="perm-ico"><Icon name="camera" size={30} /></div>
         <b style={{ fontSize: 15.5 }}>فعال‌سازی دوربین و میکروفون</b>
 
-        {state === 'idle' && (
-          <p className="muted small" style={{ lineHeight: 1.9 }}>
-            برای گفتگوی تصویری زنده، روی دکمه زیر بزنید؛ پنجره‌ای از مرورگر باز می‌شود —
-            <b> «اجازه دادن / Allow» </b> را انتخاب کنید.
-          </p>
-        )}
-
-        {state === 'denied' && (
-          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
-            {inIframe
-              ? 'سایت داخل قاب پیش‌نمایش است و مرورگر اجازه دوربین در قاب را نمی‌دهد — با دکمه زیر کلاس را در پنجره کامل باز کنید.'
-              : 'دسترسی رد شده است. روی آیکون قفل/کلید کنار آدرس سایت بزنید، دوربین و میکروفون را روی «اجازه دادن» بگذارید و دوباره تلاش کنید.'}
-          </p>
-        )}
-
-        {state === 'busy' && (
-          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
-            دوربین/میکروفون توسط برنامه دیگری اشغال شده است — Zoom، Skype، Teams یا هر برنامه دیگری که از دوربین استفاده می‌کند را ببندید و دوباره تلاش کنید.
-          </p>
-        )}
-
-        {state === 'nodevice' && (
+        {needsApproval ? (
           <>
-            <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
-              {seesDevices
-                ? 'مرورگر دستگاه‌هایی را می‌بیند ولی اجازه استفاده از آن‌ها را نمی‌دهد — معمولاً تنظیمات حریم خصوصی سیستم‌عامل یا اشغال بودن دستگاه است.'
-                : 'مرورگر روی این دستگاه هیچ دوربین یا میکروفونی پیدا نکرد. این موارد را بررسی کنید:'}
+            <p className="muted small" style={{ lineHeight: 1.9 }}>
+              برای روشن کردن دوربین و میکروفون باید <b>مدرس اجازه بدهد</b> — بدون اجازه، صدا و تصویر شما برای کلاس ارسال نمی‌شود.
             </p>
-            <ul className="small" style={{ textAlign: 'right', lineHeight: 2.1, paddingInlineStart: 20, margin: '4px 0 10px', color: 'var(--text-2)' }}>
-              <li>اگر از داخل اپ پیام‌رسان (تلگرام، اینستاگرام…) باز کرده‌اید، لینک را در <b>Chrome</b> یا <b>Safari</b> اصلی باز کنید.</li>
-              <li>ویندوز: <b dir="ltr">Settings → Privacy & security → Camera / Microphone</b> را برای مرورگر روشن کنید.</li>
-              <li>وب‌کم خارجی را بررسی کنید و برنامه‌های دیگر (Zoom/Skype) را ببندید.</li>
-              <li>دستگاه شما واقعاً دوربین ندارد؟ کلاس را بدون دوربین ادامه دهید — چت و تخته فعال است.</li>
-            </ul>
+            {handSent ? (
+              <p className="small" style={{ color: '#d97706', lineHeight: 1.9, textAlign: 'center' }}>
+                ✋ درخواست شما برای مدرس ارسال شد — به‌محض تایید، دکمه‌های دوربین و میکروفون فعال می‌شوند.
+              </p>
+            ) : (
+              <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={onRequest}>
+                <Icon name="hand" size={17} /> درخواست اجازه از مدرس (بلند کردن دست)
+              </button>
+            )}
           </>
-        )}
+        ) : (
+          <>
+            {state === 'idle' && (
+              <p className="muted small" style={{ lineHeight: 1.9 }}>
+                برای گفتگوی تصویری زنده، روی دکمه زیر بزنید؛ پنجره‌ای از مرورگر باز می‌شود —
+                <b> «اجازه دادن / Allow» </b> را انتخاب کنید.
+              </p>
+            )}
 
-        {state === 'insecure' && (
-          <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9 }}>
-            مرورگر فقط در آدرس امن (HTTPS) اجازه دوربین می‌دهد. با دکمه زیر به آدرس امن بروید.
-          </p>
+            {state === 'denied' && (
+              <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+                {inIframe
+                  ? 'سایت داخل قاب پیش‌نمایش است و مرورگر اجازه دوربین در قاب را نمی‌دهد — با دکمه زیر کلاس را در پنجره کامل باز کنید.'
+                  : 'دسترسی رد شده است. روی آیکون قفل/کلید کنار آدرس سایت بزنید، دوربین و میکروفون را روی «اجازه دادن» بگذارید و دوباره تلاش کنید.'}
+              </p>
+            )}
+
+            {state === 'busy' && (
+              <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+                دوربین/میکروفون توسط برنامه دیگری اشغال شده است — Zoom، Skype، Teams یا هر برنامه دیگری که از دوربین استفاده می‌کند را ببندید و دوباره تلاش کنید.
+              </p>
+            )}
+
+            {state === 'nodevice' && (
+              <>
+                <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9, textAlign: 'right' }}>
+                  {seesDevices
+                    ? 'مرورگر دستگاه‌هایی را می‌بیند ولی اجازه استفاده از آن‌ها را نمی‌دهد — معمولاً تنظیمات حریم خصوصی سیستم‌عامل یا اشغال بودن دستگاه است.'
+                    : 'مرورگر روی این دستگاه هیچ دوربین یا میکروفونی پیدا نکرد. این موارد را بررسی کنید:'}
+                </p>
+                <ul className="small" style={{ textAlign: 'right', lineHeight: 2.1, paddingInlineStart: 20, margin: '4px 0 10px', color: 'var(--text-2)' }}>
+                  <li>اگر از داخل اپ پیام‌رسان (تلگرام، اینستاگرام…) باز کرده‌اید، لینک را در <b>Chrome</b> یا <b>Safari</b> اصلی باز کنید.</li>
+                  <li>ویندوز: <b dir="ltr">Settings → Privacy & security → Camera / Microphone</b> را برای مرورگر روشن کنید.</li>
+                  <li>وب‌کم خارجی را بررسی کنید و برنامه‌های دیگر (Zoom/Skype) را ببندید.</li>
+                  <li>دستگاه شما واقعاً دوربین ندارد؟ کلاس را بدون دوربین ادامه دهید — چت و تخته فعال است.</li>
+                </ul>
+              </>
+            )}
+
+            {state === 'insecure' && (
+              <p className="small" style={{ color: 'var(--red)', lineHeight: 1.9 }}>
+                مرورگر فقط در آدرس امن (HTTPS) اجازه دوربین می‌دهد. با دکمه زیر به آدرس امن بروید.
+              </p>
+            )}
+
+            {state === 'insecure' ? (
+              <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={onGoHttps}>
+                <Icon name="maximize" size={17} /> رفتن به آدرس امن (HTTPS)
+              </button>
+            ) : (
+              <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={permBusy} onClick={onRequest}>
+                {permBusy ? 'در حال انتظار برای پاسخ مرورگر…' : (
+                  <><Icon name="video" size={17} /> {state === 'idle' ? 'درخواست دسترسی دوربین و میکروفون' : 'تلاش دوباره'}</>
+                )}
+              </button>
+            )}
+
+            {errName ? (
+              <span className="muted" style={{ fontSize: 10.5 }}>
+                کد خطا: <b dir="ltr">{errName}</b> • دوربین‌های شناسایی‌شده: {faNum(dv)} • میکروفون‌ها: {faNum(da)}
+              </span>
+            ) : null}
+          </>
         )}
 
         {inIframe && state !== 'denied' && (
@@ -134,29 +175,11 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
           </>
         )}
 
-        {state === 'insecure' ? (
-          <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={onGoHttps}>
-            <Icon name="maximize" size={17} /> رفتن به آدرس امن (HTTPS)
-          </button>
-        ) : (
-          <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={permBusy} onClick={onRequest}>
-            {permBusy ? 'در حال انتظار برای پاسخ مرورگر…' : (
-              <><Icon name="video" size={17} /> {state === 'idle' ? 'درخواست دسترسی دوربین و میکروفون' : 'تلاش دوباره'}</>
-            )}
-          </button>
-        )}
-
         {onSkip && state !== 'insecure' && (
           <button className="btn btn-ghost btn-sm" style={{ width: '100%', marginTop: 8 }} onClick={onSkip}>
             ادامه بدون دوربین — چت، وایت‌برد و حاضران فعال است
           </button>
         )}
-
-        {errName ? (
-          <span className="muted" style={{ fontSize: 10.5 }}>
-            کد خطا: <b dir="ltr">{errName}</b> • دوربین‌های شناسایی‌شده: {faNum(dv)} • میکروفون‌ها: {faNum(da)}
-          </span>
-        ) : null}
       </div>
     </div>
   )
@@ -191,6 +214,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [permBusy, setPermBusy] = useState(false)
  const [mediaDiag, setMediaDiag] = useState({ videoCount: 0, audioCount: 0, lastError: null })
  const [mediaSkipped, setMediaSkipped] = useState(false)
+ const canSpeakRef = useRef(false) // اجازه فعال صدا/تصویر (مدرس همیشه true)
  const switchingRef = useRef(false)
  const facingRef = useRef('user')
  const deviceIdxRef = useRef(0)
@@ -225,6 +249,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const strokesRef = useRef([])
  const boardLocalTsRef = useRef(0) // جلوگیری از دوئل با echo سرور بعد از تغییر محلی
  strokesRef.current = strokes
+
+ /* پس‌زمینه تخته (عکس/PDF) + رسم زنده (draft) بقیه */
+ const [boardBg, setBoardBg] = useState(null)
+ const bgImgRef = useRef(null)
+ const draftsRef = useRef(new Map()) // userId → stroke در حال رسم دیگران (ذخیره نمی‌شود)
+ const lastDraftSentRef = useRef(0)
+ const bgInputRef = useRef(null)
+ const pdfInputRef = useRef(null)
+ const pdfDocRef = useRef(null)
+ const [pdfPages, setPdfPages] = useState(0)
+ const [pdfPage, setPdfPage] = useState(1)
 
  /* ---------- وضعیت زنده + چت ---------- */
  const [live, setLive] = useState(null)
@@ -280,6 +315,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  const startMedia = async () => {
    if (permBusy) return
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // گیت اجازه مدرس
    setMediaSkipped(false)
    if (!navigator.mediaDevices?.getUserMedia) {
      setMediaErr('insecure')
@@ -310,9 +346,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setPermBusy(false)
  }
 
- /* تلاش خودکار اول — اگر مرورگر اجازه دهد پنجره دسترسی همان اول باز می‌شود */
+ /* تلاش خودکار اول — فقط برای مدرس؛ دانش‌آموز باید اول از مدرس اجازه بگیرد */
  useEffect(() => {
    let cancelled = false
+   if (!isTeacher) return // دانش‌آموز: بدون اجازه مدرس رسانه‌ای باز نمی‌شود
    if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    navigator.mediaDevices.getUserMedia({
      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -348,6 +385,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* ---------- تعویض دوربین (جلو/عقب موبایل یا دوربین‌های دسکتاپ) ---------- */
  const switchCam = async () => {
    if (switchingRef.current) return
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
    if (!localStreamRef.current) { startMedia(); return }
    switchingRef.current = true
    let ok = false
@@ -447,6 +485,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    toast('کلاس بدون دوربین ادامه پیدا می‌کند — چت، وایت‌برد و حاضران فعال است', 'info')
  }
 
+ /** درخواست اجازه صدا/تصویر از مدرس — دست بلند کردن + ثبت روی سرور */
+ const requestSpeakPermission = () => {
+   if (isTeacher || canSpeakRef.current) return
+   if (!handRef.current) {
+     setHand(true)
+     req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: true } }).catch(() => {})
+   }
+   toast('درخواست شما برای مدرس ارسال شد ✋ — تا اجازه ندهد دوربین/میکروفون باز نمی‌شود', 'info')
+ }
+
  /* ---------- ضبط واقعی کلاس (MediaRecorder) ----------
   * تصویر (اشتراک صفحه اگر فعال باشد، وگرنه دوربین) + صدای میکروفون ضبط می‌شود؛
   * در پایان، فایل ویدیو روی دستگاه مدرس دانلود می‌شود تا لینک مستقیم آن را
@@ -530,7 +578,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      const pc = new RTCPeerConnection(RTC_CFG)
      const at = pc.addTransceiver('audio', { direction: 'sendrecv' })
      const vt = pc.addTransceiver('video', { direction: 'sendrecv' })
-     entry = { pc, senders: { audio: at.sender, video: vt.sender }, polite: myPeerIdRef.current < peerId, makingOffer: false, ignoreOffer: false }
+     entry = { pc, senders: { audio: at.sender, video: vt.sender }, polite: myPeerIdRef.current < peerId, makingOffer: false, ignoreOffer: false, pendingIce: [] }
      pcsRef.current.set(peerId, entry)
 
      const s = localStreamRef.current
@@ -543,7 +591,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      pc.onicecandidate = (ev) => { if (ev.candidate) signal(peerId, 'ice', ev.candidate.toJSON()) }
      pc.ontrack = (ev) => {
        const stream = ev.streams[0] || new MediaStream([ev.track])
-       setPeersList((list) => list.map((p) => (p.peer === peerId ? { ...p, stream } : p)))
+       // اگر متای peer هنوز در لیست نیست، همین‌جا اضافه شود وگرنه استریم گم می‌شود
+       setPeersList((list) => list.some((p) => p.peer === peerId)
+         ? list.map((p) => (p.peer === peerId ? { ...p, stream } : p))
+         : [...list, { peer: peerId, name: 'هم‌کلاسی', mic: true, cam: true, screen: false, stream }])
      }
      pc.onconnectionstatechange = () => {
        if (pc.connectionState === 'failed') { try { pc.restartIce() } catch { /* noop */ } }
@@ -571,6 +622,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        addPeerMeta({ peer: m.from, ...(m.data || {}) })
        return
      }
+     // متای peer باید قبل از ساخت/استفاده از PC در لیست باشد — وگرنه ontrack استریم را گم می‌کند
+     setPeersList((list) => list.some((x) => x.peer === m.from) ? list : [...list, { peer: m.from, name: m.name || 'هم‌کلاسی', mic: true, cam: true, screen: false, stream: null }])
      const entry = ensurePc(m.from)
      const pc = entry.pc
      try {
@@ -580,11 +633,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          if (entry.ignoreOffer) return
          if (collision) await pc.setLocalDescription({ type: 'rollback' })
          await pc.setRemoteDescription(m.data)
+         for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(c) } catch { /* noop */ } }
          await pc.setLocalDescription()
          signal(m.from, 'answer', pc.localDescription)
        } else if (m.kind === 'answer') {
-         if (pc.signalingState === 'have-local-offer') await pc.setRemoteDescription(m.data)
+         if (pc.signalingState === 'have-local-offer') {
+           await pc.setRemoteDescription(m.data)
+           for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(c) } catch { /* noop */ } }
+         }
        } else if (m.kind === 'ice' && m.data) {
+         if (!pc.remoteDescription) { entry.pendingIce.push(m.data); return } // قبل از SDP ریموت — صف می‌شود
          try { await pc.addIceCandidate(m.data) } catch { /* بعد از ignore طبیعی است */ }
        }
      } catch { /* اتصال ناپایدار — ignore */ }
@@ -622,10 +680,38 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          break
        }
        case 'board':
-         if (msg.stroke) setStrokes((list) => (msg.stroke.id != null && list.some((s) => s.id === msg.stroke.id)) ? list : [...list, msg.stroke])
+         if (msg.stroke) {
+           draftsRef.current.delete(msg.stroke.userId) // رسم زنده همان نفر تمام شده است
+           setStrokes((list) => (msg.stroke.id != null && list.some((s) => s.id === msg.stroke.id)) ? list : [...list, msg.stroke])
+         }
+         break
+       case 'board-draft':
+         if (msg.userId && msg.userId !== user?.id && msg.stroke) {
+           draftsRef.current.set(msg.userId, { ...msg.stroke, uid: msg.userId, ts: Date.now() })
+           redrawBoard()
+         }
+         break
+       case 'board-bg':
+         if (msg.img === null) loadBg(null)
+         else if (msg.img) loadBg(msg.img)
          break
        case 'board-clear': setStrokes([]); break
        case 'board-lock': setBoardLocked(!!msg.locked); break
+       case 'perm': {
+         const cs = !!msg.canSpeak
+         setLive((l) => ({ ...(l || { participants: [] }), participants: (l?.participants || []).map((p) => (p.id === msg.userId ? { ...p, canSpeak: cs, hand: false } : p)) }))
+         if (!isTeacher && msg.userId === user?.id) {
+           if (cs) toast('مدرس اجازه داد — حالا دکمه دوربین/میکروفون را بزنید ✅', 'success')
+           else {
+             toast('مدرس دسترسی صدا/تصویر شما را لغو کرد', 'info')
+             localStreamRef.current?.getTracks().forEach((t) => t.stop())
+             localStreamRef.current = null
+             setLocalStream(null)
+             setMic(false); setCam(false)
+           }
+         }
+         break
+       }
        default: break
      }
    }
@@ -687,6 +773,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    req(`/classes/${classId}/board`).then((r) => {
      setStrokes(r.strokes || [])
      setBoardLocked(!!r.locked)
+     loadBg(r.bg || null)
    }).catch(() => {})
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId, user?.id])
@@ -722,6 +809,22 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const handsUp = participants.filter((p) => p.hand).length
  const classEnded = live?.status === 'ended'
 
+ /* اجازه فعال‌سازی صدا/تصویر — مدرس همیشه دارد؛ دانش‌آموز فقط با تایید مدرس */
+ const myPart = participants.find((p) => p.id === user?.id)
+ const myHand = !!myPart?.hand
+ const canSpeak = isTeacher || !!myPart?.canSpeak
+ const needsApproval = !isTeacher && !canSpeak
+ canSpeakRef.current = canSpeak
+
+ /** مدرس: دادن/لغو اجازه صدا/تصویر به یک دانش‌آموز */
+ const grantPerm = async (userId, allow) => {
+   try {
+     const r = await req(`/classes/${classId}/permit`, { method: 'POST', body: { userId, allow } })
+     if (r.participants) setLive((l) => ({ ...(l || { participants: [] }), participants: r.participants }))
+     toast(allow ? 'اجازه داده شد — دانش‌آموز می‌تواند دوربین و میکروفون را روشن کند' : 'اجازه لغو شد', 'success')
+   } catch (e) { if (!e.serverDown) toast(e.message || 'عملیات ناموفق بود', 'error') }
+ }
+
  const send = async (e) => {
    e.preventDefault()
    const body = input.trim()
@@ -744,6 +847,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const broadcastState = () => signal('*', 'state', { mic: micRef.current, cam: camRef.current, screen: screenRef.current })
 
  const toggleMic = () => {
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // بدون اجازه مدرس نه
    if (!localStreamRef.current?.getAudioTracks().length) { startMedia(); return }
    const v = !mic
    setMic(v)
@@ -751,6 +855,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    broadcastState()
  }
  const toggleCam = () => {
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return } // بدون اجازه مدرس نه
    if (!localStreamRef.current?.getVideoTracks().length) { startMedia(); return }
    const v = !cam
    setCam(v)
@@ -860,9 +965,86 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!cv) return
    const ctx = cv.getContext('2d')
    ctx.clearRect(0, 0, WB_W, WB_H)
+   /* پس‌زمینه عکس/PDF — fit داخل قاب تخته */
+   const img = bgImgRef.current
+   if (img && img.complete && img.naturalWidth) {
+     const r = Math.min(WB_W / img.naturalWidth, WB_H / img.naturalHeight)
+     const w = img.naturalWidth * r, h = img.naturalHeight * r
+     ctx.drawImage(img, (WB_W - w) / 2, (WB_H - h) / 2, w, h)
+   }
    for (const s of strokesRef.current) drawStroke(ctx, s)
+   /* قلم زنده دیگران (draft) — تا ۲.۵ ثانیه اعتبار دارد */
+   const t = Date.now()
+   for (const [uid, d] of draftsRef.current) {
+     if (t - d.ts > 2500) { draftsRef.current.delete(uid); continue }
+     drawStroke(ctx, d)
+   }
  }
- useEffect(() => { redrawBoard() }, [strokes, board])
+
+ const loadBg = (dataUrl) => {
+   if (!dataUrl) { bgImgRef.current = null; setBoardBg(null); redrawBoard(); return }
+   const img = new Image()
+   img.onload = () => redrawBoard()
+   img.src = dataUrl
+   bgImgRef.current = img
+   setBoardBg(dataUrl)
+ }
+
+ /* ---------- عکس / PDF روی تخته (فقط مدرس) ---------- */
+ const sendBg = async (dataUrl) => {
+   try {
+     await req(`/classes/${classId}/board/bg`, { method: 'POST', body: { img: dataUrl } })
+     loadBg(dataUrl)
+     toast('تصویر روی تخته نمایش داده شد — می‌توانید رویش بکشید', 'success')
+   } catch (e) { if (!e.serverDown) toast(e.message || 'ارسال تصویر ناموفق بود', 'error') }
+ }
+ const onBgFile = (file) => {
+   if (!file || !isTeacher) return
+   if (!file.type.startsWith('image/')) { toast('فقط فایل عکس (JPG/PNG/WebP)', 'error'); return }
+   if (file.size > 8 * 1024 * 1024) { toast('حجم عکس باید کمتر از ۸ مگابایت باشد', 'error'); return }
+   const rd = new FileReader()
+   rd.onload = () => { if (typeof rd.result === 'string') sendBg(rd.result) }
+   rd.readAsDataURL(file)
+ }
+ const renderPdfPage = async (n) => {
+   const doc = pdfDocRef.current
+   if (!doc) return
+   const page = await doc.getPage(Math.min(doc.numPages, Math.max(1, n)))
+   const vp1 = page.getViewport({ scale: 1 })
+   const scale = Math.min(2, Math.min(1600 / vp1.width, 900 / vp1.height) * 1.6) // کیفیت بالا برای شارپ بودن
+   const vp = page.getViewport({ scale })
+   const cv = document.createElement('canvas')
+   cv.width = Math.round(vp.width); cv.height = Math.round(vp.height)
+   await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise
+   await sendBg(cv.toDataURL('image/jpeg', 0.82))
+ }
+ const onPdfFile = async (file) => {
+   if (!file || !isTeacher) return
+   if (file.size > 25 * 1024 * 1024) { toast('حجم PDF باید کمتر از ۲۵ مگابایت باشد', 'error'); return }
+   toast('در حال آماده‌سازی PDF…', 'info')
+   try {
+     const pdfjs = await import('pdfjs-dist')
+     const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+     pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+     const buf = await file.arrayBuffer()
+     const doc = await pdfjs.getDocument({ data: buf }).promise
+     pdfDocRef.current = doc
+     setPdfPages(doc.numPages)
+     setPdfPage(1)
+     await renderPdfPage(1)
+   } catch { toast('باز کردن PDF ممکن نشد', 'error') }
+ }
+ const gotoPdfPage = async (n) => {
+   if (!pdfDocRef.current) return
+   const nn = Math.min(pdfPages, Math.max(1, n))
+   setPdfPage(nn)
+   try { await renderPdfPage(nn) } catch { /* noop */ }
+ }
+ const clearBoardBg = async () => {
+   pdfDocRef.current = null; setPdfPages(0); setPdfPage(1)
+   try { await req(`/classes/${classId}/board/bg`, { method: 'DELETE' }); loadBg(null) } catch { /* noop */ }
+ }
+ useEffect(() => { redrawBoard() }, [strokes, board, boardBg])
 
  const boardPoint = (e) => {
    const rect = canvasRef.current.getBoundingClientRect()
@@ -895,6 +1077,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      ctx.lineTo(p[0] * WB_W, p[1] * WB_H)
      ctx.stroke()
      ctx.restore()
+   }
+   /* رله رسم زنده به بقیه (هر ۹۰ms) — بدون ذخیره روی سرور */
+   if (Date.now() - lastDraftSentRef.current > 90) {
+     lastDraftSentRef.current = Date.now()
+     req(`/classes/${classId}/board/draft`, { method: 'POST', body: { color: cur.color, size: cur.size, tool: cur.tool, points: cur.points.slice(-600) } }).catch(() => {})
    }
  }
  const onWbUp = async () => {
@@ -996,6 +1183,22 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
            <button key={s} className={`wb-size ${wbSize === s ? 'on' : ''}`} onClick={() => setWbSize(s)}><i style={{ width: s + 3, height: s + 3 }} /></button>
          ))}
          <span className="wb-sep" />
+         {/* عکس / PDF روی تخته — فقط مدرس */}
+         <input ref={bgInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { onBgFile(e.target.files?.[0]); e.target.value = '' }} />
+         <input ref={pdfInputRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { onPdfFile(e.target.files?.[0]); e.target.value = '' }} />
+         <button className="wb-tool" title="باز کردن عکس روی تخته و نوشتن روی آن" onClick={() => bgInputRef.current?.click()}><Icon name="image" size={15} /></button>
+         <button className="wb-tool" title="باز کردن PDF روی تخته و نوشتن روی آن" onClick={() => pdfInputRef.current?.click()}><Icon name="file" size={15} /></button>
+         {pdfPages > 1 && (
+           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }} dir="ltr">
+             <button className="wb-tool" title="صفحه قبل" onClick={() => gotoPdfPage(pdfPage - 1)} disabled={pdfPage <= 1} style={{ opacity: pdfPage <= 1 ? 0.4 : 1 }}>‹</button>
+             <b style={{ fontSize: 11, minWidth: 34, textAlign: 'center' }}>{faNum(pdfPage)}/{faNum(pdfPages)}</b>
+             <button className="wb-tool" title="صفحه بعد" onClick={() => gotoPdfPage(pdfPage + 1)} disabled={pdfPage >= pdfPages} style={{ opacity: pdfPage >= pdfPages ? 0.4 : 1 }}>›</button>
+           </span>
+         )}
+         {boardBg && (
+           <button className="wb-tool danger" title="برداشتن عکس/PDF از تخته" onClick={clearBoardBg}><Icon name="x" size={15} /></button>
+         )}
+         <span className="wb-sep" />
          {isTeacher && (
            <>
              <button className="wb-tool" title={boardLocked ? 'باز کردن تخته برای دانش‌آموزان' : 'قفل کردن تخته'} onClick={toggleBoardLock}><Icon name={boardLocked ? 'lock' : 'unlock'} size={15} /></button>
@@ -1048,11 +1251,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      state={mediaErr || 'idle'}
      permBusy={permBusy}
      diag={mediaDiag}
-     onRequest={startMedia}
+     onRequest={needsApproval ? requestSpeakPermission : startMedia}
      onSkip={skipMedia}
      inIframe={inIframe}
      onOpenTab={openNewTab}
      onGoHttps={goHttps}
+     needsApproval={needsApproval}
+     handSent={myHand || hand}
    />
  )}
 
@@ -1156,7 +1361,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  {participants.map((p) => (
  <div className="part-row" key={p.id}>
  <Avatar name={p.name} size={32} color={p.color || 'grad-1'} />
- <span className="small">{p.name}{p.id === user?.id ? ' (شما)' : ''} {roleLabel(p.role) && <span className="badge b-teal" style={{ fontSize: 10, padding: '1px 8px' }}>{roleLabel(p.role)}</span>}{p.hand ? ' ✋' : ''}</span>
+ <span className="small">{p.name}{p.id === user?.id ? ' (شما)' : ''} {roleLabel(p.role) && <span className="badge b-teal" style={{ fontSize: 10, padding: '1px 8px' }}>{roleLabel(p.role)}</span>}{p.hand ? ' ✋' : ''}{p.canSpeak && p.role === 'student' ? <span className="badge b-green" style={{ fontSize: 10, padding: '1px 8px', marginInlineStart: 4 }}>اجازه داده شده</span> : ''}</span>
+ {isTeacher && p.role === 'student' && p.id !== user?.id && (
+   p.canSpeak ? (
+     <button className="btn btn-ghost btn-sm" style={{ padding: '3px 10px', fontSize: 11, flexShrink: 0 }} onClick={() => grantPerm(p.id, false)}>لغو اجازه</button>
+   ) : p.hand ? (
+     <button className="btn btn-primary btn-sm" style={{ padding: '3px 10px', fontSize: 11, flexShrink: 0 }} onClick={() => grantPerm(p.id, true)}>✋ اجازه دادن</button>
+   ) : null
+ )}
  <div className="pr-icons">
  <Icon name="mic" className={p.id === user?.id ? (mic ? '' : 'muted-off') : ''} size={15} />
  <Icon name="camera" className={p.id === user?.id ? (cam ? '' : 'muted-off') : ''} size={15} />
