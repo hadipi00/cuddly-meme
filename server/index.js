@@ -32,7 +32,9 @@ const now = () => Date.now()
 const b64 = (buf) => Buffer.from(buf).toString('base64')
 
 /* ---------------- هلپرهای احراز هویت ---------------- */
-const signToken = (u) => jwt.sign({ uid: u.id, role: u.role }, JWT_SECRET, { expiresIn: '7d' })
+/* توکن ۱۰ ساله — سشن برای همیشه ماندگار است و با هر /auth/me هم تمدید می‌شود */
+const TOKEN_TTL = '3650d'
+const signToken = (u) => jwt.sign({ uid: u.id, role: u.role }, JWT_SECRET, { expiresIn: TOKEN_TTL })
 
 function authUser(req) {
   const h = req.headers.authorization || ''
@@ -88,7 +90,9 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ token: signToken(u), user: publicUser(u) })
 })
 
-app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user) }))
+/* تمدید اسلایدی سشن: هر بار هویت چک می‌شود، یک توکن تازه هم برمی‌گردد تا
+   کاربر فعال هرگز به دیوار انقضا نخورد (سشن واقعاً برای همیشه می‌ماند) */
+app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user), token: signToken(req.user) }))
 
 /* ---------------- کلاس‌های آنلاین ---------------- */
 const enrolledCount = (classId) =>

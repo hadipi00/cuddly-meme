@@ -227,8 +227,10 @@ if (userCount === 0) {
 }
 
 /* ---------------- هلپرهای پرکاربرد ---------------- */
+/** برچسب فارسی نقش — در سمت کلاینت هم بعد از رفرش/تب جدید در دسترس باشد (فیکس «پنل undefined») */
+const ROLE_LABELS = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
 export const publicUser = (u) =>
-  u ? { id: u.id, name: u.name, email: u.email, role: u.role, color: u.color, title: u.title } : null
+  u ? { id: u.id, name: u.name, email: u.email, role: u.role, roleLabel: ROLE_LABELS[u.role] || u.title || '', color: u.color, title: u.title } : null
 
 export const classRow = (c) => ({
   id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,

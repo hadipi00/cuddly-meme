@@ -42,7 +42,9 @@ export function AppProvider({ children }) {
    let alive = true
    req('/auth/me').then((r) => {
      if (!alive || !r.user) return
-     setState((s) => (s.user?.id === r.user.id ? s : { ...s, user: r.user, token: getToken() }))
+     if (r.token) setToken(r.token) // تمدید اسلایدی سشن — کاربر فعال هرگز منقضی نمی‌شود
+     // کاربر همیشه با نسخه تازه سرور جایگزین می‌شود تا فیلدهای جدید (مثل roleLabel) هم بیاید
+     setState((s) => (s.user?.id === r.user.id && s.user?.roleLabel === r.user.roleLabel ? s : { ...s, user: r.user, token: getToken() }))
    }).catch((e) => {
      if (!alive) return
      if (e.status === 401) { setToken(null); setState((s) => ({ ...s, user: null, token: null })) }
@@ -88,31 +90,47 @@ export function AppProvider({ children }) {
  ...state,
  toasts,
  toast,
- /** ورود واقعی با بک‌اند (JWT) — اگر سرور قطع باشد → حالت دمو با نقش URL */
+ /** ورود واقعی با بک‌اند (JWT) — اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو با نقش URL.
+  *  تلاش دوباره ضد «تله حالت دمو» است: اگر لحظه ورود سرور کوتاه ری‌استارت شده باشد،
+  *  ورود واقعی به‌جای سشن ساختگی آفلاین انجام می‌شود و سشن دیگر نمی‌پرد. */
  async login(email, password, fallbackRole = 'student') {
+ let r
  try {
- const r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ } catch (e) {
+ if (!e.serverDown) return { ok: false, error: e.message }
+ await new Promise((res) => setTimeout(res, 1500))
+ try {
+ r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ } catch (e2) {
+ if (e2.serverDown) return loginDemo(fallbackRole)
+ return { ok: false, error: e2.message }
+ }
+ }
  setToken(r.token)
  patch(() => ({ user: r.user, token: r.token }))
  toast(`خوش آمدید، ${r.user.name}!`)
  return { ok: true, role: r.user.role, demo: false }
- } catch (e) {
- if (e.serverDown) return loginDemo(fallbackRole)
- return { ok: false, error: e.message }
- }
  },
- /** ثبت‌نام واقعی (نقش: دانش‌آموز) — اگر سرور قطع باشد → حالت دمو */
+ /** ثبت‌نام واقعی (نقش: دانش‌آموز) — اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو */
  async register(name, email, password) {
+ let r
  try {
- const r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
+ r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
+ } catch (e) {
+ if (!e.serverDown) return { ok: false, error: e.message }
+ await new Promise((res) => setTimeout(res, 1500))
+ try {
+ r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
+ } catch (e2) {
+ if (e2.serverDown) return loginDemo('student', name)
+ return { ok: false, error: e2.message }
+ }
+ }
  setToken(r.token)
  patch(() => ({ user: r.user, token: r.token }))
  toast(`حساب شما ساخته شد — خوش آمدید، ${r.user.name}!`)
  return { ok: true, role: r.user.role, demo: false }
- } catch (e) {
- if (e.serverDown) return loginDemo('student', name)
- return { ok: false, error: e.message }
- }
  },
  loginDemo,
  logout() {

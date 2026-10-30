@@ -65,6 +65,15 @@ export async function req(path, { method = 'GET', body, timeout = 0 } = {}) {
   let data = {}
   try { data = await res.json() } catch { /* پاسخ خالی */ }
   if (!res.ok) {
+    // خطای گِیت‌وی/پروکسی = بک‌اند موقتاً در دسترس نیست (مثلاً وسط ری‌استارت pm2):
+    // پراکسی 5xx بدون بدنه JSON برمی‌گرداند؛ خطای واقعی API همیشه پیام فارسی دارد.
+    const gatewayDown = res.status >= 500 && (res.status !== 500 || !data?.error)
+    if (gatewayDown) {
+      serverUp = false
+      const e = new Error('SERVER_DOWN')
+      e.serverDown = true
+      throw e
+    }
     const e = new Error(data?.error || `خطای سرور (${res.status})`)
     e.status = res.status
     throw e
