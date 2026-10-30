@@ -35,6 +35,8 @@ const PEN_SIZES = [3, 6, 12]
 
 /* ================= ابزارهای رله رسانه ================= */
 
+let FEED_PID = 0 // شناسه یکتای هر پلیر — برای تشخیص تعویض پلیر در state
+
 const b64ToBuf = (b64) => {
   const bin = atob(b64)
   const u = new Uint8Array(bin.length)
@@ -52,10 +54,13 @@ const getMS = () => {
 /** بهترین MIME پخش برای قالب استریم فرستنده (webm در کروم، mp4 در سافاری)
  *  روی مرورگرهای بدون MediaSource (iOS قدیمی) null می‌شود → پلیر جایگزین بلابی */
 const SRC_CONTAINERS = { webm: 'video/webm', mp4: 'video/mp4' }
-const SRC_FALLBACKS = [
-  'video/webm;codecs=vp8,opus', 'video/webm',
-  'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4',
-]
+/* فال‌بک فقط داخل «همان قالبِ» فرستنده مجاز است — استریم webm هرگز نباید با
+ * MIME mp4 پخش شود (سافاری MIME mp4 را «پشتیبانی‌شده» اعلام می‌کند ولی بایت‌های
+ * webm را رد می‌کند → اپند شکست → پخش برای همیشه می‌میرد) */
+const SRC_FALLBACKS = {
+  webm: ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'],
+  mp4: ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4'],
+}
 const pickSrcMime = (fmt, cd) => {
   const MS = getMS()
   if (!MS) return null
@@ -63,11 +68,11 @@ const pickSrcMime = (fmt, cd) => {
   const list = []
   /* کدک‌های واقعی فرستنده اول — ترکیب ترک‌ها ممکن است فقط ویدیو یا فقط صدا باشد */
   if (cd) list.push(`${cont};codecs=${cd}`)
-  list.push(cont, ...SRC_FALLBACKS)
+  list.push(cont, ...(SRC_FALLBACKS[fmt === 'mp4' ? 'mp4' : 'webm']))
   for (const m of list) {
     try { if (MS.isTypeSupported(m)) return m } catch { /* noop */ }
   }
-  return null
+  return null // این مرورگر قالبِ واقعی فرستنده را نمی‌پخشد → پلیر بلابی
 }
 
 /** بهترین MIME ضبط (MediaRecorder) + قالب آن — سافاری فقط mp4 ضبط می‌کند */
@@ -95,7 +100,7 @@ function createFeedPlayer(fmt, cd) {
   if (!mime) return createBlobPlayer(fmt)
   const p = {
     mime, fmt, cd, el: null, objUrl: null, ms: null, sb: null, sess: null,
-    queue: [], alive: true, keepT: null, trimT: null, broken: false,
+    queue: [], alive: true, keepT: null, trimT: null, broken: false, pid: ++FEED_PID,
   }
   const pump = () => {
     if (!p.sb || p.sb.updating || !p.queue.length || !p.alive) return
@@ -167,7 +172,7 @@ function createFeedPlayer(fmt, cd) {
     rebuild(sess)
   }
   p.attach = (el) => {
-    if (!el || p.el === el) return
+    if (!el || p.el === el || !p.alive) return // پلیر مرده هرگز به عنصر وصل نمی‌شود
     /* عنصر قبلی آزاد شود تا MediaSource بتواند به عنصر تازه وصل شود */
     if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
     p.el = el
@@ -200,8 +205,8 @@ function createFeedPlayer(fmt, cd) {
       const b = el.buffered
       if (!b.length) return
       const end = b.end(b.length - 1)
-      if (el.currentTime <= b.start(0) + 0.05 || end - el.currentTime > 1.6) {
-        el.currentTime = Math.max(0, end - 0.9)
+      if (el.currentTime <= b.start(0) + 0.05 || end - el.currentTime > 1.2) {
+        el.currentTime = Math.max(0, end - 0.55)
       }
       if (el.paused) el.play?.().catch(() => {})
     } catch { /* noop */ }
@@ -227,7 +232,7 @@ function createFeedPlayer(fmt, cd) {
 function createBlobPlayer(fmt) {
   const p = {
     mime: null, fmt, mode: 'blob', el: null, objUrl: null, sess: null, alive: true,
-    parts: [], bytes: 0, dirty: false, buildT: null, onNeedReset: null,
+    parts: [], bytes: 0, dirty: false, buildT: null, onNeedReset: null, pid: ++FEED_PID,
   }
   const rebuild = () => {
     if (!p.el || !p.parts.length || !p.alive) return
@@ -261,7 +266,7 @@ function createBlobPlayer(fmt) {
   }
   p.hardReset = (sess) => { p.sess = null }
   p.attach = (el) => {
-    if (!el || p.el === el) return
+    if (!el || p.el === el || !p.alive) return
     if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
     p.el = el
     p.dirty = true
@@ -276,7 +281,7 @@ function createBlobPlayer(fmt) {
   }
   p.buildT = setInterval(() => {
     if (p.dirty && p.el && p.alive) { p.dirty = false; rebuild() }
-  }, 3500)
+  }, 1800)
   return p
 }
 
@@ -358,7 +363,7 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
   const [needTap, setNeedTap] = useState(false)
   useEffect(() => {
     const v = ref.current
-    if (!v || !player) return
+    if (!v || !player || !player.alive) return // پلیر مرده → منتظر پلیر تازه از polling
     player.attach(v)
     /* بی‌صدا شروع کن — پخش همیشه موفق می‌شود و فریم‌ها می‌آیند */
     v.muted = true
@@ -551,6 +556,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const outRef = useRef(null) // { rec, kind, stopping }
  const pendingInitRef = useRef(true)
  const upChainRef = useRef(Promise.resolve())
+ /* آمار زنده ارسال — برای نوار وضعیت (دانش‌آموز بودن بدون صدا/تصویر باید قابل فهم باشد) */
+ const outStatsRef = useRef({ n: 0, bytes: 0, lastOkAt: 0, lastErrAt: 0, errs: 0, lastRebuildAt: 0, recent: [] })
 
  /* ---------- رله رسانه — گیرنده ---------- */
  const feedPlayersRef = useRef(new Map()) // key 't' | uid → FeedPlayer
@@ -568,6 +575,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [pseudoFs, setPseudoFs] = useState(false)
  const stageRef = useRef(null)
  const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
+ /* دوربین/میکروفون/اشتراک صفحه فقط در «بافت امن» (HTTPS یا localhost) کار می‌کند —
+  * رایج‌ترین علت واقعی «هیچی برای دانش‌آموز نمی‌آید» همین است؛ پس صریح اعلام می‌شود */
+ const [secure] = useState(() => typeof window === 'undefined' || window.isSecureContext !== false)
 
  /* ---------- وایت‌برد ---------- */
  const [strokes, setStrokes] = useState([])
@@ -738,20 +748,37 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!classId) return false
    const q = `?k=${kind}&init=${isInit ? 1 : 0}&mic=${micRef.current ? 1 : 0}&cam=${camRef.current ? 1 : 0}&screen=${screenRef.current ? 1 : 0}&fmt=${fmt || 'webm'}&cd=${encodeURIComponent(cd || '')}`
    for (let i = 0; i < 3; i++) {
+     /* تایم‌اوت ۵ ثانیه — هیچ درخواستی حق ندارد زنجیره‌ی ارسال را برای همیشه گروگان بگیرد */
+     const ac = new AbortController()
+     const tid = setTimeout(() => ac.abort(), 5000)
      try {
        const res = await fetch(`/api/classes/${classId}/media/up${q}`, {
          method: 'POST',
          headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() || ''}` },
          body: blob,
+         signal: ac.signal,
        })
-       if (res.ok) return true
+       if (res.ok) {
+         const st = outStatsRef.current
+         const t0 = Date.now()
+         st.n += 1
+         st.bytes += blob.size || 0
+         st.lastOkAt = t0
+         st.recent.push([t0, blob.size || 0])
+         while (st.recent.length && t0 - st.recent[0][0] > 4000) st.recent.shift() // پنجره ۴ ثانیه‌ای
+         return true
+       }
        if (res.status === 403) {
          const d = await res.json().catch(() => ({}))
          if (d.noPerm && !isTeacher) { revokeMyMedia(); return false } // اجازه لغو شده
        }
      } catch { /* شبکه — تلاش دوباره */ }
-     await new Promise((r) => setTimeout(r, 350))
+     finally { clearTimeout(tid) }
+     await new Promise((r) => setTimeout(r, 300))
    }
+   const st = outStatsRef.current
+   st.errs += 1
+   st.lastErrAt = Date.now()
    return false
  }
 
@@ -791,11 +818,23 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      pendingInitRef.current = false
      const blob = e.data
      upChainRef.current = upChainRef.current.then(() => uploadChunk(o.kind, blob, isInit, o.fmt, o.cd)).then((ok) => {
-       if (!ok && outRef.current === o && !o.stopping) pendingInitRef.current = true // سشن تازه در اولین فرصت
+       if (!ok && outRef.current === o && !o.stopping) {
+         /* هرگز تکه‌ی وسط استریم را به‌جای init نمی‌فرستیم — هدر ندارد و دکودر همه
+            گیرنده‌ها را برای همیشه می‌شکند. به‌جایش رکوردر واقعاً از نو ساخته می‌شود
+            تا تکه‌ی بعدی «هدرِ واقعی» داشته باشد (باگ اصلی مرگ دائمی استریم) */
+         const st = outStatsRef.current
+         if (Date.now() - st.lastRebuildAt > 2500) {
+           st.lastRebuildAt = Date.now()
+           stopOutgoing()
+           setTimeout(() => { if (!outRef.current) rebuildOutgoing() }, 250)
+         }
+         /* در فاصله‌ی backoff رکوردر فعلی ادامه می‌دهد — اگر تکه‌ای با هدر کامل برسد
+            سرور خودش آن را init واقعی می‌شناسد (خود-ترمیمی سمت سرور) */
+       }
      }).catch(() => {})
    }
    rec.onerror = () => { /* ادامه — تکه بعدی */ }
-   try { rec.start(800) } catch { /* noop */ }
+   try { rec.start(500) } catch { /* noop */ } // تکه‌های ۰.۵ ثانیه‌ای → تاخیر کم‌تر
  }
 
  /** ساخت/بازسازی استریم خروجی — بعد از هر تغییر ترکیب (شروع رسانه، اشتراک صفحه، تعویض دوربین) */
@@ -831,7 +870,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      if (p && (p.fmt !== (f.fmt || 'webm') || (p.cd || '') !== (f.cd || ''))) { try { p.destroy() } catch { /* noop */ } players.delete(key); p = null }
      if (!p) {
        p = createFeedPlayer(f.fmt || 'webm', f.cd || '')
-       p.onNeedReset = () => { cur.t = null; delete cur.s[key] } // پلیر بلابی init تازه می‌خواهد
+       p.onNeedReset = () => { if (key === 't') cur.t = null; else delete cur.s[key] } // فقط کرسرِ همین فید صفر شود
        players.set(key, p)
      }
      if (f.reset) p.hardReset(f.sess)
@@ -848,14 +887,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      try {
        const r = await req(`/classes/${classId}/media/feeds?cur=${encodeURIComponent(JSON.stringify(cur))}`, { timeout: 7000 })
        const next = {}
+       /* pv = شناسه‌ی پلیرِ زنده. اگر پلیر از نو ساخته شود (تعویض قالب/کدک مثل شروع
+          اشتراک صفحه، یا re-mount افکت در StrictMode) باید feedInfo عوض شود تا
+          re-render اتفاق بیفتد و RelayVideo پلیر تازه را بگیرد. بدون این، پروپ‌ها
+          به «پلیرِ مرده» چسبیده می‌مانند، ویدیو هیچ‌وقت src نمی‌گیرد و با اینکه
+          تکه‌ها آپند می‌شوند هیچ تصویر و صدایی پخش نمی‌شود (باگ اصلی گزارش کاربر) */
        if (!isTeacher && r.teacher) {
-         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0' }
          const lastSeq = applyFeed('t', r.teacher)
+         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('t')?.pid }
          cur.t = { s: r.teacher.sess, q: lastSeq ?? (cur.t?.q || 0) }
        } else if (cur.t) cur.t = null
        for (const sf of r.students || []) {
-         next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2' }
          const lastSeq = applyFeed(sf.uid, sf)
+         next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2', pv: players.get(sf.uid)?.pid }
          cur.s[sf.uid] = { s: sf.sess, q: lastSeq ?? (cur.s[sf.uid]?.q || 0) }
        }
        for (const k of Object.keys(cur.s)) if (!(k in next)) delete cur.s[k]
@@ -867,7 +911,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      finally { busy = false }
    }
    loop()
-   const ticker = createTicker(600, loop)
+   const ticker = createTicker(450, loop)
    return () => {
      alive = false
      ticker.stop()
@@ -884,7 +928,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    for (const k of ka) {
      const x = a[k]
      const y = b[k]
-     if (!y || x.sess !== y.sess || x.mic !== y.mic || x.cam !== y.cam || x.screen !== y.screen || x.name !== y.name) return false
+     if (!y || x.sess !== y.sess || x.mic !== y.mic || x.cam !== y.cam || x.screen !== y.screen || x.name !== y.name || x.pv !== y.pv) return false
    }
    return true
  }
@@ -1688,6 +1732,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const ctl = (on) => `ctl ${on ? 'on' : ''}`
  const roleLabel = (r) => (r === 'teacher' ? 'مدرس' : r === 'admin' ? 'مدیر' : '')
 
+ /* ---------- نوار وضعیت زندهٔ رسانه (هر ثانیه با تیک بازمحاسبه می‌شود) ---------- */
+ const st = outStatsRef.current
+ const nowMs = Date.now()
+ const outFresh = st.lastOkAt > 0 && nowMs - st.lastOkAt < 3000
+ const sendingMedia = isTeacher && !!(localStream || screen)
+ const rateKbps = Math.round(st.recent.reduce((a, x) => a + x[1], 0) / 4 / 1024)
+ const httpsUrl = (() => { try { const u = new URL(window.location.href); if (u.protocol === 'http:') u.protocol = 'https:'; return u.toString() } catch { return '' } })()
+
  return (
  <div>
  <div className="between wrap mb16">
@@ -1705,6 +1757,32 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  )}
  <span className="badge b-red"><i className="live-red-dot" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99 }} /> پخش زنده</span>
  </span>
+ </div>
+
+ {!secure && (
+ <div className="insecure-banner">
+ <span>⚠️ دوربین، میکروفون و اشتراک صفحه <b>فقط در آدرس امن (HTTPS)</b> کار می‌کند — لطفاً با این آدرس وارد شوید:</span>
+ {httpsUrl && <code>{httpsUrl}</code>}
+ </div>
+ )}
+ <div className="media-status">
+ {isTeacher ? (
+ sendingMedia ? (
+ outFresh ? (
+ <span className="media-chip ok"><i className="dot" /> در حال ارسال {screen ? 'اشتراک صفحه' : 'صدا/تصویر'} به دانش‌آموزان — {faNum(rateKbps)} کیلوبایت/ثانیه • {faNum(st.n)} تکه ✓</span>
+ ) : (
+ <span className="media-chip warn"><i className="dot" /> ارسال با وقفه افتاده — به‌صورت خودکار از سر گرفته می‌شود…</span>
+ )
+ ) : (
+ <span className="media-chip err"><i className="dot" /> ⛔ هیچ صدا و تصویری برای دانش‌آموزان ارسال نمی‌شود — دوربین یا اشتراک صفحه را روشن کنید (تخته و چت مستقل از این است)</span>
+ )
+ ) : (
+ tFeed ? (
+ <span className="media-chip ok"><i className="dot" /> پخش زندهٔ مدرس فعال است ✓ {tFeed.screen ? '(اشتراک صفحه)' : '(صدا/تصویر)'} — برای شنیدن صدا یک بار صفحه را لمس/کلیک کنید</span>
+ ) : (
+ <span className="media-chip warn"><i className="dot" /> در انتظار پخش زندهٔ مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه، همین‌جا نمایش داده می‌شود</span>
+ )
+ )}
  </div>
 
  <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
@@ -1854,7 +1932,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
        </div>
      )}
-     {tFeed && feedTile('t', tFeed, false)} /* استریم مدرس همیشه در نوار — با باز بودن تخته هم صدا/تصویر مدرس قطع نشود */
+     {tFeed && !watchingFeed && feedTile('t', tFeed, false)} /* در نوار فقط وقتی صحنه خودش استریم مدرس را نشان نمی‌دهد — دو ویدیو روی یک پلیر نمی‌جنگند (یکی MediaSource را از دیگری می‌دزدد) */
      {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}

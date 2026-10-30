@@ -591,6 +591,16 @@ app.get('/api/classes/:id/events', (req, res) => {
 const MEDIA_CHUNK_TTL = 9_000 // نگهداری تکه‌های اخیر برای تازه‌واردها
 const mediaRooms = new Map()  // classId → { teacher: Feed|null, students: Map<uid, Feed>, lastActivity }
 
+/** آیا این تکه واقعاً «هدرِ» استریم است؟
+ *  webm → بایت‌های جادویی EBML (0x1A45DFA3) • mp4 → باکس ftyp در آفست ۴
+ *  تکه‌ی وسط استریم هدر ندارد؛ اگر به‌جای init ذخیره شود دکودر همه گیرنده‌ها
+ *  برای همیشه می‌شکند (چون هدرِ گم‌شده هیچ‌وقت جبران نمی‌شود) — پس رد می‌شود */
+const looksLikeHeader = (buf, fmt) => {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return false
+  if (fmt === 'mp4') return buf.slice(4, 8).toString('latin1') === 'ftyp'
+  return buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3
+}
+
 function mediaRoom(classId) {
   let r = mediaRooms.get(classId)
   if (!r) { r = { teacher: null, students: new Map(), lastActivity: now() }; mediaRooms.set(classId, r) }
@@ -600,6 +610,10 @@ function mediaRoom(classId) {
 
 function feedPush(feed, buf, isInit, meta, fmt, cd) {
   const t = now()
+  /* خود-ترمیمی: تکه‌ای که خودش هدر کامل دارد ولی «init» اعلام نشده
+     (مثلاً ری‌استارت فرستنده بدون پرچم init) — به‌عنوان init واقعی پردازش می‌شود
+     تا گیرنده‌ها هیچ‌وقت بدون هدر بمانند */
+  if (!isInit && !feed.init && looksLikeHeader(buf, fmt)) isInit = true
   if (isInit) {
     /* تکه‌ی init (هدر webm/mp4) فقط به‌عنوان init ذخیره می‌شود و هرگز وارد صف تکه‌ها
        نمی‌شود — فرستادن دوباره‌ی همان هدر در گیرنده، SourceBuffer را خراب می‌کند و
@@ -634,6 +648,11 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
   if (req.query.k === 'teacher') {
     if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
     if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
+    /* تکه‌ی اعلام‌شده به‌عنوان init حتماً باید هدر واقعی داشته باشد — وگرنه ۴۰۰
+       می‌خورد تا فرستنده رکوردر را از نو بسازد (باگ «صدا/تصویر برای همیشه می‌میرد») */
+    if (req.query.init === '1' && !looksLikeHeader(req.body, fmt)) {
+      return res.status(400).json({ error: 'تکه init بدون هدر است — جلسه تازه لازم است', badInit: true })
+    }
     if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, fmt, cd }
     feedPush(room.teacher, req.body, req.query.init === '1', meta, fmt, cd)
     return res.json({ ok: true })
@@ -642,6 +661,9 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
   const att = db.prepare('SELECT can_speak FROM attendance WHERE class_id = ? AND user_id = ?').get(c.id, req.user.id)
   if (!att?.can_speak) return res.status(403).json({ error: 'مدرس اجازه فعال‌سازی صدا/تصویر نداده است', noPerm: true })
   if (!req.body || !Buffer.isBuffer(req.body) || req.body.length < 8) return res.status(400).json({ error: 'تکه رسانه نامعتبر است' })
+  if (req.query.init === '1' && !looksLikeHeader(req.body, fmt)) {
+    return res.status(400).json({ error: 'تکه init بدون هدر است — جلسه تازه لازم است', badInit: true })
+  }
   let feed = room.students.get(req.user.id)
   if (!feed) { feed = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, name: req.user.name, fmt, cd }; room.students.set(req.user.id, feed) }
   feed.name = req.user.name
