@@ -18,6 +18,7 @@ export default function TLiveRoom() {
  const [active, setActive] = useState(null)
  const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
  const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
+ const [loaded, setLoaded] = useState(false) // تا کلاس‌های واقعی از سرور نیامده، دمو شروع‌پذیر نیست
  const now = useNow(1000)
 
  /* چک واقعی تجهیزات (getUserMedia) برای صفحه آماده‌سازی — بالای early-returnها */
@@ -40,12 +41,14 @@ export default function TLiveRoom() {
  useEffect(() => {
  let alive = true
  req('/me/teaching').then((r) => {
- if (!alive || !r.classes?.length) return
+ if (!alive) return
+ setLoaded(true)
+ if (!r.classes?.length) return
  setMyClasses(r.classes.map((c) => ({
  id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start,
  dur: c.dur, students: c.enrolled, room: c.room, desc: c.desc, icon: c.icon, color: c.color,
  })))
- }).catch(() => {})
+ }).catch(() => { if (alive) setLoaded(true) })
  return () => { alive = false }
  }, [])
 
@@ -67,7 +70,12 @@ export default function TLiveRoom() {
  </div>
 
  <div className="grids g2 mb24">
- {myClasses.map((c) => {
+ {!loaded && (
+ <div className="card pad" style={{ gridColumn: '1 / -1', textAlign: 'center' }}>
+ <span className="muted small">در حال دریافت کلاس‌های شما از سرور…</span>
+ </div>
+ )}
+ {loaded && myClasses.map((c) => {
  const live = isLive(c)
  const elapsed = live ? now - liveSessions[c.liveId].startedAt : 0
  return (

@@ -598,7 +598,7 @@ function mediaRoom(classId) {
   return r
 }
 
-function feedPush(feed, buf, isInit, meta, fmt) {
+function feedPush(feed, buf, isInit, meta, fmt, cd) {
   const t = now()
   if (isInit) {
     /* تکه‌ی init (هدر webm/mp4) فقط به‌عنوان init ذخیره می‌شود و هرگز وارد صف تکه‌ها
@@ -614,6 +614,9 @@ function feedPush(feed, buf, isInit, meta, fmt) {
   }
   if (meta) feed.meta = meta
   if (fmt) feed.fmt = fmt
+  /* کدک‌های واقعی استریم — با هر init تازه به‌روز می‌شود تا گیرنده SourceBuffer را
+     دقیقاً با همین ترکیب بسازد (وگرنه استریمِ فقط-صدا با خطای codec رد می‌شد) */
+  if (cd) feed.cd = cd
   feed.updatedAt = t
   while (feed.chunks.length && t - feed.chunks[0].ts > MEDIA_CHUNK_TTL) feed.chunks.shift()
 }
@@ -642,7 +645,7 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
   let feed = room.students.get(req.user.id)
   if (!feed) { feed = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, name: req.user.name, fmt, cd }; room.students.set(req.user.id, feed) }
   feed.name = req.user.name
-  feedPush(feed, req.body, req.query.init === '1', meta, fmt)
+  feedPush(feed, req.body, req.query.init === '1', meta, fmt, cd)
   res.json({ ok: true })
 })
 

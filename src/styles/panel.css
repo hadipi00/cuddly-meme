@@ -360,6 +360,28 @@ body.fs-lock { overflow: hidden; }
  background: var(--card); box-shadow: var(--shadow-2, 0 8px 24px rgba(2, 6, 23, 0.18));
  border-radius: 999px; padding: 8px 18px; border: 1px solid var(--line2);
 }
+
+/* پنل گفتگوی دانش‌آموز بعد از اجازه مدرس — میکروفون/دوربین در جای خودشان (مثل اسکای‌روم) */
+.speak-panel {
+ position: absolute; bottom: 14px; left: 0; right: 0; display: flex; justify-content: center; align-items: center;
+ gap: 8px; flex-wrap: wrap; z-index: 6; pointer-events: none; padding: 0 12px;
+}
+.speak-panel > * { pointer-events: auto; }
+.speak-panel .sp-hint {
+ background: var(--card); box-shadow: var(--shadow-2, 0 8px 24px rgba(2, 6, 23, 0.18));
+ border-radius: 999px; padding: 8px 16px; border: 1px solid rgba(45, 212, 191, 0.45);
+ font-size: 12px; font-weight: 800; color: var(--teal);
+ display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+
+/* چیپ دست‌های بالا شده — فقط مدرس */
+.hand-chip {
+ position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5;
+ background: rgba(217, 119, 6, 0.94); color: #fff; border: none; border-radius: 999px;
+ padding: 7px 16px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
+ box-shadow: 0 10px 24px rgba(217, 119, 6, 0.35); animation: handPulse 1.6s ease-in-out infinite;
+}
+@keyframes handPulse { 50% { transform: translateX(-50%) scale(1.05); } }
 .tap-unmute {
  position: absolute; left: 50%; transform: translateX(-50%); bottom: 46px; z-index: 5;
  background: rgba(2, 6, 23, 0.72); color: #fff; border: none; border-radius: 999px;
@@ -516,6 +538,12 @@ body.fs-lock { overflow: hidden; }
  .wb-toolbar { padding: 6px 8px; gap: 5px; top: 6px; }
  .wb-locknote { font-size: 10.5px; padding: 4px 10px; max-width: calc(100% - 14px); text-align: center; line-height: 1.6; }
  .cam-strip { bottom: 8px; inset-inline-start: 8px; }
+ /* پنل گفتگو و نوار درخواست در موبایل — بالای نوار کنترل، همه‌ی عرض */
+ .speak-panel { bottom: 10px; gap: 6px; padding: 0 8px; }
+ .speak-panel .sp-hint { font-size: 11px; padding: 7px 12px; white-space: normal; text-align: center; }
+ .speak-panel .btn { min-height: 38px; font-size: 12px; }
+ .speak-req-bar { bottom: 10px; }
+ .hand-chip { font-size: 10.5px; padding: 6px 12px; top: 46px; max-width: calc(100% - 20px); white-space: normal; text-align: center; line-height: 1.6; }
 
  /* کارت دسترسی دوربین */
  .perm-overlay { padding: 12px; }

@@ -95,12 +95,14 @@ function createFeedPlayer(fmt, cd) {
   if (!mime) return createBlobPlayer(fmt)
   const p = {
     mime, fmt, cd, el: null, objUrl: null, ms: null, sb: null, sess: null,
-    queue: [], alive: true, keepT: null, trimT: null,
+    queue: [], alive: true, keepT: null, trimT: null, broken: false,
   }
   const pump = () => {
     if (!p.sb || p.sb.updating || !p.queue.length || !p.alive) return
     const buf = p.queue.shift()
-    try { p.sb.appendBuffer(buf) } catch {
+    try {
+      p.sb.appendBuffer(buf)
+    } catch (e0) {
       /* صف پر/حجم — کمی از عقب پخش‌شده پاک و دوباره صف */
       try {
         const el = p.el
@@ -108,13 +110,24 @@ function createFeedPlayer(fmt, cd) {
         if (b?.length && el.currentTime - b.start(0) > 4) {
           p.sb.remove(b.start(0), el.currentTime - 3)
           p.queue.unshift(buf)
+        } else if (e0?.name === 'InvalidStateError') {
+          breakStream('append-threw:' + e0.name)
         }
       } catch { /* noop */ }
     }
   }
+  /** خود-ترمیمی: خطای decode/اپند → کرسر گیرنده صفر شود تا سرور init تازه بفرستد */
+  let lastBreak = 0
+  const breakStream = (why) => {
+    if (!p.alive || Date.now() - lastBreak < 2500) return
+    lastBreak = Date.now()
+    p.broken = true
+    try { p.onNeedReset?.() } catch { /* noop */ }
+  }
   const rebuild = (sess) => {
     p.sess = sess
     p.queue = []
+    p.broken = false
     try { p.sb?.abort?.() } catch { /* noop */ }
     p.sb = null
     const MS = getMS()
@@ -127,6 +140,7 @@ function createFeedPlayer(fmt, cd) {
         p.sb = ms.addSourceBuffer(p.mime)
         try { p.sb.mode = 'segments' } catch { /* noop */ }
         p.sb.addEventListener('updateend', pump)
+        p.sb.addEventListener('error', () => breakStream('sb-error')) // خطای دکود → init تازه
         pump()
       } catch { /* noop */ }
     })
@@ -141,13 +155,16 @@ function createFeedPlayer(fmt, cd) {
   p.push = (sess, b64) => {
     if (!p.alive || !b64) return
     if (p.sess !== sess) rebuild(sess)
-    p.queue.push(b64ToBuf(b64))
+    const buf = b64ToBuf(b64)
+    p.queue.push(buf)
     pump()
   }
-  /** شروع از سر (گپ یا تازه‌وارد) — حتی اگر سشن همان باشد */
+  /** شروع از سر (گپ یا تازه‌وارد) — همیشه MediaSource تازه ساخته می‌شود؛
+   *  چون init دوباره می‌آید و افزودن دوباره‌ی init به SourceBuffer قبلی، دکودر را
+   *  برای همیشه می‌شکند (باگ «تصویر بعد از یک گپ دیگر نمی‌آید») */
   p.hardReset = (sess) => {
     p.queue = []
-    if (p.sess !== sess) rebuild(sess)
+    rebuild(sess)
   }
   p.attach = (el) => {
     if (!el || p.el === el) return
@@ -173,19 +190,23 @@ function createFeedPlayer(fmt, cd) {
     p.ms = null
     p.queue = []
   }
-  /* نگه‌داشتن پخش روی لبه زنده + پاک‌سازی عقب‌مانده‌ها */
-  p.keepT = setInterval(() => {
+  /* نگه‌داشتن پخش روی «لبه زنده» — تاخیر هدف ≈۱ ثانیه
+   * • تازه‌وارد: از انتهای بافر شروع کن (پخش قدیمی‌ها از ابتدای سشن ممنوع)
+   * • عقب‌ماندگی > ۱.۶ ثانیه: جبران با پرش به لبه */
+  p.liveEdge = () => {
     const el = p.el
     if (!el || el.readyState < 1 || !p.alive) return
     try {
       const b = el.buffered
-      if (b.length) {
-        const end = b.end(b.length - 1)
-        if (end - el.currentTime > 3.5) el.currentTime = Math.max(0, end - 1.2)
-        if (el.paused) el.play?.().catch(() => {})
+      if (!b.length) return
+      const end = b.end(b.length - 1)
+      if (el.currentTime <= b.start(0) + 0.05 || end - el.currentTime > 1.6) {
+        el.currentTime = Math.max(0, end - 0.9)
       }
+      if (el.paused) el.play?.().catch(() => {})
     } catch { /* noop */ }
-  }, 1200)
+  }
+  p.keepT = setInterval(() => p.liveEdge(), 700)
   p.trimT = setInterval(() => {
     const el = p.el
     const sb = p.sb
@@ -279,8 +300,6 @@ function createTicker(ms, fn) {
 
 /** ویدیوی یک شرکت‌کننده با استریم محلی — ویدیو همیشه mount می‌ماند؛
  *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود) */
-/** ویدیوی یک شرکت‌کننده با استریم محلی — ویدیو همیشه mount می‌ماند؛
- *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود) */
 function VideoTile({ stream, self, name, camOn, color, big }) {
   const ref = useRef(null)
   const hasVid = !!stream && stream.getVideoTracks().length > 0
@@ -329,9 +348,11 @@ if (typeof document !== 'undefined' && !pendingUnmute.armed) {
   }, { passive: true })
 }
 
-/** ویدیوی یک استریمِ رله‌شده (مدرس یا هم‌کلاسی) — ویدیو همیشه mount می‌ماند؛
- *  خاموشی دوربین فرستنده فقط لایه آواتار را نشان می‌دهد (پخش رله قطع نمی‌شود).
- *  پلیر یا MSE است یا بلابی (پشتیبانی همه مرورگرها از جمله iOS قدیمی) */
+/** ویدیوی یک استریمِ رله‌شده (مدرس یا هم‌کلاسی):
+ *  ۱) همیشه ابتدا «بی‌صدا» پخش می‌شود — autoplay بی‌صدا در همه مرورگرها مجاز است،
+ *     پس تصویر مدرس قطعاً نمایش داده می‌شود (باگ اصلی «هیچی برای دانش‌آموز نمی‌آمد»)
+ *  ۲) صدا با اولین لمس/کلیک کاربر فعال می‌شود (سیاست autoplay مرورگرها)
+ *  ۳) پلیر یا MSE است یا بلابی (پشتیبانی همه مرورگرها از جمله iOS قدیمی) */
 function RelayVideo({ player, name, color, camOff, screen, big }) {
   const ref = useRef(null)
   const [needTap, setNeedTap] = useState(false)
@@ -339,21 +360,21 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
     const v = ref.current
     if (!v || !player) return
     player.attach(v)
-    const pr = v.play?.()
-    if (pr?.catch) pr.catch(() => {
-      v.muted = true
-      setNeedTap(true)
-      v.play?.().catch(() => {})
-      const autoUnmute = () => {
-        const vv = ref.current
-        if (!vv) return
-        vv.muted = false
-        vv.play?.().then(() => { setNeedTap(false); pendingUnmute.delete(autoUnmute) }).catch(() => { vv.muted = true })
-      }
-      pendingUnmute.add(autoUnmute)
-    })
+    /* بی‌صدا شروع کن — پخش همیشه موفق می‌شود و فریم‌ها می‌آیند */
+    v.muted = true
+    v.play?.().catch(() => {})
+    /* فعال‌سازی صدا با اولین تعامل کاربر در صفحه */
+    const unmute = () => {
+      const vv = ref.current
+      if (!vv) return
+      vv.muted = false
+      vv.play?.().then(() => { setNeedTap(false); pendingUnmute.delete(unmute) }).catch(() => { vv.muted = true; setNeedTap(true) })
+    }
+    pendingUnmute.add(unmute)
+    setNeedTap(true)
+    return () => { pendingUnmute.delete(unmute) }
   }, [player, camOff])
-  const unmute = () => {
+  const unmuteNow = () => {
     const v = ref.current
     if (!v) return
     v.muted = false
@@ -372,7 +393,7 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
       )}
       <span className="ct-name">{screen ? 'اشتراک صفحه — ' : ''}{name}</span>
       {!camOff && needTap && (
-        <button className="tap-unmute" onClick={unmute}>🔊 کلیک برای صدا</button>
+        <button className="tap-unmute" onClick={unmuteNow}>🔊 کلیک برای فعال شدن صدا</button>
       )}
     </div>
   )
@@ -499,8 +520,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  userIdRef.current = user?.id
 
  /* ---------- کنترل‌های رسانه ---------- */
- const [mic, setMic] = useState(true)
- const [cam, setCam] = useState(true)
+ const [mic, setMic] = useState(isTeacher)
+ const [cam, setCam] = useState(isTeacher)
  const [screen, setScreen] = useState(false)
  const [board, setBoard] = useState(false)
  const [recording, setRecording] = useState(false)
@@ -774,7 +795,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      }).catch(() => {})
    }
    rec.onerror = () => { /* ادامه — تکه بعدی */ }
-   try { rec.start(1000) } catch { /* noop */ }
+   try { rec.start(800) } catch { /* noop */ }
  }
 
  /** ساخت/بازسازی استریم خروجی — بعد از هر تغییر ترکیب (شروع رسانه، اشتراک صفحه، تعویض دوربین) */
@@ -846,7 +867,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      finally { busy = false }
    }
    loop()
-   const ticker = createTicker(800, loop)
+   const ticker = createTicker(600, loop)
    return () => {
      alive = false
      ticker.stop()
@@ -917,7 +938,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          const cs = !!msg.canSpeak
          setLive((l) => ({ ...(l || { participants: [] }), participants: (l?.participants || []).map((p) => (p.id === msg.userId ? { ...p, canSpeak: cs, hand: false } : p)) }))
          if (!isTeacher && msg.userId === userIdRef.current) {
-           if (cs) { setHand(false); toast('مدرس اجازه داد — دوربین و میکروفون به‌صورت خودکار فعال می‌شود ✅', 'success') }
+           if (cs) { setHand(false); toast('مدرس اجازه داد ✅ — دکمه‌های میکروفون و دوربین در پایین صفحه فعال شد', 'success') }
            else toast('مدرس دسترسی صدا/تصویر شما را لغو کرد', 'info')
          }
          break
@@ -1041,7 +1062,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [live?.status])
 
- /* ---------- گیت اجازه مدرس — فعال‌سازی/لغو خودکار رسانه دانش‌آموز ---------- */
+ /* ---------- گیت اجازه مدرس — بدون شروع خودکار رسانه؛ دانش‌آموز خودش میکروفون/دوربین را روشن می‌کند ---------- */
  const participantsPre = live?.participants || []
  const myPartPre = participantsPre.find((p) => p.id === user?.id)
  const canSpeakPre = isTeacher || !!myPartPre?.canSpeak
@@ -1050,14 +1071,27 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  useEffect(() => {
    if (!user?.id) return
    if (canSpeakPre && !prevCanSpeakRef.current) {
-     // اجازه داده شد — رسانه به‌صورت خودکار باز و رله شروع می‌شود
+     // اجازه داده شد — اگر رسانه از قبل باز است رله ادامه می‌یابد؛ وگرنه پنل میکروفون/دوربین نمایش داده می‌شود
      if (localStreamRef.current) { setMediaErr(null); setMediaSkipped(false); rebuildOutgoing() }
-     else if (!isTeacher) startMedia()
    }
    if (!canSpeakPre && prevCanSpeakRef.current && !isTeacher) revokeMyMedia()
    prevCanSpeakRef.current = canSpeakPre
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [canSpeakPre, user?.id])
+
+ /* تُست لحظه بلند شدن دست دانش‌آموز برای مدرس — بدون نگاه کردن به تب حاضران */
+ const prevHandsRef = useRef(new Set())
+ useEffect(() => {
+   if (!isTeacher) return
+   const cur = new Set()
+   for (const p of participantsPre) {
+     if (p.role !== 'student' || !p.hand) continue
+     cur.add(p.id)
+     if (!prevHandsRef.current.has(p.id)) toast(`✋ ${p.name} دست خود را بالا کرد — از تب «حاضران» اجازه دهید`, 'info')
+   }
+   prevHandsRef.current = cur
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [participantsPre])
 
  /* ---------- محاسبه تایمر ---------- */
  const startedAt = live?.startedAt || null
@@ -1081,7 +1115,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    try {
      const r = await req(`/classes/${classId}/permit`, { method: 'POST', body: { userId, allow } })
      if (r.participants) setLive((l) => ({ ...(l || { participants: [] }), participants: r.participants }))
-     toast(allow ? 'اجازه داده شد — دوربین و میکروفون دانش‌آموز خودکار فعال می‌شود' : 'اجازه لغو شد', 'success')
+     toast(allow ? 'اجازه داده شد — دانش‌آموز حالا میکروفون/دوربین خود را روشن می‌کند' : 'اجازه لغو شد', 'success')
    } catch (e) { if (!e.serverDown) toast(e.message || 'عملیات ناموفق بود', 'error') }
  }
 
@@ -1105,14 +1139,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  /* ---------- عملیات رسانه ---------- */
 
- /* درخواست اجازه صدا/تصویر از مدرس — دست بلند کردن + ثبت روی سرور */
+ /* درخواست اجازه صدا/تصویر از مدرس — فقط با کلیک خود دانش‌آموز (دست بلند کردن)؛
+    ورود به کلاس هیچ‌وقت خودکار دست را بلند نمی‌کند */
  const requestSpeakPermission = () => {
    if (isTeacher || canSpeakRef.current) return
    if (!handRef.current) {
      setHand(true)
      req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: true } }).catch(() => {})
+     toast('✋ دست شما بالا رفت — به‌محض اجازه مدرس، دکمه‌های میکروفون و دوربین همین‌جا فعال می‌شود', 'info')
+   } else {
+     toast('درخواست شما در انتظار تایید مدرس است…', 'info')
    }
-   toast('درخواست شما برای مدرس ارسال شد ✋ — به‌محض تایید، دوربین و میکروفون خودکار فعال می‌شود', 'info')
  }
 
  /** میکروفون — فقط enabled عوض می‌شود (رله هرگز قطع نمی‌شود)؛ اگر ترک نیست فقط همان گرفته می‌شود */
@@ -1643,7 +1680,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  /* کاشی‌های حالت عادی: رسانه خودم + استریم دانش‌آموزان (برای مدرس) یا استریم بقیه (برای دانش‌آموز) */
  const allTiles = [
-   ...(localStream ? [{ key: 'me', self: true, name: me, stream: localStream, camOn: cam, color: user?.color || 'grad-3' }] : []),
+   ...(localStream || !isTeacher ? [{ key: 'me', self: true, name: me, stream: localStream, camOn: cam, color: user?.color || 'grad-3' }] : []),
    ...sFeeds.map(([uid, f]) => ({ key: uid, relay: true, f })),
  ]
  const canDraw = user && (!boardLocked || isTeacher)
@@ -1673,8 +1710,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
  <div className="live-stage" ref={stageRef}>
  <div className={`live-view ${watchingBoard ? 'board' : watchingScreen || watchingFeed ? 'screen' : 'camera'}`}>
- <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? 'اشتراک صفحه شما' : watchingFeed ? (tFeed.screen ? 'اشتراک صفحه مدرس' : 'کلاس زنده') : 'کلاس زنده'}</span>
+ <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? 'اشتراک صفحه شما' : watchingFeed ? (tFeed.screen ? 'اشتراک صفحه مدرس' : 'ویدیوی زنده مدرس') : 'کلاس زنده'}</span>
  <span className="live-timer" dir="ltr">{mm}:{ss}</span>
+
+ {/* چیپ دست‌های بالا — فقط مدرس؛ کلیک = رفتن به تب حاضران */}
+ {isTeacher && handsUp > 0 && (
+   <button className="hand-chip" onClick={() => setTab('parts')}>✋ {faNum(handsUp)} دانش‌آموز دست بالا کرده — مشاهده</button>
+ )}
 
  {watchingBoard ? (
    <div className="wb-wrap">
@@ -1743,38 +1785,53 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        <div className="live-tile">
          <Avatar name={classInfo?.teacher || 'مدرس'} color="grad-0" size={110} />
          <b style={{ fontSize: 16 }}>{classInfo?.teacher || 'مدرس'}</b>
-         <span className="muted small">{isTeacher ? 'دوربین خود را روشن کنید تا دانش‌آموزان شما را ببینند' : 'در حال اتصال به کلاس…'}</span>
+         <span className="muted small" style={{ maxWidth: 320, textAlign: 'center', lineHeight: 1.9 }}>
+           {isTeacher
+             ? 'دوربین خود را روشن کنید تا دانش‌آموزان شما را ببینند'
+             : 'در انتظار پخش زنده مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه یا تخته، همین‌جا نمایش داده می‌شود'}
+         </span>
        </div>
      )}
    </div>
  )}
 
- {/* مرکز دسترسی دوربین — فقط وقتی رسانه‌ای نداریم و در حال دیدن تخته/صفحه/استریم مدرس نیستیم */}
- {!localStream && !mediaSkipped && !stageBusy && (
+ {/* کارت دسترسی دوربین — فقط برای مدرس؛ دانش‌آموز مستقیم وارد حالت تماشا می‌شود
+     (مثل اسکای‌روم: اول تماشا، بعد در صورت نیاز دست بلند کردن) */}
+ {isTeacher && !localStream && !mediaSkipped && !stageBusy && (
    <PermissionCard
      state={mediaErr || 'idle'}
      permBusy={permBusy}
      diag={mediaDiag}
-     onRequest={needsApproval ? requestSpeakPermission : startMedia}
+     onRequest={startMedia}
      onSkip={skipMedia}
      inIframe={inIframe}
      onOpenTab={openNewTab}
      onGoHttps={goHttps}
-     needsApproval={needsApproval}
-     handSent={myHand || hand}
+     needsApproval={false}
+     handSent={false}
    />
  )}
 
- {/* در حال دیدن استریم مدرس ولی بدون اجازه صحبت — نوار باریک درخواست (کارت بزرگ وسط تصویر را نمی‌گیرد) */}
+ {/* در حال دیدن استریم مدرس ولی بدون اجازه صحبت — نوار باریک درخواست (فقط با کلیک خود دانش‌آموز) */}
  {!isTeacher && needsApproval && stageBusy && !mediaSkipped && (
    <div className="speak-req-bar">
      {(myHand || hand) ? (
        <span className="small" style={{ color: '#d97706' }}>✋ درخواست شما برای مدرس ارسال شد — منتظر تایید…</span>
      ) : (
        <button className="btn btn-primary btn-sm" onClick={requestSpeakPermission}>
-         <Icon name="hand" size={14} /> درخواست اجازه صدا و تصویر از مدرس
+         <Icon name="hand" size={14} /> سوال دارم — بلند کردن دست برای گفتگو
        </button>
      )}
+   </div>
+ )}
+
+ {/* پنل گفتگوی دانش‌آموز — بعد از اجازه مدرس، دکمه‌های میکروفون/دوربین در جای خودشان
+     (مثل اسکای‌روم/میت: انتخاب می‌کنید چه چیزی روشن شود؛ قاب اصلی برای مدرس می‌ماند) */}
+ {!isTeacher && canSpeak && (!mic || !cam) && (
+   <div className="speak-panel">
+     <span className="sp-hint"><Icon name="hand" size={13} /> مدرس اجازه گفتن داد</span>
+     {!mic && <button className="btn btn-primary btn-sm" onClick={toggleMic}><Icon name="mic" size={14} /> روشن کردن میکروفون</button>}
+     {!cam && <button className="btn btn-ghost btn-sm" onClick={toggleCam}><Icon name="camera" size={14} /> روشن کردن دوربین</button>}
    </div>
  )}
 
@@ -1789,10 +1846,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    </button>
  )}
 
- {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته/دیدن استریم مدرس */}
- {stageBusy && (localStream || tFeed || sFeeds.length > 0) && (
+ {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته/دیدن استریم مدرس — کاشی خودِ دانش‌آموز همیشه هست */}
+ {stageBusy && (localStream || !isTeacher || tFeed || sFeeds.length > 0) && (
    <div className="cam-strip">
-     {localStream && (
+     {(localStream || !isTeacher) && (
        <div style={{ width: 128, flexShrink: 0 }}>
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
        </div>
