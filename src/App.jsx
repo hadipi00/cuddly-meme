@@ -93,6 +93,9 @@ const SOrders = lazyPage(() => import('./pages/student/SOrders'))
 const SWishlist = lazyPage(() => import('./pages/student/SWishlist'))
 const STickets = lazyPage(() => import('./pages/student/STickets'))
 const SLiveRoom = lazyPage(() => import('./pages/student/SLiveRoom'))
+const SExams = lazyPage(() => import('./pages/student/SExams'))
+const SExamTake = lazyPage(() => import('./pages/student/SExamTake'))
+const SExamResult = lazyPage(() => import('./pages/student/SExamResult'))
 
 /* پنل مدرس */
 const TeacherPanel = lazyPage(() => import('./pages/teacher/TeacherPanel'))
@@ -105,6 +108,9 @@ const TAssignments = lazyPage(() => import('./pages/teacher/TAssignments'))
 const TEarnings = lazyPage(() => import('./pages/teacher/TEarnings'))
 const TReviews = lazyPage(() => import('./pages/teacher/TReviews'))
 const TProfile = lazyPage(() => import('./pages/teacher/TProfile'))
+const TExams = lazyPage(() => import('./pages/teacher/TExams'))
+const TExamBuilder = lazyPage(() => import('./pages/teacher/TExamBuilder'))
+const TExamDetail = lazyPage(() => import('./pages/teacher/TExamDetail'))
 
 /* پنل مدیریت */
 const AdminPanel = lazyPage(() => import('./pages/admin/AdminPanel'))
@@ -214,6 +220,9 @@ export default function App() {
  <Route path="wishlist" element={<SWishlist />} />
  <Route path="tickets" element={<STickets />} />
  <Route path="live/:classId" element={<SLiveRoom />} />
+ <Route path="exams" element={<SExams />} />
+ <Route path="exams/:eid/take" element={<SExamTake />} />
+ <Route path="exams/:eid/result" element={<SExamResult />} />
  <Route path="*" element={<Navigate to="/panel/student" replace />} />
  </Route>
 
@@ -228,6 +237,9 @@ export default function App() {
  <Route path="earnings" element={<TEarnings />} />
  <Route path="reviews" element={<TReviews />} />
  <Route path="profile" element={<TProfile />} />
+ <Route path="exams" element={<TExams />} />
+ <Route path="exams/:eid" element={<TExamBuilder />} />
+ <Route path="exams/:eid/analysis" element={<TExamDetail />} />
  <Route path="*" element={<Navigate to="/panel/teacher" replace />} />
  </Route>
 

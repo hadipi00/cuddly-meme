@@ -1,0 +1,243 @@
+/* =====================================================================
+   استایل آزمون‌ساز مدرس‌یار — سازنده، صفحه آزمون، پاسخبرگ انیمیشنی، کارنامه
+   ===================================================================== */
+
+/* ---------- عمومی ---------- */
+.exm-card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; }
+.exm-muted { color: var(--muted); font-size: 13px; }
+.exm-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.exm-chip {
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: all .18s ease; font-family: inherit;
+}
+.exm-chip:hover { color: var(--text); border-color: rgba(148,163,184,.4); }
+.exm-chip.on { background: rgba(45,212,191,.13); border-color: rgba(45,212,191,.5); color: var(--teal); }
+.exm-chip:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---------- سازنده: چیدمان دوستونه ---------- */
+.exm-builder { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; align-items: start; }
+.exm-qcard {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  padding: 14px 16px; margin-bottom: 12px; transition: border-color .2s, box-shadow .2s;
+  cursor: grab; position: relative;
+}
+.exm-qcard:hover { border-color: rgba(45,212,191,.4); box-shadow: 0 8px 24px -14px rgba(0,0,0,.4); }
+.exm-qcard.dragging { opacity: .45; }
+.exm-qcard.over { border-color: var(--teal); border-style: dashed; }
+.exm-qnum {
+  width: 30px; height: 30px; border-radius: 10px; background: rgba(45,212,191,.14); color: var(--teal);
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; flex-shrink: 0;
+}
+.exm-qbody { font-size: 14px; font-weight: 600; line-height: 1.9; }
+.exm-qopts { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.exm-qopt { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.exm-qopt .dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--line); flex-shrink: 0; }
+.exm-qopt.right .dot { background: #34d399; border-color: #34d399; }
+.exm-qopt.right { color: #34d399; }
+.exm-qacts { display: flex; gap: 4px; }
+.exm-mini {
+  border: none; background: rgba(148,163,184,.1); color: var(--muted); width: 30px; height: 30px;
+  border-radius: 9px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all .15s; font-family: inherit;
+}
+.exm-mini:hover { background: rgba(45,212,191,.14); color: var(--teal); }
+.exm-mini.red:hover { background: rgba(251,113,133,.15); color: var(--red); }
+.exm-grip { color: var(--faint, #64748b); cursor: grab; flex-shrink: 0; }
+
+/* فرم ویرایش سوال */
+.exm-optrow { display: flex; gap: 9px; align-items: center; margin-bottom: 9px; }
+.exm-optrow .input { flex: 1; }
+.exm-markbtn {
+  width: 38px; height: 40px; border-radius: 10px; border: 1.5px solid var(--line); background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--muted); transition: all .15s; font-family: inherit; font-size: 13px; font-weight: 700;
+}
+.exm-markbtn:hover { border-color: #34d399; color: #34d399; }
+.exm-markbtn.on { background: rgba(52,211,153,.14); border-color: #34d399; color: #34d399; }
+.exm-addopt {
+  width: 100%; padding: 9px; border: 1.5px dashed var(--line); border-radius: 10px; background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 12.5px; font-family: inherit; transition: all .15s;
+}
+.exm-addopt:hover { border-color: var(--teal); color: var(--teal); }
+
+/* بانک سوال */
+.exm-bankitem { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px; cursor: pointer; transition: all .15s; }
+.exm-bankitem:hover { border-color: var(--teal); background: rgba(45,212,191,.06); }
+
+/* کلید پاسخبرگ حالت PDF */
+.exm-keygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.exm-keycell { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
+.exm-keycell .n { font-weight: 800; font-size: 13px; color: var(--muted); min-width: 26px; }
+.exm-keybubbles { display: flex; gap: 4px; flex: 1; justify-content: space-around; }
+.exm-keyb {
+  width: 26px; height: 26px; border-radius: 8px; border: 1.5px solid var(--line); background: transparent;
+  font-size: 12px; font-weight: 700; cursor: pointer; color: var(--muted); font-family: inherit; transition: all .12s;
+}
+.exm-keyb:hover { border-color: var(--teal); }
+.exm-keyb.on { background: var(--teal); border-color: var(--teal); color: #04121a; }
+
+/* پیش‌نمایش */
+.exm-preview-q { border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+
+/* ---------- صفحه آزمون دانش‌آموز ---------- */
+.exm-take-head {
+  position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg, #0b1220) 86%, transparent);
+  backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); padding: 12px 18px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.exm-timer {
+  display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px;
+  background: rgba(45,212,191,.12); color: var(--teal); border: 1px solid rgba(45,212,191,.35);
+  padding: 8px 16px; border-radius: 12px; font-variant-numeric: tabular-nums; direction: ltr;
+}
+.exm-timer.warn { background: rgba(251,191,36,.13); color: #fbbf24; border-color: rgba(251,191,36,.4); animation: exm-pulse 1s ease infinite; }
+.exm-timer.danger { background: rgba(251,113,133,.14); color: var(--red); border-color: rgba(251,113,133,.45); animation: exm-pulse .7s ease infinite; }
+@keyframes exm-pulse { 50% { opacity: .55; } }
+.exm-answered-pill { font-size: 12.5px; font-weight: 700; color: var(--muted); background: rgba(148,163,184,.09); border-radius: 999px; padding: 7px 13px; }
+.exm-answered-pill b { color: var(--teal); }
+
+/* بدنه سوالات — اسکرول پیوسته */
+.exm-questions { max-width: 880px; margin: 0 auto; padding: 22px 18px 120px; }
+.exm-q {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+  padding: 20px; margin-bottom: 16px; scroll-margin-top: 90px; position: relative;
+}
+.exm-q.flashed { animation: exm-flash 1.2s ease; }
+@keyframes exm-flash { 0%, 60% { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(45,212,191,.15); } 100% { border-color: var(--line); } }
+.exm-q-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.exm-q-title { font-size: 15px; font-weight: 700; line-height: 2; user-select: none; -webkit-user-select: none; }
+.exm-q img.qimg { max-width: 100%; border-radius: 12px; margin-top: 10px; border: 1px solid var(--line); user-select: none; -webkit-user-select: none; pointer-events: none; }
+.exm-flagbtn { position: absolute; top: 14px; left: 14px; }
+.exm-flagbtn.on { color: #fbbf24; background: rgba(251,191,36,.13); }
+
+/* گزینه‌ها */
+.exm-opts { display: flex; flex-direction: column; gap: 9px; }
+.exm-opt {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 13px;
+  border: 1.5px solid var(--line); cursor: pointer; transition: all .16s ease; user-select: none; -webkit-user-select: none;
+  background: transparent; font-family: inherit; font-size: 14px; text-align: right; color: var(--text); width: 100%;
+}
+.exm-opt:hover { border-color: rgba(45,212,191,.5); background: rgba(45,212,191,.05); }
+.exm-opt.on { border-color: var(--teal); background: rgba(45,212,191,.1); }
+.exm-opt .bub {
+  width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 800; color: var(--muted);
+  transition: all .16s;
+}
+.exm-opt.on .bub { background: var(--teal); border-color: var(--teal); color: #04121a; transform: scale(1.08); }
+.exm-opt img { max-height: 90px; border-radius: 8px; pointer-events: none; }
+
+/* فیلد متنی */
+.exm-textarea { min-height: 110px; }
+
+/* ---------- پاسخبرگ + دکمه انیمیشنی جابه‌جایی ---------- */
+.exm-sheet {
+  max-width: 880px; margin: 0 auto; padding: 22px 18px 130px;
+  animation: exm-slidein .38s cubic-bezier(.22,1,.36,1);
+}
+@keyframes exm-slidein { from { opacity: 0; transform: translateX(-26px); } to { opacity: 1; transform: none; } }
+.exm-qs-anim { animation: exm-slidein2 .38s cubic-bezier(.22,1,.36,1); }
+@keyframes exm-slidein2 { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
+
+.exm-sheet-card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
+.exm-sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 12px; }
+.exm-sheet-cell { border: 1px solid var(--line); border-radius: 14px; padding: 10px 8px; text-align: center; transition: all .15s; position: relative; }
+.exm-sheet-cell.done { border-color: rgba(45,212,191,.5); }
+.exm-sheet-cell.flagged::after {
+  content: ''; position: absolute; top: -5px; left: -5px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fbbf24; box-shadow: 0 0 0 2px var(--panel);
+}
+.exm-sheet-cell .n { font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 7px; }
+.exm-bubbles { display: flex; justify-content: center; gap: 5px; }
+.exm-bubble {
+  width: 21px; height: 21px; border-radius: 50%; border: 1.5px solid var(--line); background: transparent;
+  font-size: 10.5px; font-weight: 800; color: var(--muted); cursor: pointer; padding: 0; font-family: inherit;
+  transition: transform .12s ease, background .12s, border-color .12s, color .12s;
+}
+.exm-bubble:hover { border-color: var(--teal); transform: scale(1.15); }
+.exm-bubble.on { background: var(--teal); border-color: var(--teal); color: #04121a; transform: scale(1.12); box-shadow: 0 3px 12px -3px rgba(45,212,191,.6); }
+
+/* دکمه شناور تعویض سوالات/پاسخبرگ */
+.exm-switchbar {
+  position: fixed; bottom: 22px; right: 50%; transform: translateX(50%); z-index: 40;
+  display: flex; gap: 4px; background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 999px; padding: 6px;
+  box-shadow: 0 18px 50px -12px rgba(0,0,0,.55);
+}
+.exm-switchbtn {
+  display: flex; align-items: center; gap: 8px; border: none; background: transparent; color: var(--muted);
+  padding: 11px 22px; border-radius: 999px; cursor: pointer; font-family: inherit; font-size: 13.5px; font-weight: 700;
+  transition: all .22s ease; position: relative;
+}
+.exm-switchbtn.on { background: var(--grad); color: #04121a; box-shadow: 0 8px 22px -8px rgba(45,212,191,.7); }
+.exm-switchbtn .cnt {
+  min-width: 20px; height: 20px; border-radius: 999px; background: rgba(255,255,255,.18); font-size: 11px;
+  display: flex; align-items: center; justify-content: center; padding: 0 6px;
+}
+.exm-switchbtn:not(.on) .cnt { background: rgba(45,212,191,.16); color: var(--teal); }
+
+/* نمایشگر PDF برگه سوال */
+.exm-pdfview { border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #fff; }
+.exm-pdfview img { width: 100%; display: block; }
+.exm-pdfview object { width: 100%; height: 70vh; display: block; }
+
+/* هشدار امنیتی */
+.exm-secwarn {
+  position: fixed; top: 84px; right: 50%; transform: translateX(50%); z-index: 60;
+  background: rgba(251,113,133,.14); border: 1px solid rgba(251,113,133,.5); color: var(--red);
+  padding: 12px 22px; border-radius: 14px; font-weight: 700; font-size: 13.5px;
+  animation: exm-warn .35s cubic-bezier(.22,1,.36,1); backdrop-filter: blur(10px); max-width: 92vw; text-align: center;
+}
+@keyframes exm-warn { from { opacity: 0; transform: translateX(50%) translateY(-14px); } to { opacity: 1; } }
+
+/* ---------- کارنامه تحلیلی ---------- */
+.exm-report { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 30px; max-width: 900px; margin: 0 auto; }
+.exm-report-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; border-bottom: 2px solid var(--line2); padding-bottom: 18px; margin-bottom: 22px; }
+.exm-score-hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.exm-score-tile { background: rgba(148,163,184,.07); border: 1px solid var(--line); border-radius: 16px; padding: 16px; text-align: center; }
+.exm-score-tile .v { font-size: 26px; font-weight: 900; color: var(--teal); }
+.exm-score-tile .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.exm-score-tile.big { background: rgba(45,212,191,.09); border-color: rgba(45,212,191,.4); }
+.exm-score-tile.big .v { font-size: 34px; }
+
+.exm-rtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.exm-rtable th { background: rgba(148,163,184,.08); padding: 10px; font-size: 12px; color: var(--muted); text-align: right; border-bottom: 1px solid var(--line2); }
+.exm-rtable td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.9; }
+.exm-rtag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+.exm-rtag.ok { background: rgba(52,211,153,.14); color: #34d399; }
+.exm-rtag.no { background: rgba(251,113,133,.14); color: var(--red); }
+.exm-rtag.bl { background: rgba(148,163,184,.14); color: var(--muted); }
+.exm-rtag.pd { background: rgba(251,191,36,.14); color: #fbbf24; }
+
+.exm-tbars { display: flex; flex-direction: column; gap: 10px; }
+.exm-tbar { display: flex; align-items: center; gap: 12px; }
+.exm-tbar .name { min-width: 110px; font-size: 12.5px; font-weight: 700; }
+.exm-tbar .bar { flex: 1; height: 9px; background: rgba(148,163,184,.12); border-radius: 999px; overflow: hidden; }
+.exm-tbar .bar i { display: block; height: 100%; background: linear-gradient(90deg, #2dd4bf, #38bdf8); border-radius: 999px; transition: width .8s ease; }
+.exm-tbar .pct { min-width: 42px; text-align: left; font-size: 12px; font-weight: 800; color: var(--teal); }
+
+/* چاپ کارنامه — A4 تمیز */
+@media print {
+  body { background: #fff !important; }
+  .exm-no-print, .p-sidebar, .p-mainnav, .p-topbar, .navbar, footer, .mobile-menu { display: none !important; }
+  .exm-report { border: none; border-radius: 0; padding: 0; max-width: 100%; background: #fff !important; color: #111 !important; box-shadow: none !important; }
+  .exm-report * { color: #111 !important; box-shadow: none !important; }
+  .exm-score-tile, .exm-sheet-card, .exm-card { background: #f6f8fa !important; border-color: #d7dee6 !important; }
+  .exm-score-tile .v { color: #0d9488 !important; }
+  .exm-rtable th { background: #eef2f6 !important; }
+  .exm-rtable td, .exm-rtable th { border-color: #d7dee6 !important; }
+  .exm-tbar .bar { background: #eef2f6 !important; }
+  .exm-tbar .bar i { background: #0d9488 !important; }
+  .exm-rtag.ok { background: #d1fae5 !important; color: #059669 !important; }
+  .exm-rtag.no { background: #fee2e2 !important; color: #dc2626 !important; }
+  .exm-rtag.bl { background: #e2e8f0 !important; color: #475569 !important; }
+  .exm-rtag.pd { background: #fef3c7 !important; color: #b45309 !important; }
+  .p-panel, main { padding: 0 !important; }
+}
+@media (max-width: 900px) {
+  .exm-builder { grid-template-columns: 1fr; }
+  .exm-sheet-grid { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+  .exm-report { padding: 18px; }
+  .exm-switchbtn { padding: 10px 16px; font-size: 12.5px; }
+}

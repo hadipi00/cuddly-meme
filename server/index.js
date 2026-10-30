@@ -16,6 +16,7 @@ import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import { db, JWT_SECRET, publicUser, classRow } from './db.js'
 import { searchIndex, buildIndex } from './contentIndex.mjs'
+import { registerExamRoutes } from './exams.js'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -783,6 +784,9 @@ function overridesFreeze(replace, find) {
   }
   return false
 }
+
+/* ---------------- موتور آزمون‌ساز (کاملاً مجزا از کلاس آنلاین) ---------------- */
+registerExamRoutes(app)
 
 /* ---------------- سلام سرور ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))

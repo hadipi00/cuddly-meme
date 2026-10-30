@@ -8,6 +8,7 @@ import './styles/fonts.css'
 import './styles/tw.css'
 import './styles/base.css'
 import './styles/panel.css'
+import './styles/exams.css'
 import './styles/theme.css'
 import { initTextOverrides } from './services/textOverrides'
 

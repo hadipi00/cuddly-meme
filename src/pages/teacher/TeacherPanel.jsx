@@ -9,6 +9,7 @@ const nav = [
  { to: '/panel/teacher/live', icon: 'video', label: 'کلاس زنده — برگزاری' },
  { to: '/panel/teacher/students', icon: 'users', label: 'دانشجوهای من' },
  { to: '/panel/teacher/assignments', icon: 'file', label: 'تکالیف و تصحیح' },
+ { to: '/panel/teacher/exams', icon: 'check', label: 'آزمون‌ساز', pill: 'جدید' },
  ],
  },
  {

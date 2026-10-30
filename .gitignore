@@ -34,3 +34,6 @@ pnpm-debug.log*
 
 # Backend runtime data (DB + JWT secret)
 server/data/
+
+# فایل‌های آپلودی آزمون (سوالات PDF/تصویر و پاسخنامه)
+server/uploads/
