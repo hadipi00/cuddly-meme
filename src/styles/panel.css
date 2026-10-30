@@ -90,6 +90,8 @@
 .chart-card h3 { font-size: 15px; margin-bottom: 4px; }
 .chart-card .chart-sub { font-size: 12px; color: var(--faint); margin-bottom: 18px; }
 .chart-grid { display: grid; grid-template-columns: 1.7fr 1fr; gap: 18px; margin-bottom: 22px; }
+/* آیتم‌های گرید باید بتوانند جمع شوند — وگرنه جدول عریض کل صفحه موبایل را می‌شکند */
+.chart-grid > .card { min-width: 0; }
 
 /* ---------- charts (SVG) ---------- */
 .chart-wrap { width: 100%; direction: ltr; }
@@ -437,7 +439,14 @@ body.fs-lock { overflow: hidden; }
  .p-topbar { padding: 12px 18px; }
 }
 @media (max-width: 560px) {
- .stat-cards { grid-template-columns: 1fr; }
+ /* کارت‌های آمار: دوسوتونه و فشرده به‌جای تک‌ستونِ خیلی بلند */
+ .stat-cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
+ .stat-card { padding: 12px 14px; gap: 2px; }
+ .stat-card .sc-top { margin-bottom: 4px; }
+ .stat-card .sc-icon { width: 34px; height: 34px; border-radius: 10px; }
+ .stat-card .sc-icon svg { width: 17px; height: 17px; }
+ .stat-card .sc-val { font-size: 19px; }
+ .stat-card .sc-label { font-size: 11px; line-height: 1.5; }
  .form-grid { grid-template-columns: 1fr; }
  .user-chip .uc-txt { display: none; }
 }
@@ -454,6 +463,8 @@ body.fs-lock { overflow: hidden; }
  .stat-cards { gap: 12px; }
  /* جدول‌های پنل — اسکرول افقی به‌جای ریختن صفحه */
  .p-content table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+ /* جدول‌های پیش‌نمایش داخل کارت‌های چارت — جمع‌شدن به عرض کارت (بدون min-width دمو) */
+ .chart-card .dtable { min-width: 0 !important; }
  .grids.g2, .grids.g3, .grids.g4 { gap: 14px; }
 }
 

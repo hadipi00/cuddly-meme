@@ -51,7 +51,7 @@ export default function ADashboard() {
  <Link to="/panel/admin/finance" className="btn btn-ghost btn-sm">همه تراکنش‌ها</Link>
  </div>
  <div className="dtable-wrap">
- <table className="dtable" style={{ minWidth: 480 }}>
+ <table className="dtable">
  <thead><tr><th>کد</th><th>کاربر</th><th>مبلغ</th><th>وضعیت</th></tr></thead>
  <tbody>
  {payments.slice(0, 5).map((p) => (
