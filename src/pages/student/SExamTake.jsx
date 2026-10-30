@@ -179,6 +179,16 @@ export default function SExamTake() {
    return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length) && !(typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length)
  }
  const sheetChoices = (q) => q.type === 'pdfmcq' ? (attempt.exam.choices_per_q || 4) : q.type === 'tf' ? 2 : (q.opts?.length || 4)
+ const flaggedCount = questions.filter((q) => flags.has(q.qid)).length
+ const firstBlankQ = questions.find((q) => !isAnswered(q))
+ const jumpTo = (qid) => {
+   setView('questions')
+   setTimeout(() => {
+     const el = document.getElementById(`q-${qid}`)
+     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+     if (el) { el.classList.remove('flashed'); void el.offsetWidth; el.classList.add('flashed') }
+   }, 140)
+ }
 
  /* ---------- ارسال ---------- */
  const doSubmit = async (auto = false) => {
@@ -203,13 +213,14 @@ export default function SExamTake() {
 
  /* ---------- رندر یک سوال ---------- */
  const renderQ = (q, i) => (
-  <div key={q.qid} id={`q-${q.qid}`} className={`exm-q ${flags.has(q.qid) ? '' : ''}`}>
+  <div key={q.qid} id={`q-${q.qid}`} className={`exm-q ${isAnswered(q) ? 'exm-answered' : ''}`}>
    <button className={`exm-mini exm-flagbtn ${flags.has(q.qid) ? 'on' : ''}`} onClick={() => toggleFlag(q.qid)} title="علامت برای مرور بعدی">
     <Icon name="bookmark" size={15} />
    </button>
    <div className="exm-q-head">
     <span className="exm-qnum">{faNum(i + 1)}</span>
     <div style={{ flex: 1 }}>
+     {!pdfMode && <div className="exm-q-typeline"><span className="tt">{typeLabel[q.type] || ''}</span><span className="tt">بارم {faNum(q.points)}</span>{q.topic && <span className="tt" style={{ color: 'var(--violet)' }}>{q.topic}</span>}</div>}
      <div className="exm-q-title">{pdfMode ? `سوال ${faNum(i + 1)} — پاسخ را در پاسخبرگ علامت بزنید` : q.body}</div>
      {!pdfMode && q.image && <img className="qimg" src={q.image} alt="" />}
     </div>
@@ -329,37 +340,63 @@ export default function SExamTake() {
    {view === 'sheet' && (
     <div className="exm-sheet">
      <div className="exm-sheet-card">
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap' }}>
-       <b>پاسخبرگ تستی</b>
+      <div className="exm-sheet-head">
+       <div className="exm-sheet-title">
+        <span className="ic"><Icon name="grid" size={18} /></span>
+        <div>
+         <b>پاسخبرگ تستی</b>
+         <div className="muted">{exam.title}</div>
+        </div>
+       </div>
        <span className="exm-answered-pill">پاسخ داده: <b>{faNum(answeredCount)}</b> از {faNum(questions.length)}</span>
+      </div>
+      <div className="exm-sheet-progress"><i style={{ width: `${questions.length ? Math.round((answeredCount / questions.length) * 100) : 0}%` }} /></div>
+      <div className="exm-sheet-legend">
+       <span className="lg"><span className="dot" style={{ background: 'var(--teal)', boxShadow: '0 0 8px rgba(45,212,191,.7)' }} />پاسخ داده شده</span>
+       <span className="lg"><span className="dot" style={{ background: 'var(--amber)' }} />علامت مرور</span>
+       <span className="lg"><span style={{ color: 'var(--amber)', fontWeight: 800 }}>✎</span>پاسخ متنی — در متن همان سوال</span>
       </div>
       <div className="exm-sheet-grid">
        {questions.map((q, i) => {
         const done = isAnswered(q)
         const nCh = sheetChoices(q)
         const val = answers[q.qid]
+        const pen = !isObjective(q.type) && !pdfMode
         return (
-         <div key={q.qid} className={`exm-sheet-cell ${done ? 'done' : ''} ${flags.has(q.qid) ? 'flagged' : ''}`}>
-          <div className="n" style={{ cursor: 'pointer' }} onClick={() => { setView('questions'); setTimeout(() => document.getElementById(`q-${q.qid}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120) }}>
-           {faNum(i + 1)}{!isObjective(q.type) && !pdfMode ? ' ✎' : ''}
+         <div key={q.qid} className={`exm-sheet-cell ${done ? 'done' : ''} ${pen ? 'pen' : ''} ${flags.has(q.qid) ? 'flagged' : ''}`}>
+          <div className="n" style={{ cursor: 'pointer' }} onClick={() => jumpTo(q.qid)}>
+           {faNum(i + 1)}{pen ? ' ✎' : ''}
           </div>
-          <div className="exm-bubbles">
-           {Array.from({ length: nCh }, (_, c) => {
-            const on = q.type === 'multi' ? (Array.isArray(val) && val.includes(c)) : val === c
-            return <button key={c} className={`exm-bubble ${on ? 'on' : ''}`} onClick={() => {
-              if (q.type === 'multi') setAns(q.qid, on ? (val || []).filter((x) => x !== c) : [...(val || []), c])
-              else if (val === c && q.type !== 'pdfmcq') clearAns(q.qid)
-              else setAns(q.qid, c)
-            }}>{faNum(c + 1)}</button>
-           })}
-          </div>
+          {pen ? (
+           <div style={{ fontSize: 10.5, color: 'var(--faint)', fontWeight: 700, padding: '3px 0' }}>پاسخ در متن سوال</div>
+          ) : (
+           <div className="exm-bubbles">
+            {Array.from({ length: nCh }, (_, c) => {
+             const on = q.type === 'multi' ? (Array.isArray(val) && val.includes(c)) : val === c
+             return <button key={c} className={`exm-bubble ${on ? 'on' : ''}`} aria-label={`سوال ${i + 1} گزینه ${c + 1}`} onClick={() => {
+               if (q.type === 'multi') setAns(q.qid, on ? (val || []).filter((x) => x !== c) : [...(val || []), c])
+               else if (val === c && q.type !== 'pdfmcq') clearAns(q.qid)
+               else setAns(q.qid, c)
+             }}>{faNum(c + 1)}</button>
+            })}
+           </div>
+          )}
          </div>
         )
        })}
       </div>
-      <p className="muted" style={{ fontSize: 11.5, marginTop: 14 }}>
-       ✎ = پاسخ این سوال در متن همان سوال نوشته می‌شود (تشریحی/جای خالی/وصل‌کردنی/مرتب‌کردنی) — روی شماره بزنید تا به سوال بپرید.
-      </p>
+      <div className="exm-sheet-foot">
+       <div className="sum">
+        <span style={{ color: 'var(--teal)' }}>✓ <b>{faNum(answeredCount)}</b> پاسخ داده</span>
+        <span>○ <b style={{ color: 'var(--text)' }}>{faNum(questions.length - answeredCount)}</b> بی‌پاسخ</span>
+        {!!flaggedCount && <span style={{ color: 'var(--amber)' }}>★ <b>{faNum(flaggedCount)}</b> علامت‌خورده</span>}
+       </div>
+       {!!firstBlankQ && answeredCount < questions.length && (
+        <button className="btn btn-soft btn-sm" onClick={() => jumpTo(firstBlankQ.qid)}>
+         <Icon name="arrowLeft" size={13} />برو به اولین بی‌پاسخ
+        </button>
+       )}
+      </div>
      </div>
     </div>
    )}

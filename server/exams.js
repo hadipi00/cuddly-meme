@@ -498,14 +498,23 @@ export function registerExamRoutes(app) {
     const attempts = db.prepare(`SELECT a.*, u.name AS student_name FROM exam_attempts a
       LEFT JOIN users u ON u.id = a.student_id WHERE a.exam_id = ? AND a.status IN ('submitted','graded','invalid')`).all(e.id)
     const perQ = qs.map((q) => {
-      let correct = 0, wrong = 0, blank = 0
+      let correct = 0, wrong = 0, blank = 0, gotSum = 0, answered = 0
       for (const a of attempts) {
         const ans = P(a.answers, {})[q.id]
-        if (ans === undefined || ans === null || ans === '') blank++
-        else if (isCorrect(e, q, ans)) correct++
+        if (ans === undefined || ans === null || ans === '') { blank++; continue }
+        answered++
+        if (q.type === 'essay') {
+          /* تشریحی: نرخ بر اساس نمره دستی ثبت‌شده — نه کلید */
+          const gp = Number(P(a.graded_pts, {})[q.id] || 0)
+          gotSum += gp
+          if (gp >= q.points) correct++
+          else wrong++
+        } else if (isCorrect(e, q, ans)) { correct++; gotSum += q.points }
         else wrong++
       }
-      return { n: q.n, qid: q.id, topic: q.topic, points: q.points, correct, wrong, blank, rate: attempts.length ? Math.round((correct / attempts.length) * 100) : 0 }
+      /* نرخ = نسبت نمره گرفته‌شده به بارم، فقط بین پاسخ‌دهندگان */
+      const rate = answered ? Math.round((gotSum / (q.points * answered)) * 100) : 0
+      return { n: q.n, qid: q.id, topic: q.topic, points: q.points, correct, wrong, blank, rate }
     })
     const scores = attempts.filter((a) => a.status !== 'invalid').map((a) => a.score || 0)
     const avg = scores.length ? scores.reduce((s, v) => s + v, 0) / scores.length : 0

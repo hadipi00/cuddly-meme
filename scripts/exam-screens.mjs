@@ -70,6 +70,28 @@ const main = async () => {
   await sp.screenshot({ path: OUT + '/6-student-answer-sheet.png', fullPage: false })
   await sctx.close()
 
+  /* --- دانش‌آموز دوم: آزمون طراحی‌شده (تایپ‌لاین + حباب پر + خانه تشریحی) --- */
+  const actx = await browser.newContext({ viewport: { width: 1360, height: 850 } })
+  const ap = await actx.newPage()
+  await loginIn(ap, { email: 'amir@demo.ir', password: '12345678' })
+  await ap.goto(BASE + '/panel/student/exams', { waitUntil: 'networkidle' })
+  await ap.evaluate(() => {
+    const cards = [...document.querySelectorAll('.card.pad')]
+    const c = cards.find((x) => x.textContent.includes('آزمون E2E فیزیک'))
+    ;[...(c?.querySelectorAll('button') || [])].find((b) => b.textContent.includes('شروع آزمون'))?.click()
+  })
+  await sleep(1800)
+  // دو گزینه را علامت بزن تا حباب پر دیده شود
+  await ap.evaluate(() => document.querySelectorAll('.exm-opt')[0]?.click())
+  await sleep(300)
+  await ap.evaluate(() => document.querySelectorAll('.exm-q')[1]?.querySelectorAll('.exm-opt')[1]?.click())
+  await sleep(900)
+  await ap.screenshot({ path: OUT + '/5b-student-questions.png', fullPage: false })
+  await ap.evaluate(() => { [...document.querySelectorAll('.exm-switchbtn')].find((b) => b.textContent.includes('پاسخبرگ'))?.click() })
+  await sleep(700)
+  await ap.screenshot({ path: OUT + '/6b-student-sheet-mixed.png', fullPage: false })
+  await actx.close()
+
   /* --- کارنامه سارا --- */
   const rctx = await browser.newContext({ viewport: { width: 1360, height: 900 } })
   const rp = await rctx.newPage()

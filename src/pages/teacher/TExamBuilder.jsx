@@ -18,7 +18,25 @@ const TYPES = [
   { id: 'order', label: 'مرتب‌کردنی', icon: '۸' },
 ]
 const typeLabel = (t) => TYPES.find((x) => x.id === t)?.label || t
+/* رنگ اختصاصی هر نوع سوال — برای نشان رنگی */
+const TYPE_COLOR = {
+  mcq: '#2dd4bf', multi: '#a78bfa', tf: '#38bdf8', blank: '#fbbf24',
+  short: '#fb923c', essay: '#f472b6', match: '#34d399', order: '#fb7185',
+}
+const typeBadge = (t) => (
+  <span className="exm-typebadge" style={{ background: `${TYPE_COLOR[t] || '#94a3b8'}1f`, color: TYPE_COLOR[t] || '#94a3b8' }}>{typeLabel(t)}</span>
+)
 const greek = ['۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹', '۱۰']
+const TYPE_HELP = {
+  mcq: 'یک پاسخ صحیح — تصحیح خودکار',
+  multi: 'چند پاسخ صحیح — نمره جزئی',
+  tf: 'دوگزینه سریع درست/نادرت',
+  blank: 'چند پاسخ قابل قبول (مثلاً «۲» و «دو»)',
+  short: 'مقایسه دقیق با نرمال‌سازی ارقام فارسی',
+  essay: 'در پنل شما دستی نمره می‌دهید',
+  match: 'ستون راست به ستون چپ وصل می‌شود',
+  order: 'ترتیب صحیح را دانش‌آموز می‌چیند',
+}
 
 const newQuestion = (type) => {
   const base = { type, body: '', image: '', points: 1, topic: '', expl: '' }
@@ -347,19 +365,32 @@ export default function TExamBuilder() {
        {cur ? <QuestionForm q={cur} idx={active} upd={(p) => updQ(active, p)} /> : <p className="muted">سوالی نیست — از دکمه‌های بالا یک نوع سوال انتخاب کنید.</p>}
       </div>
       <div className="card pad mt16">
-       <b className="small">لیست سوال‌ها — با کشیدن جابه‌جا کنید</b>
-       <p className="muted small" style={{ marginBottom: 10 }}>ترتیب نمایش برای دانش‌آموز (اگر «ترتیب تصادفی» خاموش باشد).</p>
+       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+         <b className="small">لیست سوال‌ها — با کشیدن جابه‌جا کنید</b>
+         <p className="muted small" style={{ marginBottom: 10 }}>ترتیب نمایش برای دانش‌آموز (اگر «ترتیب تصادفی» خاموش باشد).</p>
+        </div>
+        {!!questions.length && (
+         <div className="exm-sumstrip" style={{ marginTop: 0 }}>
+          <span className="st teal"><Icon name="list" size={12} />سوال: <b>{faNum(questions.length)}</b></span>
+          <span className="st violet"><Icon name="zap" size={12} />مجموع بارم: <b>{faNum(questions.reduce((s, q) => s + (Number(q.points) || 1), 0))}</b></span>
+          <span className="st amber"><Icon name="target" size={12} />موضوع: <b>{faNum(new Set(questions.map((q) => q.topic).filter(Boolean)).size)}</b></span>
+          <span className="st green"><Icon name="pie" size={12} />خودکار: <b>{faNum(questions.filter((q) => q.type !== 'essay').length)}</b></span>
+         </div>
+        )}
+       </div>
        {questions.map((q, i) => (
-        <div key={i} className={`exm-qcard ${dragRef.current === i ? 'dragging' : ''}`} draggable
-          onDragStart={() => { dragRef.current = i }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(i)}>
+        <div key={i} className={`exm-qcard ${dragRef.current === i ? 'dragging' : ''} ${i === active ? 'active' : ''}`} draggable
+          onDragStart={() => { dragRef.current = i }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(i)}
+          onClick={() => setActive(i)}>
          <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
           <span className="exm-grip" title="بکشید">⠿</span>
           <span className="exm-qnum">{faNum(i + 1)}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
-           <div className="row" style={{ gap: 8, marginBottom: 4 }}>
-            <span className="chip" style={{ padding: '2px 9px', fontSize: 11 }}>{typeLabel(q.type)}</span>
+           <div className="row" style={{ gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+            {typeBadge(q.type)}
             {q.topic && <span className="chip" style={{ padding: '2px 9px', fontSize: 11 }}>{q.topic}</span>}
-            <span className="muted" style={{ fontSize: 11 }}>بارم {faNum(q.points)}</span>
+            <span className="exm-points-pill">بارم {faNum(q.points)}</span>
            </div>
            <div className="exm-qbody">{q.body || <span className="muted">بدون متن…</span>}</div>
            {(q.type === 'mcq' || q.type === 'multi' || q.type === 'tf') && (
@@ -372,7 +403,7 @@ export default function TExamBuilder() {
            )}
            {(q.type === 'blank' || q.type === 'short') && <div className="exm-qopts">{(q.correct || []).filter((c) => c?.trim()).map((c, j) => <div key={j} className="exm-qopt right"><span className="dot" />{c}</div>)}</div>}
           </div>
-          <div className="exm-qacts">
+          <div className="exm-qacts" onClick={(e) => e.stopPropagation()}>
            <button className="exm-mini" onClick={() => moveQ(i, i - 1)} title="بالا"><Icon name="arrowUp" size={14} /></button>
            <button className="exm-mini" style={{ transform: 'rotate(180deg)' }} onClick={() => moveQ(i, i + 1)} title="پایین"><Icon name="arrowUp" size={14} /></button>
            <button className="exm-mini" onClick={() => dupQ(i)} title="کپی"><Icon name="file" size={13} /></button>
@@ -395,20 +426,24 @@ export default function TExamBuilder() {
      <div>
       <div className="card pad">
        <b className="small">انواع سوال — راهنما</b>
-       <ul className="muted small" style={{ lineHeight: 2.2, marginTop: 8, paddingRight: 18 }}>
-        <li><b>گزینه‌ای:</b> یک پاسخ صحیح، تصحیح خودکار</li>
-        <li><b>چندگزینه‌ای:</b> چند پاسخ صحیح، نمره جزئی</li>
-        <li><b>درست/نادرت:</b> دوگزینه سریع</li>
-        <li><b>جای خالی:</b> چند پاسخ قابل قبول (مثلاً «۲» و «دو»)</li>
-        <li><b>کوتاه‌پاسخ:</b> مقایسه دقیق با نرمال‌سازی ارقام</li>
-        <li><b>تشریحی:</b> در پنل شما دستی نمره می‌دهید</li>
-        <li><b>وصل‌کردنی:</b> ستون راست به چپ</li>
-        <li><b>مرتب‌کردنی:</b> ترتیب صحیح را با فلش‌ها بچینید</li>
-       </ul>
+       <div className="mt12">
+        {TYPES.map((t) => (
+         <div key={t.id} className="exm-helpcard">
+          <span className="ic" style={{ background: `${TYPE_COLOR[t.id]}1f`, color: TYPE_COLOR[t.id] }}>{t.icon}</span>
+          <div>
+           <b>{t.label}</b>
+           <p>{TYPE_HELP[t.id]}</p>
+          </div>
+         </div>
+        ))}
+       </div>
       </div>
       <div className="card pad mt16" style={{ background: 'rgba(45,212,191,.06)' }}>
-       <b className="small">🛡️ امنیت آزمون</b>
-       <p className="muted small" style={{ marginTop: 8, lineHeight: 2 }}>
+       <div className="row" style={{ gap: 9, marginBottom: 8 }}>
+        <span className="ic" style={{ width: 28, height: 28, borderRadius: 9, background: 'rgba(45,212,191,.14)', color: 'var(--teal)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={14} /></span>
+        <b className="small">امنیت آزمون — چندلایه</b>
+       </div>
+       <p className="muted small" style={{ lineHeight: 2 }}>
         پاسخ‌های صحیح هرگز به مرورگر دانش‌آموز نمی‌روند؛ تصحیح فقط روی سرور است، هر دانش‌آموز ترتیب متفاوتی می‌بیند و
         خروج از تب، تلاش کپی و تکمیل غیرعادی سریع در گزارش امنیتی ثبت می‌شود. تنظیم دقیق در تب «تنظیمات و امنیت».
        </p>

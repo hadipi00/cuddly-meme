@@ -167,7 +167,7 @@ const main = async () => {
   await sp.waitForURL('**/result', { timeout: 10000 }).catch(() => {})
   ok('کارنامه باز شد', sp.url().includes('/result'), sp.url())
   await sp.waitForSelector('.exm-report', { timeout: 8000 }).catch(() => {})
-  const scoreTxt = await sp.evaluate(() => document.querySelector('.exm-score-tile.big .v')?.textContent || '')
+  const scoreTxt = await sp.evaluate(() => document.querySelector('.exm-ring .mid .lbl')?.textContent || '')
   ok('نمره ۲ از ۳ (تشریحی در انتظار)', scoreTxt.includes('۲'), 'score=' + scoreTxt)
   ok('دکمه ذخیره PDF', await sp.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('ذخیره PDF'))))
   const rows = await sp.evaluate(() => document.querySelectorAll('.exm-rtable tbody tr').length)
@@ -190,7 +190,7 @@ const main = async () => {
   console.log('— ۷) دانش‌آموز: کارنامه به‌روز شد')
   await sp.reload({ waitUntil: 'networkidle' })
   await sp.waitForSelector('.exm-report', { timeout: 8000 }).catch(() => {})
-  const score2 = await sp.evaluate(() => document.querySelector('.exm-score-tile.big .v')?.textContent || '')
+  const score2 = await sp.evaluate(() => document.querySelector('.exm-ring .mid .lbl')?.textContent || '')
   ok('کارنامه: ۳ از ۳ + رتبه', score2.includes('۳') && await sp.evaluate(() => document.body.textContent.includes('رتبه')), 'score=' + score2)
 
   console.log('— ۸) حالت PDF: برگه + کلید پاسخبرگ')
@@ -254,7 +254,7 @@ const main = async () => {
   await sp.evaluate(() => { [...document.querySelectorAll('.modal button')].find((b) => b.textContent.includes('تحویل نهایی'))?.click() })
   await sp.waitForURL('**/result', { timeout: 10000 }).catch(() => {})
   await sp.waitForSelector('.exm-report', { timeout: 8000 }).catch(() => {})
-  const pdfScore = await sp.evaluate(() => document.querySelector('.exm-score-tile.big .v')?.textContent || '')
+  const pdfScore = await sp.evaluate(() => document.querySelector('.exm-ring .mid .lbl')?.textContent || '')
   ok('کارنامه PDF: ۱۰ از ۲۰ (۱ درست، ۱ غلط)', pdfScore.includes('۱۰'), 'score=' + pdfScore)
 
   console.log('— ۹) موبایل ۳۹۰px (دانش‌آموز دوم)')

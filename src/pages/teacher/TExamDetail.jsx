@@ -79,11 +79,11 @@ export default function TExamDetail() {
 
    {/* کارت‌های آمار */}
    <div className="exm-score-hero mb24">
-    <div className="exm-score-tile big"><div className="v">{faNum(s.participants)}</div><div className="l">شرکت‌کننده</div></div>
-    <div className="exm-score-tile"><div className="v">{faNum(s.avg)}</div><div className="l">میانگین از {faNum(Math.round(s.max_score || 0))}</div></div>
-    <div className="exm-score-tile"><div className="v" style={{ color: '#34d399' }}>{s.highest != null ? faNum(s.highest) : '—'}</div><div className="l">بالاترین نمره</div></div>
-    <div className="exm-score-tile"><div className="v" style={{ color: 'var(--red)' }}>{s.lowest != null ? faNum(s.lowest) : '—'}</div><div className="l">پایین‌ترین نمره</div></div>
-    <div className="exm-score-tile"><div className="v">{faNum(s.avg_percent || 0)}٪</div><div className="l">میانگین درصدی</div></div>
+    <div className="exm-score-tile big"><div className="ic" style={{ background: 'rgba(45,212,191,.14)', color: 'var(--teal)' }}><Icon name="users" size={16} /></div><div className="v">{faNum(s.participants)}</div><div className="l">شرکت‌کننده</div></div>
+    <div className="exm-score-tile acc-s"><div className="ic"><Icon name="activity" size={16} /></div><div className="v">{faNum(s.avg)}</div><div className="l">میانگین از {faNum(Math.round(s.max_score || 0))}</div></div>
+    <div className="exm-score-tile acc-g"><div className="ic"><Icon name="arrowUp" size={16} /></div><div className="v">{s.highest != null ? faNum(s.highest) : '—'}</div><div className="l">بالاترین نمره</div></div>
+    <div className="exm-score-tile acc-r"><div className="ic"><Icon name="chevronDown" size={16} /></div><div className="v">{s.lowest != null ? faNum(s.lowest) : '—'}</div><div className="l">پایین‌ترین نمره</div></div>
+    <div className="exm-score-tile acc-v"><div className="ic"><Icon name="pie" size={16} /></div><div className="v">{faNum(s.avg_percent || 0)}٪</div><div className="l">میانگین درصدی</div></div>
    </div>
 
    {/* تحلیل سوال‌ها */}
@@ -97,7 +97,7 @@ export default function TExamDetail() {
       {ana.per_question.map((q) => (
        <div key={q.qid} className="exm-tbar">
         <span className="name">سوال {faNum(q.n)}{q.topic ? ` — ${q.topic}` : ''}</span>
-        <div className="bar"><i style={{ width: `${q.rate}%` }} /></div>
+        <div className="bar"><i style={{ width: `${q.rate}%`, background: q.rate < 40 ? 'linear-gradient(90deg,#fb7185,#f43f5e)' : q.rate < 70 ? 'linear-gradient(90deg,#fbbf24,#fb923c)' : 'linear-gradient(90deg,#2dd4bf,#38bdf8)' }} /></div>
         <span className="pct">{faNum(q.rate)}٪</span>
         <span className="muted" style={{ fontSize: 11, minWidth: 110 }}>✓{faNum(q.correct)} ✗{faNum(q.wrong)} —{faNum(q.blank)}</span>
        </div>
@@ -124,7 +124,13 @@ export default function TExamDetail() {
 
    {/* لیست تلاش‌ها */}
    <div className="card pad">
-    <b>پاسخ‌برگ‌های دریافتی و گزارش امنیتی</b>
+    <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+     <div className="row" style={{ gap: 9 }}>
+      <span className="ic" style={{ width: 28, height: 28, borderRadius: 9, background: 'rgba(45,212,191,.12)', color: 'var(--teal)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={14} /></span>
+      <b>پاسخ‌برگ‌های دریافتی و گزارش امنیتی</b>
+     </div>
+     {!!attempts.length && <span className="badge b-teal">{faNum(attempts.length)} پاسخبرگ</span>}
+    </div>
     {!attempts.length && <p className="muted small mt12">هنوز کسی در آزمون شرکت نکرده است.</p>}
     {!!attempts.length && (
      <div style={{ overflowX: 'auto', marginTop: 12 }}>

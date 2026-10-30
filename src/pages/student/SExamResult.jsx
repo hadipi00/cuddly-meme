@@ -21,8 +21,9 @@ const flagNote = {
   rejected: 'این آزمون توسط معلم رد شده است (تخلف امنیتی).',
   reviewed_ok: 'این آزمون توسط معلم بررسی و تأیید شد.',
 }
+const RING_R = 52, RING_C = 2 * Math.PI * RING_R
 
-/** کارنامه تحلیلی — نمره، رتبه، پاسخ‌ها، تحلیل موضوعی + ذخیره PDF */
+/** کارنامه تحلیلی — هیرو با حلقه نمره، آمار رنگی، مقایسه کلاس، جدول سوال‌به‌سوال، تحلیل موضوعی + ذخیره PDF */
 export default function SExamResult() {
  const { eid } = useParams()
  const nav = useNavigate()
@@ -60,10 +61,10 @@ export default function SExamResult() {
  if (attempt.status === 'invalid') {
    return (
     <div className="exm-report">
-     <div style={{ textAlign: 'center', padding: '30px 10px' }}>
-      <div style={{ fontSize: 44 }}>🚨</div>
-      <h2>آزمون شما در انتظار بررسی معلم است</h2>
-      <p className="muted" style={{ lineHeight: 2, marginTop: 10 }}>
+     <div className="exm-report-body" style={{ textAlign: 'center', padding: '46px 24px' }}>
+      <div style={{ fontSize: 46, marginBottom: 8 }}>🚨</div>
+      <h2 style={{ marginBottom: 8 }}>آزمون شما در انتظار بررسی معلم است</h2>
+      <p className="muted" style={{ lineHeight: 2, marginTop: 10, maxWidth: 480, marginInline: 'auto' }}>
        به‌علت تخلف‌های امنیتی ثبت‌شده (مثل خروج بیش از حد از تب)، این آزمون برای بررسی توسط معلم ارجاع شده است.
        بعد از بررسی معلم، نتیجه در همین صفحه نمایش داده می‌شود.
       </p>
@@ -72,6 +73,8 @@ export default function SExamResult() {
     </div>
    )
  }
+
+ const gradeWord = pct >= 90 ? 'عالی 🌟' : pct >= 75 ? 'خیلی خوب 👏' : pct >= 50 ? 'قابل قبول' : 'نیاز به تلاش بیشتر 💪'
 
  return (
   <div>
@@ -84,98 +87,133 @@ export default function SExamResult() {
    </div>
 
    <div className="exm-report">
-    <div className="exm-report-head">
-     <div>
-      <h2 style={{ marginBottom: 4 }}>کارنامه تحلیلی</h2>
-      <b>{exam.title}</b>
-      <p className="muted small" style={{ marginTop: 4 }}>مدرس: {exam.teacher_name} — آزمون: {faDate(attempt.started_at)}</p>
+    {/* ===== هیرو: عنوان + حلقه نمره ===== */}
+    <div className="exm-hero">
+     <div className="exm-hero-info">
+      <span className="exm-hero-badge"><Icon name="sparkles" size={13} />گزارش تحلیلی آزمون</span>
+      <h2>کارنامه تحلیلی</h2>
+      <div className="ttl">{exam.title}</div>
+      <div className="exm-hero-chips">
+       <span className="hc"><Icon name="user" size={12} />مدرس: {exam.teacher_name}</span>
+       <span className="hc"><Icon name="calendar" size={12} />{faDate(attempt.started_at)}</span>
+       {usedMin != null && <span className="hc"><Icon name="clock" size={12} />{faNum(usedMin)} دقیقه</span>}
+       {rank && <span className="hc"><Icon name="award" size={12} />رتبه {faNum(rank)} از {faNum(cls.count)}</span>}
+       <span className="hc">{gradeWord}</span>
+      </div>
      </div>
-     <div className="exm-score-tile big" style={{ minWidth: 170 }}>
-      <div className="v">{faNum(score)}</div>
-      <div className="l">از {faNum(max)} نمره ({faNum(pct)}٪)</div>
+     <div className="exm-ring" aria-label={`درصد موفقیت ${pct}`}>
+      <svg viewBox="0 0 120 120">
+       <defs>
+        <linearGradient id="exmring" x1="0%" y1="0%" x2="100%" y2="100%">
+         <stop offset="0%" stopColor="#2dd4bf" /><stop offset="55%" stopColor="#38bdf8" /><stop offset="100%" stopColor="#a78bfa" />
+        </linearGradient>
+       </defs>
+       <circle className="track" cx="60" cy="60" r={RING_R} fill="none" strokeWidth="10" />
+       <circle className="fill" cx="60" cy="60" r={RING_R} fill="none" strokeWidth="10"
+         strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - pct / 100)} />
+      </svg>
+      <div className="mid">
+       <div className="pct">{faNum(pct)}٪</div>
+       <div className="lbl">نمره {faNum(score)} از {faNum(max)}</div>
+      </div>
      </div>
     </div>
 
-    {flags.map((f) => (
-     <div key={f} className="exm-no-print" style={{ background: 'rgba(251,191,36,.1)', border: '1px solid rgba(251,191,36,.4)', borderRadius: 12, padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>
-      {flagNote[f] || f}
+    <div className="exm-report-body">
+     {flags.map((f) => (
+      <div key={f} className="exm-no-print" style={{ background: 'rgba(251,191,36,.1)', border: '1px solid rgba(251,191,36,.4)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, fontSize: 13 }}>
+       {flagNote[f] || f}
+      </div>
+     ))}
+
+     {/* ===== خلاصه آماری ===== */}
+     <div className="exm-score-hero">
+      <div className="exm-score-tile acc-g"><div className="ic"><Icon name="check" size={16} /></div><div className="v">{faNum(correctN)}</div><div className="l">پاسخ درست</div></div>
+      <div className="exm-score-tile acc-r"><div className="ic"><Icon name="x" size={16} /></div><div className="v">{faNum(wrongN)}</div><div className="l">پاسخ غلط</div></div>
+      <div className="exm-score-tile acc-b"><div className="ic"><Icon name="target" size={16} /></div><div className="v">{faNum(blankN)}</div><div className="l">نزده</div></div>
+      {!!pendingN && <div className="exm-score-tile acc-a"><div className="ic"><Icon name="clock" size={16} /></div><div className="v">{faNum(pendingN)}</div><div className="l">در انتظار تصحیح</div></div>}
+      {rank && <div className="exm-score-tile acc-v"><div className="ic"><Icon name="award" size={16} /></div><div className="v">{faNum(rank)}</div><div className="l">رتبه در کلاس</div></div>}
+      {usedMin != null && <div className="exm-score-tile acc-s"><div className="ic"><Icon name="activity" size={16} /></div><div className="v">{faNum(usedMin)}</div><div className="l">دقیقه زمان مصرفی</div></div>}
      </div>
-    ))}
 
-    {/* خلاصه آماری */}
-    <div className="exm-score-hero">
-     <div className="exm-score-tile"><div className="v" style={{ color: '#34d399' }}>{faNum(correctN)}</div><div className="l">پاسخ درست</div></div>
-     <div className="exm-score-tile"><div className="v" style={{ color: 'var(--red)' }}>{faNum(wrongN)}</div><div className="l">پاسخ غلط</div></div>
-     <div className="exm-score-tile"><div className="v">{faNum(blankN)}</div><div className="l">نزده</div></div>
-     {!!pendingN && <div className="exm-score-tile"><div className="v" style={{ color: '#fbbf24' }}>{faNum(pendingN)}</div><div className="l">در انتظار تصحیح</div></div>}
-     {rank && <div className="exm-score-tile"><div className="v">رتبه {faNum(rank)}</div><div className="l">از {faNum(cls.count)} شرکت‌کننده</div></div>}
-     {usedMin != null && <div className="exm-score-tile"><div className="v">{faNum(usedMin)}</div><div className="l">دقیقه زمان مصرفی</div></div>}
-    </div>
+     {/* ===== مقایسه با کلاس ===== */}
+     {!!cls.count && (
+      <div className="exm-sec">
+       <div className="hd">
+        <span className="ic"><Icon name="users" size={14} /></span>
+        <b>جایگاه شما نسبت به کلاس</b>
+        <span className="side muted small">میانگین کلاس: {faNum(cls.avg)}{cls.highest != null ? ` — بالاترین: ${faNum(cls.highest)}` : ''}</span>
+       </div>
+       <div className="exm-tbars">
+        <div className="exm-tbar">
+         <span className="name">شما</span>
+         <div className="bar"><i style={{ width: `${pct}%` }} /></div>
+         <span className="pct">{faNum(pct)}٪</span>
+        </div>
+        <div className="exm-tbar">
+         <span className="name">میانگین کلاس</span>
+         <div className="bar"><i style={{ width: `${max ? Math.round((cls.avg / max) * 100) : 0}%`, background: 'linear-gradient(90deg,#94a3b8,#64748b)', boxShadow: 'none' }} /></div>
+         <span className="pct" style={{ color: 'var(--muted)' }}>{faNum(max ? Math.round((cls.avg / max) * 100) : 0)}٪</span>
+        </div>
+       </div>
+      </div>
+     )}
 
-    {/* مقایسه با کلاس */}
-    {!!cls.count && (
-     <div className="mb24">
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
-       <b className="small">جایگاه شما نسبت به کلاس</b>
-       <span className="muted small">میانگین کلاس: {faNum(cls.avg)} {cls.highest != null ? `— بالاترین: ${faNum(cls.highest)}` : ''}</span>
+     {/* ===== جدول سوال‌به‌سوال ===== */}
+     <div className="exm-sec">
+      <div className="hd">
+       <span className="ic"><Icon name="list" size={14} /></span>
+       <b>تحلیل سوال‌به‌سوال</b>
+       <span className="side muted small">{faNum(items.length)} سوال</span>
       </div>
-      <div className="exm-tbar">
-       <span className="name">شما</span>
-       <div className="bar"><i style={{ width: `${pct}%` }} /></div>
-       <span className="pct">{faNum(pct)}٪</span>
-      </div>
-      <div className="exm-tbar" style={{ marginTop: 6 }}>
-       <span className="name">میانگین کلاس</span>
-       <div className="bar"><i style={{ width: `${max ? Math.round((cls.avg / max) * 100) : 0}%`, background: 'linear-gradient(90deg,#94a3b8,#64748b)' }} /></div>
-       <span className="pct">{faNum(max ? Math.round((cls.avg / max) * 100) : 0)}٪</span>
+      <div className="exm-tablewrap" style={{ overflowX: 'auto' }}>
+       <table className="exm-rtable">
+        <thead><tr>
+         <th>#</th><th>پاسخ شما</th><th>پاسخ صحیح</th><th>نتیجه</th><th>نمره</th><th>توضیح مدرس</th>
+        </tr></thead>
+        <tbody>
+         {items.map((it) => (
+          <tr key={it.n}>
+           <td><b>{faNum(it.n)}</b><div className="muted" style={{ fontSize: 10.5 }}>{typeLabel[it.type] || ''}{it.topic ? ` — ${it.topic}` : ''}</div></td>
+           <td>{it.your || <span className="muted">بی‌پاسخ</span>}</td>
+           <td style={{ color: '#34d399' }}>{it.correct || '—'}</td>
+           <td>{resTag(it.res)}</td>
+           <td style={{ whiteSpace: 'nowrap' }}>{faNum(it.got)} / {faNum(it.points)}</td>
+           <td className="muted" style={{ fontSize: 12 }}>{it.expl || ''}</td>
+          </tr>
+         ))}
+        </tbody>
+       </table>
       </div>
      </div>
-    )}
 
-    {/* جدول پاسخ‌ها */}
-    <b className="small">تحلیل سوال‌به‌سوال</b>
-    <div style={{ overflowX: 'auto', marginTop: 10, marginBottom: 24 }}>
-     <table className="exm-rtable">
-      <thead><tr>
-       <th>#</th><th>پاسخ شما</th><th>پاسخ صحیح</th><th>نتیجه</th><th>نمره</th><th>توضیح مدرس</th>
-      </tr></thead>
-      <tbody>
-       {items.map((it) => (
-        <tr key={it.n}>
-         <td><b>{faNum(it.n)}</b><div className="muted" style={{ fontSize: 10.5 }}>{typeLabel[it.type] || ''}{it.topic ? ` — ${it.topic}` : ''}</div></td>
-         <td>{it.your || <span className="muted">بی‌پاسخ</span>}</td>
-         <td style={{ color: '#34d399' }}>{it.correct || '—'}</td>
-         <td>{resTag(it.res)}</td>
-         <td>{faNum(it.got)} / {faNum(it.points)}</td>
-         <td className="muted" style={{ fontSize: 12 }}>{it.expl || ''}</td>
-        </tr>
-       ))}
-      </tbody>
-     </table>
-    </div>
-
-    {/* تحلیل موضوعی */}
-    {Object.keys(topics).length > 1 && (
-     <>
-      <b className="small">تحلیل موضوعی — نقاط قوت و ضعف شما</b>
-      <div className="exm-tbars mt12 mb24">
-       {Object.entries(topics).map(([name, t]) => {
-        const rate = t.total ? Math.round((t.got / t.total) * 100) : 0
-        return (
-         <div key={name} className="exm-tbar">
-          <span className="name">{name}</span>
-          <div className="bar"><i style={{ width: `${rate}%`, background: rate < 40 ? 'linear-gradient(90deg,#fb7185,#f43f5e)' : rate < 70 ? 'linear-gradient(90deg,#fbbf24,#fb923c)' : 'linear-gradient(90deg,#2dd4bf,#38bdf8)' }} /></div>
-          <span className="pct">{faNum(rate)}٪</span>
-         </div>
-        )
-       })}
+     {/* ===== تحلیل موضوعی ===== */}
+     {Object.keys(topics).length > 1 && (
+      <div className="exm-sec">
+       <div className="hd">
+        <span className="ic"><Icon name="pie" size={14} /></span>
+        <b>تحلیل موضوعی — نقاط قوت و ضعف شما</b>
+       </div>
+       <div className="exm-tbars">
+        {Object.entries(topics).map(([name, t]) => {
+         const rate = t.total ? Math.round((t.got / t.total) * 100) : 0
+         return (
+          <div key={name} className="exm-tbar">
+           <span className="name">{name}</span>
+           <div className="bar"><i style={{ width: `${rate}%`, background: rate < 40 ? 'linear-gradient(90deg,#fb7185,#f43f5e)' : rate < 70 ? 'linear-gradient(90deg,#fbbf24,#fb923c)' : 'linear-gradient(90deg,#2dd4bf,#38bdf8)' }} /></div>
+           <span className="pct">{faNum(rate)}٪</span>
+          </div>
+         )
+        })}
+       </div>
       </div>
-     </>
-    )}
+     )}
 
-    <p className="muted" style={{ fontSize: 11.5, textAlign: 'center' }}>
-     این کارنامه توسط سامانه مدرس‌یار تولید شده است — با دکمه «ذخیره PDF» بالای صفحه قابل نگهداری است.
-    </p>
+     <p className="exm-report-note">
+      <Icon name="shield" size={13} />
+      این کارنامه توسط سامانه مدرس‌یار تولید شده است — با دکمه «ذخیره PDF» بالای صفحه قابل نگهداری است.
+     </p>
+    </div>
    </div>
   </div>
  )
