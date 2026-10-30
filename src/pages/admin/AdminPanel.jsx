@@ -44,7 +44,7 @@ const nav = [
  group: 'پشتیبانی و محتوا',
  items: [
  { to: '/panel/admin/support', icon: 'chat', label: 'تیکت‌ها و نظرات' },
- { to: '/panel/admin/content', icon: 'file', label: 'وبلاگ و بنرها' },
+ { to: '/panel/admin/content', icon: 'file', label: 'محتوا و ویرایش متون' },
  ],
  },
  {

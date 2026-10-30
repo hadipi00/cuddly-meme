@@ -127,6 +127,16 @@ try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAUL
 try { db.exec('ALTER TABLE classes ADD COLUMN board_bg TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
+/* ویرایش متون سایت از پنل مدیریت — «متن اصلی → متن جایگزین» (خالی = حذف متن) */
+db.exec(`
+CREATE TABLE IF NOT EXISTS content_overrides (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  find_text    TEXT NOT NULL UNIQUE,
+  replace_text TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL
+);
+`)
+
 /* مهاجرت داده: جلسه‌های برگزارشده قدیمی (کلاس‌هایی که قبل از این قابلیت پایان یافتند) */
 try {
   const ended = db.prepare("SELECT id, started_at, ended_at FROM classes WHERE status='ended' AND started_at IS NOT NULL AND ended_at IS NOT NULL").all()

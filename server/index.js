@@ -15,6 +15,7 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import { db, JWT_SECRET, publicUser, classRow } from './db.js'
+import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -698,6 +699,65 @@ setInterval(() => {
     if (!room.teacher && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
   }
 }, 10_000).unref()
+
+/* =====================================================================
+   ابزار ویرایش متون سایت (شبیه المنتور) — جستجوی متن در همه صفحات
+   + جایگزینی/حذف زنده از پنل مدیریت. متن اصلی در کد نمی‌سوزد؛
+   یک لایه «جایگزینی» در مرورگر همه‌جا اعمال می‌شود.
+   ===================================================================== */
+app.get('/api/content/overrides', (req, res) => {
+  const overrides = db.prepare(
+    'SELECT id, find_text AS find, replace_text AS replace, created_at AS at FROM content_overrides ORDER BY id DESC'
+  ).all()
+  res.json({ overrides })
+})
+
+app.post('/api/content/overrides', requireRole('admin'), (req, res) => {
+  const find = String(req.body?.find || '').trim()
+  const replace = String(req.body?.replace ?? '')
+  if (find.length < 2) return res.status(400).json({ error: 'متن اصلی حداقل ۲ حرف باید باشد' })
+  if (replace.includes(find)) return res.status(400).json({ error: 'متن جایگزین نباید شامل متن اصلی باشد (حلقه بی‌نهایت)' })
+  if (overridesFreeze(replace, find)) return res.status(400).json({ error: 'این تغییر با یک جایگزینی دیگر تداخل چرخه‌ای دارد' })
+  db.prepare(
+    'INSERT INTO content_overrides (find_text, replace_text, created_at) VALUES (?,?,?) ' +
+    'ON CONFLICT(find_text) DO UPDATE SET replace_text = excluded.replace_text, created_at = excluded.created_at'
+  ).run(find, replace, now())
+  res.json({ ok: true })
+})
+
+app.delete('/api/content/overrides/:id', requireRole('admin'), (req, res) => {
+  db.prepare('DELETE FROM content_overrides WHERE id = ?').run(Number(req.params.id) || 0)
+  res.json({ ok: true })
+})
+
+app.get('/api/content/texts', requireRole('admin'), (req, res) => {
+  const q = String(req.query.q || '')
+  res.json(searchIndex(q))
+})
+
+app.post('/api/content/reindex', requireRole('admin'), (req, res) => {
+  const r = buildIndex(true)
+  res.json({ ok: true, texts: r.items.length, files: r.files })
+})
+
+/* تشخیص چرخه: A→B و B→A نباید هم‌زمان مجاز باشند */
+function overridesFreeze(replace, find) {
+  if (!replace) return false
+  const rows = db.prepare('SELECT find_text, replace_text FROM content_overrides').all()
+  const map = new Map(rows.map((r) => [r.find_text, r.replace_text]))
+  map.set(find, replace)
+  // اگر زنجیره از هر کلید بیشتر از تعداد کلیدها طول کشید → چرخه
+  for (const start of map.keys()) {
+    let cur = start, seen = new Set()
+    while (map.has(cur)) {
+      if (seen.has(cur)) return true
+      seen.add(cur)
+      cur = map.get(cur)
+      if (seen.size > map.size) return true
+    }
+  }
+  return false
+}
 
 /* ---------------- سلام سرور ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))

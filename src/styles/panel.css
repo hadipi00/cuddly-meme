@@ -541,3 +541,16 @@ body.fs-lock { overflow: hidden; }
  .ctl:hover { transform: none; }
  .mk-card:hover { transform: none; }
 }
+
+/* ---------- ابزار ویرایش متون سایت (پنل مدیریت) ---------- */
+.tx-item {
+ border: 1px solid var(--line2); border-radius: var(--r-md);
+ padding: 12px 14px; margin-bottom: 10px; background: var(--well-soft, rgba(148,163,184,0.04));
+}
+.tx-item:last-child { margin-bottom: 0; }
+.tx-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tx-text { font-size: 13.5px; line-height: 1.9; word-break: break-word; }
+.tx-pages { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.tx-actions { margin-top: 10px; }
+.tx-editor { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line2); }
+.badge.b-teal { background: rgba(45, 212, 191, 0.12); color: var(--teal); }

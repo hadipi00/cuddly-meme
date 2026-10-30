@@ -9,6 +9,7 @@ import './styles/tw.css'
 import './styles/base.css'
 import './styles/panel.css'
 import './styles/theme.css'
+import { initTextOverrides } from './services/textOverrides'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
  <React.StrictMode>
@@ -21,3 +22,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
  </BrowserRouter>
  </React.StrictMode>
 )
+
+/* ویرایش متون سایت از پنل مدیریت — لایه جایگزینی زنده روی همه صفحات */
+initTextOverrides()
