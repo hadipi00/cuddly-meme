@@ -17,6 +17,7 @@ import bcrypt from 'bcryptjs'
 import { db, JWT_SECRET, publicUser, classRow } from './db.js'
 import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
+import { registerContentRoutes } from './content.js'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -550,7 +551,9 @@ app.delete('/api/classes/:id/materials/:mid', requireRole('teacher', 'admin'), (
 
 /** وضعیت لحظه‌ای کلاس — polling عمومی (تایمر + حاضران + وضعیت تخته) */
 app.get('/api/classes/:id/state', (req, res) => {
-  const c = db.prepare('SELECT id, status, started_at, ended_at, board_open, board_locked FROM classes WHERE id = ?').get(req.params.id)
+  /* teacher_id در SELECT قبلاً نبود — classAccess برای «مدرسِ خود کلاس» هم false می‌شد
+     و مدرس لیست حاضران/دست‌بلندشده‌ها را خالی می‌دید (participants=[] ولی count=1) */
+  const c = db.prepare('SELECT id, teacher_id, status, started_at, ended_at, board_open, board_locked FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   /* نام و نقش حاضران فقط برای اعضای کلاس — مهمانِ لاگ‌ن‌شده فقط شمارش می‌بیند
      (قبلاً نام تک‌تک حاضران کلاس پولی به هر بازدیدکننده‌ای لو می‌رفت) */
@@ -887,6 +890,9 @@ function overridesFreeze(replace, find) {
 
 /* ---------------- موتور آزمون‌ساز (کاملاً مجزا از کلاس آنلاین) ---------------- */
 registerExamRoutes(app)
+
+/* ---------------- محتوای عمومی (کاتالوگ/مارکت/بلاگ/اساتید/نظرات/تماس/تیکت/چک‌اوت) ---------------- */
+registerContentRoutes(app)
 
 /* ---------------- سلام سرور ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))

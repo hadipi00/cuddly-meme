@@ -3,10 +3,13 @@ import { useNavigate, Link } from 'react-router-dom'
 import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
-import { teachers } from '../data/mock'
+import { teachers as fallbackTeachers } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 import { faNum } from '../utils/format'
 
 export default function Teachers() {
+ /* اساتید از بک‌اند (/api/teachers) — در نبود سرور داده نمونه */
+ const teachers = useCatalog(content.teachers, fallbackTeachers)
  const nav = useNavigate()
  const [q, setQ] = useState('')
  const list = teachers.filter((t) => !q.trim() || t.name.includes(q.trim()) || t.role.includes(q.trim()))

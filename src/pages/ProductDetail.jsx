@@ -9,7 +9,9 @@ import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { Reveal, RatingStars } from '../components/ui'
 import { ProductCard } from '../components/cards'
-import { products, reviews } from '../data/mock'
+import { products as fallbackProducts } from '../data/mock'
+import { content, useCatalog } from '../services/content'
+import { req } from '../services/http'
 import { useApp } from '../store/AppContext'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
@@ -20,13 +22,30 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 /* تنوع رنگ گالری — هر محصول ۴ «تصویر» وکتوری با گرادیان‌های متفاوت */
 const GRADS = ['grad-0', 'grad-1', 'grad-2', 'grad-3', 'grad-4', 'grad-5']
 
+/** محصول + نظرات واقعی از سرور — ابتدا fallback موک، بعد جایگزینی با داده زنده */
+function useProductBundle(id) {
+ const [data, setData] = useState(() => ({ product: fallbackProducts.find((p) => p.id === id), reviews: [] }))
+ useEffect(() => {
+  let alive = true
+  setData({ product: fallbackProducts.find((p) => p.id === id), reviews: [] })
+  content.productBundle(id).then((b) => { if (alive && b?.product) setData(b) })
+  return () => { alive = false }
+ }, [id])
+ return data
+}
+
 export default function ProductDetail() {
   const { id } = useParams()
   const nav = useNavigate()
-  const { addToCart, toast, pushViewed } = useApp()
-  const product = products.find((p) => p.id === id)
+  const { addToCart, toast, pushViewed, user } = useApp()
+  const { product, reviews: prodReviews } = useProductBundle(id)
+  const allProducts = useCatalog(content.products, fallbackProducts)
+  const related = allProducts.filter((p) => p.id !== id && p.cat === product?.cat).slice(0, 4)
   const [qty, setQty] = useState(1)
   const [shot, setShot] = useState(0)
+  const [rvRating, setRvRating] = useState(5)
+  const [rvText, setRvText] = useState('')
+  const [rvBusy, setRvBusy] = useState(false)
 
   // ثبت بازدید برای ریل «بازدیدهای اخیر» در مدرس‌مارکت
   useEffect(() => {
@@ -46,12 +65,8 @@ export default function ProductDetail() {
   }
 
   const off = product.oldPrice ? Math.round((1 - product.price / product.oldPrice) * 100) : 0
-  const related = products.filter((p) => p.id !== product.id && p.cat === product.cat).slice(0, 4)
   const gallery = [...new Set([product.color, ...GRADS])].slice(0, 4)
   const thumbs = [product.icon, 'sparkles', 'layers', 'backpack']
-  /* نظرات این محصول — دیتای نظرات فعلی مال دوره‌هاست؛ فقط نظرات مرتبط نمایش داده می‌شود
-    (قبلاً سه نظر ثابتِ دوره ری‌اکت به همه محصولات می‌چسبید) */
- const prodReviews = reviews.filter((r) => (r.target || '').includes(product.title) || product.title.includes(r.target || '###'))
   const specs = product.specs?.length ? product.specs : [
     ['دسته‌بندی', product.cat],
     ['گارانتی', '۷ روز ضمانت بازگشت'],
@@ -63,6 +78,24 @@ export default function ProductDetail() {
       qty
     )
     toast(`${faNum(qty)} عدد به سبد خرید اضافه شد`)
+  }
+
+  /** ثبت نظر واقعی در بک‌اند — قبلاً اصلاً راه ثبت نظر وجود نداشت (ناقصی) */
+  const submitReview = async (e) => {
+    e.preventDefault()
+    if (rvBusy) return
+    if ((rvText || '').trim().length < 4) { toast('متن نظر حداقل ۴ حرف باشد', 'error'); return }
+    setRvBusy(true)
+    try {
+      const r = await req('/reviews', { method: 'POST', body: { kind: 'product', targetId: product.id, rating: rvRating, text: rvText } })
+      toast(r.message || 'نظر شما ثبت شد')
+      setRvText('')
+    } catch (err) {
+      if (err.status === 401) toast('برای ثبت نظر ابتدا وارد حساب شوید', 'error')
+      else if (!err.serverDown) toast(err.message || 'ثبت نظر ناموفق بود', 'error')
+      else toast('سرور در دسترس نیست — بعداً تلاش کنید', 'error')
+    }
+    setRvBusy(false)
   }
 
   return (
@@ -243,7 +276,30 @@ export default function ProductDetail() {
                       <p className="muted small mt8" style={{ lineHeight: 2 }}>{r.text}</p>
                     </div>
                   ))}
-                  <p className="muted small" style={{ textAlign: 'center' }}>نظر خود را بعد از خرید ثبت کنید.</p>
+
+                  {/* فرم ثبت نظر — به بک‌اند وصل است؛ نظر تازه «در انتظار تأیید» می‌رود */}
+                  <div className="card pad" style={{ padding: 14, borderColor: 'var(--line2)' }}>
+                    <b className="small">ثبت نظر شما</b>
+                    {!user ? (
+                      <p className="muted small mt8">برای ثبت نظر <Link to="/auth" style={{ color: 'var(--teal)' }}>وارد حساب شوید</Link>.</p>
+                    ) : (
+                      <form onSubmit={submitReview} style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                        <div className="row g8 items-center small">
+                          <span className="muted">امتیاز:</span>
+                          {[5, 4, 3, 2, 1].map((n) => (
+                            <button type="button" key={n} onClick={() => setRvRating(n)}
+                              className={`icon-btn ${rvRating === n ? 'text-amber' : 'muted'}`}
+                              style={{ width: 30, height: 30, border: rvRating === n ? '1px solid var(--amber)' : '1px solid var(--line)' }}
+                              aria-label={`${n} ستاره`}>{n}</button>
+                          ))}
+                        </div>
+                        <textarea className="input" rows={3} maxLength={800} placeholder="تجربه‌تان از این محصول را بنویسید…"
+                          value={rvText} onChange={(e) => setRvText(e.target.value)} />
+                        <Button type="submit" size="sm" disabled={rvBusy}>{rvBusy ? 'در حال ارسال…' : 'ارسال نظر'}</Button>
+                        <span className="muted" style={{ fontSize: 12 }}>نظر شما پس از تأیید مدیر نمایش داده می‌شود.</span>
+                      </form>
+                    )}
+                  </div>
                 </div>
               </TabsContent>
             </Tabs>

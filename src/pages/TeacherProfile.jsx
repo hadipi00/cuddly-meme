@@ -4,15 +4,32 @@ import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
 import { CourseCard } from '../components/cards'
-import { teachers, courses, liveClasses } from '../data/mock'
+import { teachers as fallbackTeachers, courses as fallbackCourses, liveClasses as fallbackLives } from '../data/mock'
+import { content } from '../services/content'
+import { useEffect, useState } from 'react'
 import { DAYS, faNum } from '../utils/format'
+
+/** پروفایل کامل استاد از سرور (دوره‌ها + کلاس‌های زنده واقعی خودش) — fallback موک */
+function useTeacherBundle(id) {
+ const [data, setData] = useState(() => ({
+  teacher: fallbackTeachers.find((x) => x.id === id),
+  courses: fallbackCourses.filter((c) => c.teacherId === id),
+  liveClasses: fallbackLives.filter((l) => l.teacherId === id),
+ }))
+ useEffect(() => {
+  let alive = true
+  content.teacher(id).then((b) => {
+   if (alive && b?.teacher) setData({ teacher: b.teacher, courses: b.courses || [], liveClasses: b.liveClasses || [] })
+  })
+  return () => { alive = false }
+ }, [id])
+ return data
+}
 
 export default function TeacherProfile() {
  const { id } = useParams()
- const t = teachers.find((x) => x.id === id)
+ const { teacher: t, courses: myCourses, liveClasses: myLives } = useTeacherBundle(id)
  if (!t) return <div className="container section"><div className="empty"><p>مدرس یافت نشد.</p></div></div>
- const myCourses = courses.filter((c) => c.teacherId === id)
- const myLives = liveClasses.filter((l) => l.teacherId === id)
 
  return (
  <>

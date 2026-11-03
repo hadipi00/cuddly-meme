@@ -3,12 +3,26 @@ import Seo, { ORIGIN } from '../components/Seo'
 import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import Icon from '../components/Icon'
-import { blogPosts } from '../data/mock'
+import { blogPosts as fallbackPosts } from '../data/mock'
+import { content } from '../services/content'
+import { useEffect, useState } from 'react'
 import { useApp } from '../store/AppContext'
+
+/** مقاله از سرور — ابتدا fallback موک تا بدون فلش رندر شود */
+function usePost(id) {
+ const [post, setPost] = useState(() => fallbackPosts.find((p) => p.id === id))
+ useEffect(() => {
+  let alive = true
+  setPost(fallbackPosts.find((p) => p.id === id))
+  content.post(id).then((v) => { if (alive && v) setPost(v) })
+  return () => { alive = false }
+ }, [id])
+ return post
+}
 
 export default function BlogPost() {
  const { id } = useParams()
- const post = blogPosts.find((p) => p.id === id)
+ const post = usePost(id)
  const { toast } = useApp()
  if (!post) return <div className="container section"><div className="empty"><p>مقاله یافت نشد.</p></div></div>
 

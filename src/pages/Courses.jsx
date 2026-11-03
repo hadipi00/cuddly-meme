@@ -4,12 +4,18 @@ import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { CourseCard } from '../components/cards'
-import { courses, courseCats } from '../data/mock'
+import { courses as fallbackCourses } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 
 export default function Courses() {
  const [cat, setCat] = useState('همه')
  const [sort, setSort] = useState('محبوب‌ترین')
  const [searchParams, setSearchParams] = useSearchParams()
+
+ /* دوره‌ها از بک‌اند واقعی (/api/courses) — در نبود سرور داده نمونه (fallback)
+    قبلاً فقط mock ثابت بود و هر تغییری در کاتالوگ به بازسازی بیلد نیاز داشت */
+ const courses = useCatalog(content.courses, fallbackCourses)
+ const courseCats = useMemo(() => [...new Set(courses.map((c) => c.cat).filter(Boolean))], [courses])
 
  /* جستجو با URL همگام است (?q=...) → لینک جستجو قابل اشتراک‌گذاری و ایندکس‌شدنی است */
  const q = searchParams.get('q') || ''
@@ -24,7 +30,7 @@ export default function Courses() {
  if (sort === 'گران‌ترین') out = [...out].sort((a, b) => b.price - a.price)
  if (sort === 'بالاترین امتیاز') out = [...out].sort((a, b) => b.rating - a.rating)
  return out
- }, [cat, q, sort])
+ }, [cat, q, sort, courses])
 
  return (
  <>

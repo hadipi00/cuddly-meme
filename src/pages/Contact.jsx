@@ -5,7 +5,7 @@ import Icon from '../components/Icon'
 import { Reveal } from '../components/ui'
 import { site } from '../config/site'
 import { useApp } from '../store/AppContext'
-import { api } from '../services/api'
+import { req } from '../services/http'
 
 export default function Contact() {
  const { toast } = useApp()
@@ -17,12 +17,13 @@ export default function Contact() {
  if (sending) return
  setSending(true)
  try {
- await api.submitContact(Object.fromEntries(new FormData(e.target)))
+ await req('/contact', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) })
  setSent(true)
  toast('پیام شما با موفقیت ارسال شد')
  e.target.reset()
- } catch {
- toast('ارسال پیام ناموفق بود — دوباره تلاش کنید', 'error')
+ } catch (err) {
+ if (!err.serverDown) toast(err.message || 'ارسال پیام ناموفق بود — دوباره تلاش کنید', 'error')
+ else toast('سرور در دسترس نیست — بعداً تلاش کنید', 'error')
  } finally {
  setSending(false)
  }
@@ -123,6 +124,7 @@ export default function Contact() {
  <div className="field"><label>نام و نام خانوادگی</label><input className="input" name="name" required placeholder="نام شما" /></div>
  <div className="field"><label>شماره تماس</label><input className="input" name="phone" required placeholder="۰۹۱۲…" /></div>
  </div>
+ <div className="field"><label>ایمیل (برای پاسخ)</label><input className="input" name="email" type="email" required placeholder="you@example.com" /></div>
  <div className="field">
  <label>موضوع</label>
  <select className="select" name="subject">

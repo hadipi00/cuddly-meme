@@ -1,28 +1,52 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import { Modal } from '../../components/Modal'
-import { studentTickets } from '../../data/mock'
+import { studentTickets as fallbackTickets } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
-import { api } from '../../services/api'
+import { req } from '../../services/http'
 import { faNum, faDate } from '../../utils/format'
 
 const badge = { open: ['باز', 'b-amber'], answered: ['پاسخ داده شد', 'b-sky'], closed: ['بسته', 'b-gray'] }
 
 export default function STickets() {
- const { toast } = useApp()
- const [list, setList] = useState(studentTickets)
+ const { toast, user } = useApp()
+ const [list, setList] = useState(fallbackTickets)
  const [open, setOpen] = useState(false)
  const [sending, setSending] = useState(false)
  const [detail, setDetail] = useState(null)
 
+ /* تیکت‌های واقعی کاربر از سرور — قبلاً submitTicket فقط یک id تصادفی
+    برمی‌گرداند و هیچ تیکتی در هیچ‌جا ذخیره نمی‌شد (ناقصی) */
+ useEffect(() => {
+  if (!user) return
+  let alive = true
+  req('/me/tickets').then((r) => {
+   if (alive && Array.isArray(r.tickets) && r.tickets.length) setList(r.tickets)
+  }).catch(() => {})
+  return () => { alive = false }
+ }, [user?.id])
+
  const submit = async (e) => {
  e.preventDefault()
+ if (sending) return
+ const fd = new FormData(e.target)
+ const payload = {
+  subject: String(fd.get('subject') || ''),
+  body: String(fd.get('body') || ''),
+  priority: String(fd.get('priority') || 'متوسط'),
+ }
+ if (payload.body.trim().length < 10) { toast('توضیحات حداقل ۱۰ حرف باشد', 'error'); return }
  setSending(true)
- const res = await api.submitTicket({ subject: e.target.subject.value })
+ try {
+  const res = await req('/tickets', { method: 'POST', body: payload })
+  if (res.ticket) setList((l) => [res.ticket, ...l])
+  setOpen(false)
+  toast(`تیکت ${res.ticket?.id} ثبت شد — کارشناسان ما پاسخ می‌دهند`)
+ } catch (err) {
+  if (!err.serverDown) toast(err.message || 'ثبت تیکت ناموفق بود', 'error')
+  else toast('سرور در دسترس نیست — بعداً تلاش کنید', 'error')
+ }
  setSending(false)
- setList([{ id: res.id, subject: e.target.subject.value, date: '1404/09/13', status: 'open', replies: 0 }, ...list])
- setOpen(false)
- toast(`تیکت ${res.id} ثبت شد — کارشناسان ما پاسخ می‌دهند`)
  }
 
  return (
@@ -62,10 +86,10 @@ export default function STickets() {
  <select className="select">{['فنی — پخش دوره', 'مالی — پرداخت', 'کلاس زنده', 'مدرس‌مارکت', 'سایر'].map((s) => <option key={s}>{s}</option>)}</select>
  </div>
  <div className="field"><label>اولویت</label>
- <select className="select">{['کم', 'متوسط', 'بالا'].map((s) => <option key={s}>{s}</option>)}</select>
+ <select className="select" name="priority">{['کم', 'متوسط', 'بالا'].map((s) => <option key={s}>{s}</option>)}</select>
  </div>
  </div>
- <div className="field"><label>توضیحات کامل</label><textarea className="textarea" required placeholder="شرح کامل مشکل…" /></div>
+ <div className="field"><label>توضیحات کامل</label><textarea className="textarea" name="body" required placeholder="شرح کامل مشکل…" /></div>
  <div className="modal-actions">
  <button className="btn btn-primary" disabled={sending}>{sending ? 'در حال ارسال…' : 'ارسال تیکت'}</button>
  <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>انصراف</button>

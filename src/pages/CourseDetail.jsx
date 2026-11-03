@@ -6,7 +6,8 @@ import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import { RatingStars, Reveal, Avatar } from '../components/ui'
 import { CourseCard } from '../components/cards'
-import { courses, teachers, testimonials } from '../data/mock'
+import { courses as fallbackCourses, teachers as fallbackTeachers, testimonials as fallbackTestimonials } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 import { useApp } from '../store/AppContext'
 import { faNum, toman } from '../utils/format'
 
@@ -14,6 +15,10 @@ export default function CourseDetail() {
  const { id } = useParams()
  const nav = useNavigate()
  const { addToCart, toast, wishlist, toggleWish } = useApp()
+ /* دوره/استاد/تستimonials از بک‌اند — در نبود سرور داده نمونه */
+ const courses = useCatalog(content.courses, fallbackCourses)
+ const teachers = useCatalog(content.teachers, fallbackTeachers)
+ const testimonials = useCatalog(content.testimonials, fallbackTestimonials)
  const course = courses.find((c) => c.id === Number(id))
  const [openSec, setOpenSec] = useState(0)
 

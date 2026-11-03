@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import {
   CreditCard, ShoppingCart, User, Lock, Truck, PackageCheck, Wallet, Bike, MapPin,
 } from 'lucide-react'
 import { EmptyState } from '../components/ui'
 import { useApp } from '../store/AppContext'
+import { req } from '../services/http'
 import Seo from '../components/Seo'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
@@ -31,12 +32,14 @@ const SHIP_METHODS = [
 ]
 
 export default function Checkout() {
-  const { cart, placeOrder, toast } = useApp()
+  const { cart, toast, user, clearCart } = useApp()
   const nav = useNavigate()
   const [method, setMethod] = useState('زرین‌پال')
   const [coupon, setCoupon] = useState('')
+  const [couponLabel, setCouponLabel] = useState('')
   const [discount, setDiscount] = useState(0)
   const [shipKey, setShipKey] = useState('prepaid')
+  const [paying, setPaying] = useState(false)
 
   const subtotal = cart.reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
   const marketSub = cart.filter((i) => i.kind === 'market').reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
@@ -46,29 +49,59 @@ export default function Checkout() {
   const shipCost = !hasMarket ? 0 : (ship.freeOver && marketSub >= ship.freeOver ? 0 : ship.cost)
   const finalTotal = Math.max(0, subtotal - discount) + shipCost
 
-  const checkCoupon = () => {
-    if (coupon.trim().toUpperCase() === 'YALDA30') {
-      setDiscount(Math.round(subtotal * 0.3))
-      toast('کد تخفیف ۳۰٪ اعمال شد')
-    } else if (coupon.trim().toUpperCase() === 'WELCOME') {
-      setDiscount(Math.round(subtotal * 0.15))
-      toast('کد خوش‌آمدگویی ۱۵٪ اعمال شد')
-    } else {
+  /* کد تخفیف فقط سرور — قبلاً YALDA30/WELCOME هاردکد فرانت بودند و هر کسی
+     با دستکاری جاوااسکریپت به خودش تخفیف می‌داد؛ حالا اعتبار/مقدار از جدول coupons */
+  const checkCoupon = async () => {
+    if (!coupon.trim()) { setDiscount(0); setCouponLabel(''); return }
+    try {
+      const r = await req('/coupons/check', { method: 'POST', body: { code: coupon.trim(), subtotal } })
+      setDiscount(r.discount || 0)
+      setCouponLabel(r.label || '')
+      toast(`کد تخفیف ${r.label} اعمال شد`)
+    } catch (e) {
       setDiscount(0)
-      toast('کد تخفیف نامعتبر است', 'error')
+      setCouponLabel('')
+      if (!e.serverDown) toast(e.message || 'کد تخفیف نامعتبر است', 'error')
+      else toast('سرور در دسترس نیست — بررسی کد تخفیف ممکن نیست', 'error')
     }
   }
 
-  const submit = (e) => {
+  /* پرداخت واقعی — سفارش در بک‌اند ثبت می‌شود (قیمت/موجودی/تخفیف همه سرورمحور).
+     قبلاً فقط در localStorage می‌رفت و موجودی انبار کم نمی‌شد */
+  const submit = async (e) => {
     e.preventDefault()
-    if (cart.length === 0) return
-    const code = placeOrder({
-      items: cart.map((c) => `${c.name} × ${faNum(c.qty || 1)}`).join('، '),
-      total: finalTotal,
-      status: 'pending',
-      shipping: hasMarket ? { method: ship.label, cost: shipCost } : null,
-    })
-    nav('/order-success', { state: { code, total: finalTotal, ship: hasMarket ? { label: ship.label, cost: shipCost } : null } })
+    if (cart.length === 0 || paying) return
+    if (!user) {
+      toast('برای ثبت سفارش ابتدا وارد حساب شوید', 'error')
+      nav('/auth')
+      return
+    }
+    setPaying(true)
+    try {
+      const fd = Object.fromEntries(new FormData(e.target))
+      const r = await req('/checkout', {
+        method: 'POST',
+        body: {
+          items: cart.map((c) => ({ id: c.id, kind: c.kind, qty: c.qty || 1 })),
+          coupon: coupon.trim() || undefined,
+          shipKey,
+          contact: { name: fd.name, phone: fd.phone, email: fd.email, address: fd.address },
+        },
+      })
+      const ship = hasMarket ? { label: r.shipLabel, cost: r.shipCost } : null
+      clearCart() // سبد پس از ثبت واقعی سفارش در سرور خالی می‌شود
+      nav('/order-success', { state: { code: r.code, total: r.total, ship } })
+    } catch (err) {
+      if (err.status === 401) {
+        toast('برای پرداخت ابتدا وارد حساب شوید', 'error')
+        nav('/auth')
+      } else if (!err.serverDown) {
+        toast(err.message || 'ثبت سفارش ناموفق بود', 'error')
+      } else {
+        toast('سرور در دسترس نیست — پرداخت در حالت آفلاین ممکن نیست', 'error')
+      }
+    }
+    setPaying(false)
   }
 
   return (
@@ -175,7 +208,7 @@ export default function Checkout() {
               </div>
               {discount > 0 && (
                 <div className="between mb8 small text-green">
-                  <span>تخفیف کد</span><b>− {toman(discount)}</b>
+                  <span>تخفیف کد {couponLabel && `(${couponLabel})`}</span><b>− {toman(discount)}</b>
                 </div>
               )}
               {hasMarket && (
@@ -191,8 +224,8 @@ export default function Checkout() {
               <div className="between">
                 <span>مبلغ نهایی</span><b style={{ fontSize: 19, color: 'var(--teal)' }}>{toman(finalTotal)}</b>
               </div>
-              <Button type="submit" className="w-full mt24" size="lg">
-                <CreditCard size={18} /> پرداخت {toman(finalTotal)}
+              <Button type="submit" className="w-full mt24" size="lg" disabled={paying}>
+                <CreditCard size={18} /> {paying ? 'در حال ثبت پرداخت…' : `پرداخت ${toman(finalTotal)}`}
               </Button>
               <p className="muted small mt16 row g8" style={{ lineHeight: 2 }}>
                 <Lock size={14} /> پرداخت از طریق درگاه امن بانکی انجام می‌شود. اطلاعات کارت شما نزد ما ذخیره نمی‌گردد.

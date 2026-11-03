@@ -4,9 +4,12 @@ import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { DataIcon } from '../utils/icons'
 import { Reveal } from '../components/ui'
-import { blogPosts } from '../data/mock'
+import { blogPosts as fallbackPosts } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 
 export default function Blog() {
+ /* مقاله‌ها از بک‌اند (/api/blog) — در نبود سرور داده نمونه */
+ const blogPosts = useCatalog(content.posts, fallbackPosts)
  return (
  <>
  <Seo

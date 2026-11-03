@@ -9,7 +9,8 @@ import Seo, { ORIGIN, crumbsJsonLd, storeJsonLd } from '../components/Seo'
 import Icon from '../components/Icon'
 import { Reveal, RatingStars } from '../components/ui'
 import { ProductCard } from '../components/cards'
-import { products, marketCats, testimonials, faqItems } from '../data/mock'
+import { products as fallbackProducts, marketCats as fallbackCats, testimonials as fallbackTestimonials, faqItems } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 import { faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
 import { useApp } from '../store/AppContext'
@@ -59,6 +60,11 @@ export default function Market() {
   const now = useNow(1000)
   const cd = useMidnightCountdown(now)
 
+  /* محصولات از بک‌اند واقعی (/api/products) — در نبود سرور داده نمونه */
+  const products = useCatalog(content.products, fallbackProducts)
+  const testimonials = useCatalog(content.testimonials, fallbackTestimonials)
+  const marketCats = useMemo(() => [...new Set(products.map((p) => p.cat).filter(Boolean))], [products])
+
   /* ---------- فیلترها متصل به URL — هر دید فروشگاهی یک لینک اشتراکی دارد (سئو + UX) ---------- */
   const [params, setParams] = useSearchParams()
   const cat = params.get('cat') || 'همه'
@@ -97,13 +103,13 @@ export default function Market() {
       off: (a, b) => (b.oldPrice ? 1 - b.price / b.oldPrice : 0) - (a.oldPrice ? 1 - a.price / a.oldPrice : 0),
     }
     return out.sort(sorters[sort] || sorters.best)
-  }, [cat, q, sort, maxPrice, inStockOnly, offOnly])
+  }, [cat, q, sort, maxPrice, inStockOnly, offOnly, products])
 
   /* ---------- پیشنهاد شگفت‌انگیز: بیشترین تخفیف‌ها ---------- */
   const flashDeals = useMemo(() => [...products]
     .filter((p) => p.oldPrice)
     .sort((a, b) => (1 - b.price / b.oldPrice) - (1 - a.price / a.oldPrice))
-    .slice(0, 6), [])
+    .slice(0, 6), [products])
 
   /* ---------- صفحه‌بندی فروشگاهی ---------- */
   const pages = Math.max(1, Math.ceil(list.length / PER_PAGE))

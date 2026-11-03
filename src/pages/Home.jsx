@@ -3,10 +3,12 @@ import Icon from '../components/Icon'
 import { DataIcon } from '../utils/icons'
 import { Reveal, RatingStars } from '../components/ui'
 import { CourseCard, ProductCard } from '../components/cards'
-import { courses, liveClasses, products, testimonials, faqItems } from '../data/mock'
+import { courses as fallbackCourses, liveClasses as fallbackLives, products as fallbackProducts, testimonials as fallbackTestimonials, faqItems } from '../data/mock'
+import { content, useCatalog } from '../services/content'
+import { req } from '../services/http'
+import { useEffect, useMemo, useState } from 'react'
 import { DAYS, faNum } from '../utils/format'
 import { site } from '../config/site'
-import { useState } from 'react'
 import Seo from '../components/Seo'
 
 function FAQ() {
@@ -27,6 +29,27 @@ function FAQ() {
 }
 
 export default function Home() {
+ /* همه بخش‌های صفحه نخست از بک‌اند واقعی — در نبود سرور داده نمونه.
+    کلاس‌های زنده از /api/classes (مثل صفحه کلاس‌ها) تا کلاس‌های تازه‌ساخته هم دیده شوند */
+ const courses = useCatalog(content.courses, fallbackCourses)
+ const products = useCatalog(content.products, fallbackProducts)
+ const testimonials = useCatalog(content.testimonials, fallbackTestimonials)
+ const [serverLives, setServerLives] = useState(null)
+ useEffect(() => {
+  let alive = true
+  req('/classes').then((r) => {
+   if (!alive || !r.classes?.length) return
+   setServerLives(r.classes.map((c) => ({
+    id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
+    teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,
+    dur: c.dur, price: c.price, cap: c.cap, enrolled: c.enrolled,
+    status: c.enrolled >= c.cap ? 'full' : 'open',
+   })))
+  }).catch(() => {})
+  return () => { alive = false }
+ }, [])
+ const liveClasses = serverLives || fallbackLives
+
  const featured = courses.slice(0, 4)
  const lives = liveClasses.slice(0, 3)
  const market = products.slice(0, 4)

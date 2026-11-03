@@ -52,6 +52,12 @@ export default class ErrorBoundary extends Component {
                 <Home size={15} /> صفحه اصلی
               </button>
             </div>
+            {/* در توسعه پیام خطا نمایش داده می‌شود تا ریشه باگ پیدا شود؛ در بیلد production مخفی است */}
+            {import.meta.env.DEV && (
+              <pre dir="ltr" style={{ marginTop: 18, maxHeight: 140, overflow: 'auto', textAlign: 'left', fontSize: 11, opacity: .7, whiteSpace: 'pre-wrap' }}>
+                {String(this.state.error?.stack || this.state.error?.message || this.state.error)}
+              </pre>
+            )}
           </div>
         </div>
       )

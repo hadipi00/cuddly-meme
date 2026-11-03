@@ -2,11 +2,13 @@ import Icon from '../components/Icon'
 import { Link } from 'react-router-dom'
 import Seo, { ORIGIN, crumbsJsonLd } from '../components/Seo'
 import { Reveal, RatingStars } from '../components/ui'
-import { teachers } from '../data/mock'
+import { teachers as fallbackTeachers } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 import { site } from '../config/site'
 import { faNum } from '../utils/format'
 
 export default function Resume() {
+ const teachers = useCatalog(content.teachers, fallbackTeachers)
  const lead = teachers[0]
  return (
  <>
