@@ -15,8 +15,8 @@
 // =====================================================================
 import express from 'express'
 import jwt from 'jsonwebtoken'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db, JWT_SECRET } from './db.js'
@@ -124,8 +124,31 @@ function seededShuffle(arr, seed) {
 }
 
 export function registerExamRoutes(app) {
-  /* فایل‌های آزمون — نام تصادفی، فقط‌خواندنی */
-  app.use('/api/exams-files', express.static(upDir, { maxAge: '1d', index: false }))
+  /* ================= فایل‌های آزمون — با تیکت امضاشده کوتاه‌عمر =================
+   * قبلاً static عمودی بود و برگه سوال و پاسخنامه معلم به هر کسی که URL را داشت
+   * (بدون هیچ لاگینی) قابل دسترسی بود. حالا کلاینتِ لاگین‌شده تیکت ۱۵ دقیقه‌ای
+   * می‌گیرد و فایل‌ها فقط با همان تیکت سرو می‌شوند (تصاویر/لینک‌ها هم کار می‌کنند) */
+  const FILE_TICKET_SECRET = randomBytes(32).toString('hex')
+  app.post('/api/exams/file-ticket', (req, res) => {
+    const u = authUser(req)
+    if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
+    const exp = now() + 15 * 60_000
+    const sig = createHmac('sha256', FILE_TICKET_SECRET).update(String(exp)).digest('hex')
+    res.json({ st: `${exp}.${sig}`, exp })
+  })
+  const validTicket = (st) => {
+    const dot = String(st || '').indexOf('.')
+    if (dot < 1) return false
+    const exp = st.slice(0, dot), sig = st.slice(dot + 1)
+    if (!/^[0-9]+$/.test(exp) || Number(exp) < now()) return false
+    const want = createHmac('sha256', FILE_TICKET_SECRET).update(exp).digest('hex')
+    if (sig.length !== want.length) return false
+    try { return timingSafeEqual(Buffer.from(sig), Buffer.from(want)) } catch { return false }
+  }
+  app.use('/api/exams-files', (req, res, next) => {
+    if (!validTicket(req.query.st)) return res.status(401).json({ error: 'دسترسی به فایل آزمون نیازمند ورود است' })
+    next()
+  }, express.static(upDir, { maxAge: '1d', index: false }))
 
   const requireTeacher = (req, res, next) => {
     const u = authUser(req)
@@ -255,8 +278,8 @@ export function registerExamRoutes(app) {
     if (b.desc !== undefined) put('desc', String(b.desc || '').slice(0, 2000))
     if (b.course_id !== undefined) put('course_id', b.course_id || null)
     if (b.duration_min !== undefined) put('duration_min', Math.max(1, Math.min(600, Number(b.duration_min) || 30)))
-    if (b.open_at !== undefined) put('open_at', b.open_at ? Number(b.open_at) : null)
-    if (b.close_at !== undefined) put('close_at', b.close_at ? Number(b.close_at) : null)
+    if (b.open_at !== undefined) { const n = Number(b.open_at); put('open_at', Number.isFinite(n) && n > 0 ? n : null) }
+    if (b.close_at !== undefined) { const n = Number(b.close_at); put('close_at', Number.isFinite(n) && n > 0 ? n : null) }
     for (const k of ['shuffle_q', 'shuffle_o', 'sec_copy_block', 'sec_tab_limit', 'sec_fullscreen'])
       if (b[k] !== undefined) put(k, b[k] ? 1 : 0)
     if (b.sec_fast_submit !== undefined) put('sec_fast_submit', Math.max(0, Math.min(3600, Number(b.sec_fast_submit) || 0)))
@@ -269,7 +292,7 @@ export function registerExamRoutes(app) {
       const key = {}
       for (const [k, v] of Object.entries(b.answer_key || {})) {
         const n = parseInt(k, 10); const c = Number(v)
-        if (Number.isInteger(n) && n >= 1 && n <= 400 && Number.isInteger(c) && c >= 0) key[n] = c
+        if (Number.isInteger(n) && n >= 1 && n <= 400 && Number.isInteger(c) && c >= 0 && c < 6) key[n] = c
       }
       put('answer_key', J(key))
     }

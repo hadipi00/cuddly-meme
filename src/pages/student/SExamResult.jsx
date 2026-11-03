@@ -4,6 +4,7 @@ import Icon from '../../components/Icon'
 import { useApp } from '../../store/AppContext'
 import { faNum, faDate } from '../../utils/format'
 import { req } from '../../services/http'
+import { ticketedUrl } from '../../services/fileTicket'
 
 const resTag = (r) => r === 'correct'
   ? <span className="exm-rtag ok">درست</span>
@@ -81,7 +82,7 @@ export default function SExamResult() {
    <div className="exm-no-print row mb16" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
     <Link to="/panel/student/exams" className="icon-btn" aria-label="بازگشت"><Icon name="arrowLeft" size={17} /></Link>
     <div className="row" style={{ gap: 8 }}>
-     {exam.answer_pdf && <a className="btn btn-soft btn-sm" href={exam.answer_pdf} target="_blank" rel="noreferrer"><Icon name="file" size={14} />پاسخنامه تحلیلی معلم</a>}
+     {exam.answer_pdf && <a className="btn btn-soft btn-sm" href={exam.answer_pdf} target="_blank" rel="noreferrer" onClick={async (e) => { e.preventDefault(); window.open(await ticketedUrl(exam.answer_pdf), '_blank', 'noopener') }}><Icon name="file" size={14} />پاسخنامه تحلیلی معلم</a>}
      <button className="btn btn-primary btn-sm" onClick={() => window.print()}><Icon name="printer" size={14} />ذخیره PDF</button>
     </div>
    </div>

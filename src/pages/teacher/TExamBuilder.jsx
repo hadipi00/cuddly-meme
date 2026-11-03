@@ -5,6 +5,7 @@ import { Modal } from '../../components/Modal'
 import { useApp } from '../../store/AppContext'
 import { faNum } from '../../utils/format'
 import { req } from '../../services/http'
+import { useTicketedUrls, ticketedUrl } from '../../services/fileTicket'
 
 /* ---------- انواع سوال ---------- */
 const TYPES = [
@@ -114,6 +115,8 @@ export default function TExamBuilder() {
  const [importOpen, setImportOpen] = useState(false)
  const [myExams, setMyExams] = useState([])
  const [uploading, setUploading] = useState(false)
+ /* پیش‌نمایش برگه سوال با تیکت امن (URL خام حالا ۴۰۱ می‌خورد) */
+ const ticketedPages = useTicketedUrls(exam?.pdf_pages || [])
  const [classes, setClasses] = useState([])
  const [settings, setSettings] = useState({})
  const dirtyRef = useRef(false)
@@ -153,7 +156,11 @@ export default function TExamBuilder() {
    if (!exam || exam.mode !== 'builder') return
    setSaveState('saving')
    try {
-     await req(`/exams/${eid}/questions`, { method: 'PUT', body: { questions: serializeQuestions(questions) } })
+     /* سوال‌های کاملاً خالی (فرم placeholder) به سرور نمی‌روند — سرور آن‌ها را با ۴۰۰
+        رد می‌کرد و کل ذخیره (از جمله درون‌ریزی) شکست می‌خورد؛ فرم خالی فقط در UI می‌ماند */
+     const sendable = questions.filter((q) => String(q.body || '').trim() || q.image)
+     if (!sendable.length) { dirtyRef.current = false; setSaveState('saved'); return }
+     await req(`/exams/${eid}/questions`, { method: 'PUT', body: { questions: serializeQuestions(sendable) } })
      dirtyRef.current = false
      setSaveState('saved')
    } catch (e) {
@@ -218,8 +225,12 @@ export default function TExamBuilder() {
      const r = await req(`/exams/${id}`)
      const imported = (r.exam.questions || []).map((q) => ({
        type: q.type, body: q.body, image: q.image,
-       opts: Array.isArray(q.opts) ? [...q.opts] : { left: [...q.opts.left], right: [...q.opts.right] },
-       correct: q.correct == null ? null : (typeof q.correct === 'object' ? JSON.parse(JSON.stringify(q.correct)) : q.correct),
+       /* سوال‌های تشریحی/جای‌خالی/کوتاه opts ندارند — قبلاً q.opts.left کرش می‌کرد
+          و درون‌ریزی هر آزمون واقعی با خطای «درون‌ریزی ناموفق بود» می‌شکست */
+       opts: Array.isArray(q.opts)
+         ? (q.opts.length ? [...q.opts] : (q.type === 'mcq' || q.type === 'multi' ? ['', ''] : q.type === 'order' ? ['', ''] : []))
+         : (q.type === 'match' && q.opts?.left ? { left: [...q.opts.left], right: [...q.opts.right] } : []),
+       correct: q.correct == null ? (q.type === 'essay' ? null : (q.type === 'blank' || q.type === 'short' ? [''] : null)) : (typeof q.correct === 'object' ? JSON.parse(JSON.stringify(q.correct)) : q.correct),
        points: q.points, topic: q.topic, expl: q.expl,
      }))
      setQuestions((qs) => [...qs, ...imported])
@@ -465,11 +476,11 @@ export default function TExamBuilder() {
       <button className="btn btn-soft mt12" onClick={() => fileRef.current?.click()} disabled={uploading}>
         <Icon name="upload" size={15} />{uploading ? 'در حال تبدیل و آپلود…' : 'انتخاب فایل PDF/تصویر'}
       </button>
-      {!!(exam.pdf_pages || []).length && (
+      {!!ticketedPages.length && (
        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginTop: 16 }}>
-        {exam.pdf_pages.map((u, i) => (
-         <div key={u} style={{ position: 'relative', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
-          <img src={u} alt={`صفحه ${i + 1}`} style={{ width: '100%', display: 'block' }} />
+        {ticketedPages.map((u, i) => (
+         <div key={(u || 'ld') + i} style={{ position: 'relative', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
+          {u ? <img src={u} alt={`صفحه ${i + 1}`} style={{ width: '100%', display: 'block' }} /> : <div className="muted small" style={{ padding: 20, textAlign: 'center' }}>…</div>}
           <button className="exm-mini red" style={{ position: 'absolute', top: 6, left: 6 }} onClick={() => delPage(i)}><Icon name="trash" size={13} /></button>
           <span className="badge" style={{ position: 'absolute', bottom: 6, right: 6, background: 'rgba(0,0,0,.55)', color: '#fff' }}>صفحه {faNum(i + 1)}</span>
          </div>
@@ -570,7 +581,7 @@ export default function TExamBuilder() {
             try { const r = await req('/exams/upload', { method: 'POST', body: { name: f.name, data } }); setSettings((s) => ({ ...s, answer_pdf: r.url })); saveMeta({ answer_pdf: r.url }); toast('پاسخنامه تحلیلی آپلود شد') } catch (err) { toast(err.message || 'آپلود ناموفق بود', 'error') }
           }} />
         <button className="btn btn-ghost btn-sm" onClick={() => document.getElementById('anspdf').click()}><Icon name="upload" size={14} />آپلود پاسخنامه</button>
-        {settings.answer_pdf && <a className="btn btn-sm" style={{ background: 'rgba(52,211,153,.14)', color: '#34d399' }} href={settings.answer_pdf} target="_blank" rel="noreferrer">مشاهده فایل کنونی ✓</a>}
+        {settings.answer_pdf && <a className="btn btn-sm" style={{ background: 'rgba(52,211,153,.14)', color: '#34d399' }} href={settings.answer_pdf} target="_blank" rel="noreferrer" onClick={async (e) => { e.preventDefault(); window.open(await ticketedUrl(settings.answer_pdf), '_blank', 'noopener') }}>مشاهده فایل کنونی ✓</a>}
        </div></div>
      </div>
 

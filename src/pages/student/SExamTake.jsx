@@ -5,6 +5,7 @@ import { Modal } from '../../components/Modal'
 import { useApp } from '../../store/AppContext'
 import { faNum } from '../../utils/format'
 import { req } from '../../services/http'
+import { useTicketedUrls } from '../../services/fileTicket'
 
 const greek = ['۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸']
 const typeLabel = { mcq: 'گزینه‌ای', multi: 'چندگزینه‌ای', tf: 'درست/نادرت', blank: 'جای خالی', short: 'کوتاه‌پاسخ', essay: 'تشریحی', match: 'وصل‌کردنی', order: 'مرتب‌کردنی', pdfmcq: 'تستی' }
@@ -25,6 +26,8 @@ export default function SExamTake() {
  const [answers, setAnswers] = useState({})
  const [flags, setFlags] = useState(() => new Set())
  const [view, setView] = useState('questions')
+ /* برگه سوال PDF حالا با تیکت امن لود می‌شود (URL فایل بدون تیکت ۴۰۱ می‌خورد) */
+ const pdfPages = useTicketedUrls(attempt?.exam?.pdf_pages || [])
  const [remaining, setRemaining] = useState(0)
  const [sec, setSec] = useState({ tabs: 0, copy: 0, fs_exits: 0, newEvents: [] })
  const [warn, setWarn] = useState('')
@@ -328,8 +331,8 @@ export default function SExamTake() {
     <div className="exm-questions exm-qs-anim" onCopyCapture={(e) => exam.sec_copy_block && e.preventDefault()}>
      {pdfMode && (
       <div className="exm-pdfview mb16">
-       {(exam.pdf_pages || []).map((u, i) => <img key={u + i} src={u} alt={`صفحه ${i + 1}`} />)}
-       {!(exam.pdf_pages || []).length && <p className="muted small" style={{ padding: 16 }}>برگه‌ای بارگذاری نشده — با معلم خود تماس بگیرید.</p>}
+       {pdfPages.map((u, i) => (u ? <img key={(u || '') + i} src={u} alt={`صفحه ${i + 1}`} /> : <div key={'ld' + i} className="muted small" style={{ padding: 12 }}>در حال آماده‌سازی صفحه {faNum(i + 1)}…</div>))}
+       {!pdfPages.length && <p className="muted small" style={{ padding: 16 }}>برگه‌ای بارگذاری نشده — با معلم خود تماس بگیرید.</p>}
       </div>
      )}
      {!pdfMode && questions.map((q, i) => renderQ(q, i))}
