@@ -31,6 +31,38 @@ const PORT = process.env.PORT || 4000
 const now = () => Date.now()
 const b64 = (buf) => Buffer.from(buf).toString('base64')
 
+/* ---------------- هدرهای امنیتی پایه ---------------- */
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), geolocation=()')
+  next()
+})
+
+/* ---------------- محدودیت نرخ سبک (ضد brute-force لاگین/ثبت‌نام) ---------------- */
+const rateBuckets = new Map() // key → [timestamps]
+const rateLimit = (max, windowMs) => (req, res, next) => {
+  const ip = req.ip || req.socket?.remoteAddress || 'x'
+  const key = `${req.path}|${ip}`
+  const t = now()
+  const arr = (rateBuckets.get(key) || []).filter((x) => t - x < windowMs)
+  if (arr.length >= max) return res.status(429).json({ error: 'تلاش‌های زیاد — چند لحظه بعد دوباره تلاش کنید' })
+  arr.push(t)
+  rateBuckets.set(key, arr)
+  if (rateBuckets.size > 4000) for (const [k, v] of rateBuckets) if (!v.length || t - v[v.length - 1] > windowMs) rateBuckets.delete(k)
+  next()
+}
+
+/* نرمال‌سازی ارقام فارسی/عربی برای فیلدهای عددی رشته‌ای (مثل ساعت کلاس) */
+const normDigits = (s) => String(s || '')
+  .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+  .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+/** ساعت «HH:MM» معتبر (با ارقام فارسی هم) → نسخه استاندارد یا null */
+const validStart = (s) => {
+  const m = normDigits(s).trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/)
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null
+}
+
 /* ---------------- هلپرهای احراز هویت ---------------- */
 /* توکن ۱۰ ساله — سشن برای همیشه ماندگار است و با هر /auth/me هم تمدید می‌شود */
 const TOKEN_TTL = '3650d'
@@ -61,11 +93,13 @@ const requireRole = (...roles) => (req, res, next) => {
 }
 
 /* ---------------- احراز هویت ---------------- */
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', rateLimit(5, 60_000), (req, res) => {
   const { name, email, password } = req.body || {}
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'نام را وارد کنید' })
+  if (String(name).trim().length > 60) return res.status(400).json({ error: 'نام خیلی بلند است' })
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
   if (!password || String(password).length < 6) return res.status(400).json({ error: 'رمز عبور باید حداقل ۶ کاراکتر باشد' })
+  if (String(password).length > 100) return res.status(400).json({ error: 'رمز عبور خیلی بلند است' })
 
   const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(String(email).toLowerCase())
   if (exists) return res.status(409).json({ error: 'با این ایمیل قبلاً حساب ساخته شده — وارد شوید' })
@@ -80,7 +114,7 @@ app.post('/api/auth/register', (req, res) => {
   res.json({ token: signToken(u), user: publicUser(u) })
 })
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', rateLimit(10, 60_000), (req, res) => {
   const { email, password } = req.body || {}
   if (!email || !password) return res.status(400).json({ error: 'ایمیل و رمز عبور الزامی است' })
   const u = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email).toLowerCase().trim())
@@ -135,13 +169,17 @@ app.post('/api/classes', requireRole('teacher', 'admin'), (req, res) => {
   const { title, desc, icon, color, day, start, dur, cap, price } = req.body || {}
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'عنوان کلاس الزامی است' })
   if (day == null || !start) return res.status(400).json({ error: 'روز و ساعت کلاس الزامی است' })
+  /* ساعت با ارقام فارسی هم پذیرفته و استاندارد می‌شود؛ روز حتماً ۰..۶ */
+  const startNorm = validStart(start)
+  if (!startNorm) return res.status(400).json({ error: 'ساعت کلاس معتبر نیست — قالب HH:MM' })
+  const dayNorm = Math.min(6, Math.max(0, Number(day) || 0))
   const id = 'c' + Date.now().toString(36)
   const room = 'room-' + id
   db.prepare(`INSERT INTO classes (id, title, desc, icon, color, teacher_id, day, start, dur, cap, price, base_enrolled, room, status, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,'scheduled',?)`)
-    .run(id, String(title).trim(), String(desc || ''), icon || 'video', color || 'grad-0',
-      req.user.id, Number(day) || 0, String(start), Math.max(15, Number(dur) || 90),
-      Math.max(1, Number(cap) || 30), Math.max(0, Number(price) || 0), room, now())
+    .run(id, String(title).trim().slice(0, 150), String(desc || '').slice(0, 2000), icon || 'video', color || 'grad-0',
+      req.user.id, dayNorm, startNorm, Math.min(600, Math.max(15, Number(dur) || 90)),
+      Math.min(10_000, Math.max(1, Number(cap) || 30)), Math.min(100_000_000, Math.max(0, Number(price) || 0)), room, now())
   const c = db.prepare(SELECT_CLASSES + ' WHERE c.id = ?').get(id)
   res.json({ class: classWithMeta(c, req.user) })
 })
@@ -154,9 +192,24 @@ app.patch('/api/classes/:id', requireRole('teacher', 'admin'), (req, res) => {
   const sets = [], params = []
   for (const k of allowed) {
     if (req.body?.[k] !== undefined) {
+      if (k === 'start') {
+        const s = validStart(req.body[k])
+        if (!s) return res.status(400).json({ error: 'ساعت کلاس معتبر نیست — قالب HH:MM' })
+        sets.push('start = ?'); params.push(s)
+        continue
+      }
       const numeric = ['day', 'dur', 'cap', 'price'].includes(k)
+      if (numeric && k === 'day') {
+        sets.push('day = ?'); params.push(Math.min(6, Math.max(0, Number(req.body[k]) || 0)))
+        continue
+      }
       sets.push(`${k} = ?`)
-      params.push(numeric ? Math.max(0, Number(req.body[k]) || 0) : String(req.body[k]))
+      params.push(numeric
+        ? (k === 'dur' ? Math.min(600, Math.max(15, Number(req.body[k]) || 90))
+          : k === 'cap' ? Math.min(10_000, Math.max(1, Number(req.body[k]) || 30))
+          : k === 'price' ? Math.min(100_000_000, Math.max(0, Number(req.body[k]) || 0))
+          : Number(req.body[k]) || 0)
+        : String(req.body[k]).slice(0, k === 'title' ? 150 : 2000))
     }
   }
   if (!sets.length) return res.json({ ok: true, class: classWithMeta(c, req.user) })

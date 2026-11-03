@@ -11,6 +11,8 @@ import { Modal } from './Modal'
 export function toEmbedUrl(url) {
   try {
     const u = new URL(url)
+    /* فقط http/https — مانع javascript:/data: و سایر schemeها (باگ امنیتی) */
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
     const host = u.hostname.replace(/^www\./, '')
     /* آپارات — aparat.com/v/{hash} یا لینک embed */
     if (host.endsWith('aparat.com')) {
@@ -37,25 +39,30 @@ export function toEmbedUrl(url) {
 const DIRECT_FILE = /\.(mp4|webm|ogv|ogg|m4v|mov)(\?.*)?$/i
 
 export default function VideoModal({ open, title, url, onClose }) {
+  /* لینک غیر http(s) هرگز رندر نمی‌شود (ضد XSS از طریق recordingUrl وارده از پنل) */
+  const safeUrl = /^https?:\/\//i.test(String(url || '')) ? url : null
   const kind = useMemo(() => {
-    if (!url) return null
-    if (DIRECT_FILE.test(url)) return 'file'
-    return toEmbedUrl(url) ? 'embed' : 'iframe'
-  }, [url])
-  const src = useMemo(() => (kind === 'embed' ? toEmbedUrl(url) : url), [kind, url])
+    if (!safeUrl) return null
+    if (DIRECT_FILE.test(safeUrl)) return 'file'
+    return toEmbedUrl(safeUrl) ? 'embed' : 'iframe'
+  }, [safeUrl])
+  const src = useMemo(() => (kind === 'embed' ? toEmbedUrl(safeUrl) : safeUrl), [kind, safeUrl])
 
   return (
     <Modal open={open} title={title || 'پخش ویدیوی جلسه'} onClose={onClose} wide>
+      {open && !safeUrl && (
+        <p className="muted small" style={{ textAlign: 'center', padding: 30 }}>لینک ویدیو معتبر نیست — فقط آدرس‌های http/https پخش می‌شوند.</p>
+      )}
       {open && kind === 'file' && (
         <video
-          src={url}
+          src={src}
           controls
           autoPlay
           playsInline
           style={{ width: '100%', maxHeight: '68vh', borderRadius: 12, background: '#000' }}
         />
       )}
-      {open && kind !== 'file' && (
+      {open && kind !== 'file' && src && (
         <iframe
           src={src}
           title={title || 'video'}
