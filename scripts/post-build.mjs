@@ -110,6 +110,13 @@ const indexHtml = (() => {
 
 const BASE_CRUMB = { '@context': 'https://schema.org', '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: 'صفحه نخست', item: `${ORIGIN}/` }] }
 
+/* دارایی‌های SPA از index.html بیلد استخراج می‌شوند — صفحه پری‌رندر خودِ اپ را
+   در همان URL بوت می‌کند (متادیتا برای خزنده + اپ کامل برای کاربر، بدون رفرش) */
+const spaStyles = [...indexHtml.matchAll(/<link[^>]+rel="stylesheet"[^>]*>/g)].map((m) => m[0]).join('\n')
+const spaPreloads = [...indexHtml.matchAll(/<link[^>]+rel="(?:preload|modulepreload)"[^>]*>/g)].map((m) => m[0]).join('\n')
+const spaScripts = [...indexHtml.matchAll(/<script[^>]+type="module"[^>]*><\/script>/g)].map((m) => m[0]).join('\n')
+const spaThemeJs = indexHtml.match(/<script>[\s\S]*?modaresyar:theme[\s\S]*?<\/script>/)?.[0] || ''
+
 let made = 0
 for (const r of [...STATIC_ROUTES, ...DYN_ROUTES]) {
   if (r.loc === '/') continue // ریشه همان index.html اصلی SPA است
@@ -146,13 +153,19 @@ for (const r of [...STATIC_ROUTES, ...DYN_ROUTES]) {
 <meta name="twitter:description" content="${esc(r.desc)}"/>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
 <script type="application/ld+json">${JSON.stringify(breadcrumb)}</script>
-<!-- ریدایرکت فوری به SPA — کاربران همان اپ را می‌بینند؛ خزنده‌ها متادیتای بالا را ایندکس می‌کنند -->
-<meta http-equiv="refresh" content="0;url=${url}"/>
+${spaThemeJs}
+${spaStyles}
+${spaPreloads}
+<!-- بدون meta-refresh: قبلاً رفرش به همان URL خودش حلقه بی‌نهایت می‌ساخت؛
+     حالا SPA از همین صفحه بوت می‌شود و خزنده‌ها متادیتای بالا را می‌بینند -->
 </head>
 <body>
+<div id="root">
 <h1 style="font-family:Tahoma,sans-serif;font-size:16px">${esc(r.title)}</h1>
 <p style="font-family:Tahoma,sans-serif;font-size:13px">${esc(r.desc)}</p>
 <noscript><p style="font-family:Tahoma,sans-serif">برای تجربه کامل مدرس‌یار جاوااسکریپت را فعال کنید.</p></noscript>
+</div>
+${spaScripts}
 </body>
 </html>
 `

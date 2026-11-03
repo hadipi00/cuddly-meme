@@ -51,7 +51,7 @@ export default function Navbar() {
  <ShoppingCart size={19} />
  {cartCount > 0 && <span className="bubble">{faNum(cartCount)}</span>}
  </button>
- <Link to="/auth" className="btn btn-primary btn-sm">
+ <Link to={user ? `/panel/${user.role}` : '/auth'} className="btn btn-primary btn-sm">
  <Icon name="user" size={16} />
  <span className="hide-m">{user ? `پنل ${user.roleLabel}` : 'ورود / ثبت‌نام'}</span>
  </Link>

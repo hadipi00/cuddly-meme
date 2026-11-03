@@ -44,7 +44,7 @@ export default function AUsers({ kind }) {
  <div className="cell-user"><Avatar name={r.name} size={34} color={r.color || 'grad-0'} /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }}>{r.role}</span></div></div>
  ) },
  { key: 'joined', label: 'عضویت' },
- { key: 'students', label: 'دانشجو', render: (r) => faNum(r.students?.toLocaleString?.('fa-IR') || r.students) },
+ { key: 'students', label: 'دانشجو', render: (r) => faNum(Number(r.students || 0).toLocaleString('fa-IR')) },
  { key: 'classesCount', label: 'کلاس‌ها', render: (r) => faNum(r.classesCount || 0) },
  { key: 'rating', label: 'امتیاز', render: (r) => <span className="badge b-amber"><Icon name="star" size={12} filled /> {faNum(r.rating)}</span> },
  { key: 'status', label: 'وضعیت', render: (r) => <span className="status-dot green"><i />فعال</span> },

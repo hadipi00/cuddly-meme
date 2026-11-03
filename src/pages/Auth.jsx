@@ -14,9 +14,12 @@ import { useApp } from '../store/AppContext'
 export default function Auth() {
  const [params] = useSearchParams()
  const [mode, setMode] = useState('login') // login | register
- const { login, register } = useApp()
+ const { login, register, user } = useApp()
  const nav = useNavigate()
  const loc = useLocation()
+
+ /* کاربرِ واردشده دیگر نباید به صفحه ورود برسد — هدایت به پنل خودش */
+ useEffect(() => { if (user) nav(`/panel/${user.role}`, { replace: true }) }, [user])
 
  const [name, setName] = useState('')
  const [email, setEmail] = useState('')

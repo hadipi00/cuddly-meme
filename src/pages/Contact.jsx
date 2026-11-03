@@ -14,12 +14,18 @@ export default function Contact() {
 
  const submit = async (e) => {
  e.preventDefault()
+ if (sending) return
  setSending(true)
+ try {
  await api.submitContact(Object.fromEntries(new FormData(e.target)))
- setSending(false)
  setSent(true)
  toast('پیام شما با موفقیت ارسال شد')
  e.target.reset()
+ } catch {
+ toast('ارسال پیام ناموفق بود — دوباره تلاش کنید', 'error')
+ } finally {
+ setSending(false)
+ }
  }
 
  return (

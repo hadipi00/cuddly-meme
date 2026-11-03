@@ -31,7 +31,8 @@ export const api = {
  submitTicket: async (data) => { await delay(600); return { ok: true, id: 'TK-' + Math.floor(230 + Math.random() * 60) } },
  placeOrder: async (data) => {
  await delay(900)
- return { ok: true, code: 'ORD-' + Math.floor(7900 + Math.random() * 90) }
+ /* فضای کد بزرگ‌تر — هماهنگ با AppContext.placeOrder */
+ return { ok: true, code: 'ORD-' + Math.floor(100000 + Math.random() * 900000) }
  },
  login: async ({ role }) => { await delay(600); return { ok: true, role } },
 }

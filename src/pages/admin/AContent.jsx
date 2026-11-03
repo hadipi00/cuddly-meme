@@ -55,8 +55,9 @@ export default function AContent() {
  await req('/content/overrides', { method: 'POST', body: { find, replace } })
  await loadOverrides() // اعمال زنده روی کل سایت همین حالا
  await loadOv()
- setResults((l) => l && l.map((it) => (it.text === find ? it : it)))
- toast(replace ? 'متن در کل سایت عوض شد ✅' : 'متن از کل سایت حذف شد', 'ok')
+ /* آیتم‌های نتیجه جستجو که همین متن را دارند علامت بخورند */
+ setResults((l) => l && l.map((it) => (it.text === find ? { ...it, replaced: true } : it)))
+ toast(replace ? 'متن در کل سایت عوض شد ✅' : 'متن از کل سایت حذف شد', 'success')
  setEditing(null)
  } catch (e) {
  toast(e.message || 'خطا در ذخیره', 'error')

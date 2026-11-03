@@ -90,7 +90,7 @@ export default function Market() {
     if (offOnly) out = out.filter((p) => p.oldPrice)
     const sorters = {
       best: (a, b) => (b.sold || 0) - (a.sold || 0),
-      new: (a, b) => b.id.localeCompare(a.id),
+      new: (a, b) => (parseInt(String(b.id).replace(/\D/g, ''), 10) || 0) - (parseInt(String(a.id).replace(/\D/g, ''), 10) || 0),
       cheap: (a, b) => a.price - b.price,
       expensive: (a, b) => b.price - a.price,
       rating: (a, b) => b.rating - a.rating,
@@ -143,7 +143,7 @@ export default function Market() {
         />
         <div className="between small muted">
           <span>تا {maxPrice >= MAX_PRICE ? 'بدون محدودیت' : toman(maxPrice)}</span>
-          <span>۵ هزار تومان</span>
+          <span>۵۰ هزار تومان</span>
         </div>
       </div>
       <div className="mk-fgroup">

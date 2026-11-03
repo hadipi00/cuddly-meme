@@ -10,9 +10,11 @@ export default function SStudy() {
  const logs = studyLogs.map((d, i) => (i === 29 ? { ...d, minutes: d.minutes + extraMinutes } : d))
  const totalMin = logs.reduce((a, d) => a + d.minutes, 0)
  const avg = Math.round(totalMin / logs.length)
+ /* هفته جاری = ۷ روز آخر لاگ‌ها — قبلاً slice از i*4 فقط ۲۸ از ۳۰ روز را
+    می‌گرفت و دو روز آخر (از جمله دقیقه‌های اضافه‌شده از پلیر) گم می‌شد */
  const week = DAYS.map((d, i) => ({
  label: d,
- value: logs.slice(i * 4, i * 4 + 4).reduce((a, x) => a + x.minutes, 0),
+ value: logs[logs.length - 7 + i]?.minutes || 0,
  }))
  const best = Math.max(...logs.map((d) => d.minutes))
 

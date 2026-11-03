@@ -16,7 +16,10 @@ export default function ACourses() {
 
  const save = (data) => {
  if (modal === 'new') {
- setList([{ id: Date.now(), rating: 5, students: 0, hours: Number(data.hours) || 10, lessonsCount: Number(data.lessonsCount) || 20, icon: 'book', color: 'grad-0', level: data.level, type: 'recorded', curriculum: [], features: [], status: 'published', ...data }, ...list])
+ /* کاور از استخر عکس‌های موجود — قبلاً id=Date.now() باعث آدرس عکس ناموجود
+    (۴۰۴ در کارت و JSON-LD سئو) می‌شد */
+ const cover = '/images/courses/c' + ((list.length % 9) + 1) + '.jpg'
+ setList([{ id: Date.now(), image: cover, rating: 5, students: 0, hours: Number(data.hours) || 10, lessonsCount: Number(data.lessonsCount) || 20, icon: 'book', color: 'grad-0', level: data.level, type: 'recorded', curriculum: [], features: [], status: 'published', ...data }, ...list])
  toast('دوره جدید ثبت و منتشر شد ')
  } else {
  setList((l) => l.map((c) => (c.id === modal.id ? { ...c, ...data } : c)))

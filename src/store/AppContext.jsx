@@ -189,7 +189,9 @@ export function AppProvider({ children }) {
  },
  addMinutes(min) { patch((s) => ({ extraMinutes: s.extraMinutes + min })) },
  placeOrder(order) {
- const code = 'ORD-' + Math.floor(7900 + Math.random() * 90)
+ /** کد سفارش با فضای بزرگ‌تر — قبلاً فقط ۹۰ کد ممکن بود و تکرار تولید می‌شد
+    (تکرار = کلید تکراری React در لیست سفارش‌ها) */
+ const code = 'ORD-' + Math.floor(100000 + Math.random() * 900000)
  const today = new Date().toLocaleDateString('fa-IR')
  patch((s) => ({ orders: [...(s.orders || []), { code, date: today, ...order }], cart: [] }))
  return code

@@ -5,10 +5,28 @@ import { faNum, toman } from '../utils/format'
 
 export default function OrderSuccess() {
   const { state } = useLocation()
-  const code = state?.code || 'ORD-7900'
-  const total = state?.total || 0
-  const ship = state?.ship
   const today = new Date().toLocaleDateString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' })
+
+  /* ورود مستقیم به این صفحه بدون سفارش — دیگر «پرداخت موفق» جعلی نشان نمی‌دهد */
+  if (!state?.code) {
+    return (
+      <section className="container section">
+        <Seo title="ثبت سفارش" robots="noindex, nofollow" />
+        <div className="card success-card" style={{ textAlign: 'center' }}>
+          <h1 style={{ fontSize: 20, marginBottom: 8 }}>سفارشی برای نمایش پیدا نشد</h1>
+          <p className="muted">اگر تازه خریدی انجام داده‌اید، از همان صفحه سفارش به اینجا هدایت شده‌اید؛ در غیر این صورت می‌توانید از فروشگاه شروع کنید.</p>
+          <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
+            <Link to="/market" className="btn btn-primary">مدرس‌مارکت</Link>
+            <Link to="/courses" className="btn btn-ghost">دوره‌های آموزشی</Link>
+            <Link to="/" className="btn btn-ghost">صفحه نخست</Link>
+          </div>
+        </div>
+      </section>
+    )
+  }
+  const code = state.code
+  const total = state.total || 0
+  const ship = state.ship
   return (
     <section className="container section">
       <Seo title="ثبت سفارش" robots="noindex, nofollow" />

@@ -49,7 +49,9 @@ export default function ProductDetail() {
   const related = products.filter((p) => p.id !== product.id && p.cat === product.cat).slice(0, 4)
   const gallery = [...new Set([product.color, ...GRADS])].slice(0, 4)
   const thumbs = [product.icon, 'sparkles', 'layers', 'backpack']
-  const prodReviews = reviews.slice(0, 3)
+  /* نظرات این محصول — دیتای نظرات فعلی مال دوره‌هاست؛ فقط نظرات مرتبط نمایش داده می‌شود
+    (قبلاً سه نظر ثابتِ دوره ری‌اکت به همه محصولات می‌چسبید) */
+ const prodReviews = reviews.filter((r) => (r.target || '').includes(product.title) || product.title.includes(r.target || '###'))
   const specs = product.specs?.length ? product.specs : [
     ['دسته‌بندی', product.cat],
     ['گارانتی', '۷ روز ضمانت بازگشت'],
@@ -227,6 +229,11 @@ export default function ProductDetail() {
               </TabsContent>
               <TabsContent value="reviews">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {!prodReviews.length && (
+                    <p className="muted small" style={{ textAlign: 'center', padding: 18 }}>
+                      هنوز نظری برای این محصول ثبت نشده — پس از خرید، اولین نفر باشید.
+                    </p>
+                  )}
                   {prodReviews.map((r) => (
                     <div className="card pad" key={r.id} style={{ padding: 14 }}>
                       <div className="row g8 between">

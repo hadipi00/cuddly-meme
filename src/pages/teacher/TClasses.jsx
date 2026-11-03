@@ -35,7 +35,11 @@ export default function TClasses() {
  useEffect(load, [])
 
  const save = async (data) => {
- const start = `${SLOT_HOURS[Number(data.slot)] || 16}:00`
+ /* ساعت: انتخاب از اسلات‌ها؛ اگر کلاس قبلاً ساعت غیراسلاتی داشت (مثلاً ۱۷:۰۰)
+    گزینه «ساعت فعلی» انتخاب می‌شود تا با ذخیره بدون تغییر، ساعت خراب نشود */
+ const start = data.slot === 'x'
+ ? String(modal.start)
+ : `${SLOT_HOURS[Number(data.slot)] || 16}:00`
  const payload = {
  title: data.title, day: Number(data.day), start,
  dur: Number(data.dur) || 60, cap: Number(data.cap) || 30, desc: '',
@@ -117,12 +121,17 @@ export default function TClasses() {
  title={modal === 'new' ? 'تعریف کلاس پیش‌رو جدید' : 'ویرایش کلاس'}
  onClose={() => setModal(null)}
  onSubmit={save}
- initial={modal && modal !== 'new' ? { title: modal.title, day: String(modal.day), slot: String(Math.max(0, SLOT_HOURS.indexOf(parseInt(modal.start)))), dur: modal.dur } : {}}
+ initial={modal && modal !== 'new' ? { title: modal.title, day: String(modal.day), slot: String(SLOT_HOURS.indexOf(parseInt(modal.start)) >= 0 ? SLOT_HOURS.indexOf(parseInt(modal.start)) : 'x'), dur: modal.dur } : {}}
  submitLabel={modal === 'new' ? 'ثبت کلاس روی سرور' : 'ذخیره تغییرات'}
  fields={[
  { key: 'title', label: 'عنوان کلاس', full: true, placeholder: 'مثلاً کارگاه React — هوک‌های پیشرفته' },
  { key: 'day', label: 'روز هفته', type: 'select', options: DAYS.map((d, i) => ({ value: String(i), label: d })) },
- { key: 'slot', label: 'ساعت شروع', type: 'select', options: SLOTS.map((s, i) => ({ value: String(i), label: s })) },
+ { key: 'slot', label: 'ساعت شروع', type: 'select', options: [
+ ...SLOTS.map((s, i) => ({ value: String(i), label: s })),
+ ...(modal && modal !== 'new' && SLOT_HOURS.indexOf(parseInt(modal.start)) < 0
+ ? [{ value: 'x', label: `${modal.start} (ساعت فعلی — بدون تغییر)` }]
+ : []),
+ ] },
  { key: 'dur', label: 'مدت (دقیقه)', type: 'number' },
  { key: 'cap', label: 'ظرفیت', type: 'number', required: false },
  ]}

@@ -17,7 +17,7 @@ export function CourseCard({ course, myProgress }) {
       <div className={`c-thumb ${course.color}`}>
         {/* عکس واقعی دوره با alt کامل — سئوی تصویر گوگل؛ در صورت خطا گرادیان + آیکون */}
         <SmartImg
-          src={`/images/courses/c${course.id}.jpg`}
+          src={course.image || `/images/courses/c${course.id}.jpg`}
           alt={`کاور دوره ${course.title} — ${course.cat}`}
           width={672}
           height={330}
