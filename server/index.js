@@ -908,7 +908,36 @@ app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api'
 const distDir = join(__dirname, '..', 'dist')
 if (existsSync(distDir)) {
   app.use(express.static(distDir))
-  app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(join(distDir, 'index.html')))
+
+  /* sitemap.xml زنده از دیتابیس — قبلاً سایتمپ فقط در زمان بیلد از mock ساخته می‌شد
+     و دوره/محصول/مقاله‌ای که بعداً در سیستم ثبت می‌شد هرگز وارد آن نمی‌شد */
+  app.get('/sitemap.xml', (req, res) => {
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const today = new Date().toISOString().slice(0, 10)
+    const ORIGIN = 'https://modaresyar.ir'
+    const urls = [
+      { loc: '/', p: '1.0' }, { loc: '/courses', p: '0.9' }, { loc: '/live', p: '0.8' },
+      { loc: '/teachers', p: '0.8' }, { loc: '/market', p: '0.9' }, { loc: '/blog', p: '0.7' },
+      { loc: '/resume', p: '0.6' }, { loc: '/contact', p: '0.5' },
+      ...db.prepare('SELECT id FROM courses ORDER BY id').all().map((r) => ({ loc: `/courses/${r.id}`, p: '0.8' })),
+      ...db.prepare('SELECT id FROM products ORDER BY id').all().map((r) => ({ loc: `/market/${r.id}`, p: '0.7' })),
+      ...db.prepare('SELECT id FROM teacher_profiles ORDER BY id').all().map((r) => ({ loc: `/teachers/${r.id}`, p: '0.6' })),
+      ...db.prepare('SELECT id FROM blog_posts ORDER BY id').all().map((r) => ({ loc: `/blog/${r.id}`, p: '0.6' })),
+    ]
+    res.set('Content-Type', 'application/xml; charset=utf-8')
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls.map((u) => `  <url>\n    <loc>${ORIGIN}${esc(u.loc)}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>${u.p}</priority>\n  </url>`).join('\n') +
+      `\n</urlset>\n`)
+  })
+
+  /* صفحات prerender شده متادیتا (مثل dist/courses/1.html) باید برای مسیر خودش سرو شوند —
+     قبلاً همه‌چیز به index.html می‌رفت و خزنده‌ها در هاست اختصاصی متادیتای صفحه را نمی‌دیدند */
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    const clean = String(req.path).split('?')[0].replace(/\\/g, '').replace(/\.\./g, '')
+    const candidate = join(distDir, clean + '.html')
+    if (existsSync(candidate) && clean !== '/' && clean !== '') return res.sendFile(candidate)
+    res.sendFile(join(distDir, 'index.html'))
+  })
   console.log('[server] serving production build from ../dist')
 }
 
