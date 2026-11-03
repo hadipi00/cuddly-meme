@@ -20,14 +20,17 @@
 // متن پیام در کنسول لاگ و در جدول sms_log با ok=0 ثبت می‌شود تا
 // جریان خرید بدون پنل پیامک هم کامل تست‌پذیر باشد.
 // =====================================================================
-import { db } from './db.js'
+import { db, getSetting } from './db.js'
 
 const now = () => Date.now()
 
-const MELI_USER = process.env.SMS_USERNAME || ''
-const MELI_PASS = process.env.SMS_PASSWORD || ''
-const MELI_FROM = process.env.SMS_FROM || ''
-const ADMIN_TO = String(process.env.SMS_ADMIN || '').trim()
+/* [فیکس F16-d] منبع تنظیمات: اول DB (پنل ادمین)، بعد env — تغییر پنل بدون دیپلوی اعمال می‌شود */
+const smsCfg = () => ({
+  user: getSetting('sms_username', '') || process.env.SMS_USERNAME || '',
+  pass: getSetting('sms_password', '') || process.env.SMS_PASSWORD || '',
+  from: getSetting('sms_from', '') || process.env.SMS_FROM || '',
+  admin: getSetting('sms_admin', '') || String(process.env.SMS_ADMIN || '').trim(),
+})
 const SMS_DEBUG = process.env.SMS_DEBUG === '1'
 
 const SEND_URL = 'https://rest.payamak-panel.com/api/SendSMS/SendSMS'
@@ -46,7 +49,7 @@ CREATE TABLE IF NOT EXISTS sms_log (
   created_at INTEGER NOT NULL
 )`)
 
-export const smsConfigured = () => !!(MELI_USER && MELI_PASS && MELI_FROM)
+export const smsConfigured = () => { const c = smsCfg(); return !!(c.user && c.pass && c.from) }
 
 /** نرمال‌سازی موبایل ایرانی → «09xxxxxxxxx» یا null */
 export const normalizePhone = (raw) => {
@@ -82,10 +85,11 @@ export async function sendSms(rawTo, text, tag = 'general') {
   if (!to) return { ok: false, error: 'no-phone' }
   if (!smsConfigured()) { logSms(to, text, tag, false, true, null, 'not-configured'); return { ok: false, mock: true, error: 'not-configured' } }
   try {
+    const c = smsCfg()
     const r = await fetch(SEND_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ username: MELI_USER, password: MELI_PASS, to, from: MELI_FROM, text, isFlash: false }),
+      body: JSON.stringify({ username: c.user, password: c.pass, to, from: c.from, text, isFlash: false }),
       signal: AbortSignal.timeout(15_000),
     })
     const j = await r.json().catch(() => null)
@@ -124,5 +128,6 @@ export const notify = (to, text, tag) => { sendSms(to, text, tag).catch(() => {}
 export const notifyOrderPaid = ({ phone, code, total, items }) => {
   const tpl = smsTemplates.orderPaid({ code, total, items })
   if (phone) notify(phone, tpl, 'order-paid')
-  if (ADMIN_TO) notify(ADMIN_TO, `سفارش جدید در مدرسیار\nکد: ${code}\nمبلغ: ${Number(total || 0).toLocaleString('en-US')} تومان`, 'order-paid-admin')
+  const adminTo = smsCfg().admin
+  if (adminTo) notify(adminTo, `سفارش جدید در مدرسیار\nکد: ${code}\nمبلغ: ${Number(total || 0).toLocaleString('en-US')} تومان`, 'order-paid-admin')
 }

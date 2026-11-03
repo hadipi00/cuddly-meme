@@ -128,6 +128,47 @@ try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFA
 try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE classes ADD COLUMN board_bg TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+/* [فیکس B26-UI] پرچم «اجبار تغییر رمز اولین ورود» برای اکانت‌های دموی با رمز عمومی */
+try { db.exec('ALTER TABLE users ADD COLUMN must_change_pw INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+
+/* ---------------- تنظیمات سیستم (پنل ادمین — F16) ----------------
+   [فیکس F16-d] قبلاً «تنظیمات» پنل ادمین فقط toast جعلی می‌زد؛ حالا key/value
+   واقعی در DB ذخیره می‌شود. منبع: env اول، تنظیم DB دوم (تنظیم DB برنده است
+   تا بدون دیپلویِ دوباره از پنل قابل تغییر باشد) */
+db.exec(`
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+`)
+export const getSetting = (key, fallback = null) => {
+  try {
+    const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(String(key))
+    return r ? r.value : fallback
+  } catch { return fallback }
+}
+export const setSetting = (key, value) => {
+  db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+   .run(String(key), String(value ?? ''), Date.now())
+}
+
+/* مهاجرت یک‌باره: اکانت‌های دموی قدیمی (ایمیل @demo.ir) که هنوز رمز عمومی
+   «12345678» دارند → پرچم اجبار تغییر رمز اولین ورود می‌گیرند.
+   با نشان‌گذاری در جدول settings فقط یک بار در عمر DB اجرا می‌شود. */
+try {
+  if (!getSetting('migration_demo_pw_flag')) {
+    const demo = db.prepare("SELECT id, password_hash FROM users WHERE email LIKE '%@demo.ir'").all()
+    const upd = db.prepare('UPDATE users SET must_change_pw = 1 WHERE id = ?')
+    let n = 0
+    for (const u of demo) {
+      if (bcrypt.compareSync('12345678', u.password_hash)) { upd.run(u.id); n++ }
+    }
+    setSetting('migration_demo_pw_flag', '1')
+    if (n) console.log(`[db] ${n} demo account(s) flagged for first-login password change`)
+  }
+} catch { /* noop */ }
 
 /* ویرایش متون سایت از پنل مدیریت — «متن اصلی → متن جایگزین» (خالی = حذف متن) */
 db.exec(`
@@ -179,8 +220,10 @@ if (userCount === 0 && SEED_DISABLED) {
   console.log('[db] seeding initial data…')
   const now = Date.now()
   const hash = bcrypt.hashSync('12345678', 8)
+  /* [فیکس B26-UI] اکانت‌های دمو با رمز عمومی متولد می‌شوند → از همان اول
+     پرچم اجبار تغییر رمز اولین ورود دارند (قبلاً رمز عمومی برای همیشه می‌ماند) */
   const insUser = db.prepare(
-    'INSERT INTO users (id, name, email, password_hash, role, color, title, created_at) VALUES (?,?,?,?,?,?,?,?)'
+    'INSERT INTO users (id, name, email, password_hash, role, color, title, created_at, must_change_pw) VALUES (?,?,?,?,?,?,?,?,1)'
   )
 
   const users = [
@@ -237,7 +280,9 @@ if (userCount === 0 && SEED_DISABLED) {
 /** برچسب فارسی نقش — در سمت کلاینت هم بعد از رفرش/تب جدید در دسترس باشد (فیکس «پنل undefined») */
 const ROLE_LABELS = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
 export const publicUser = (u) =>
-  u ? { id: u.id, name: u.name, email: u.email, role: u.role, roleLabel: ROLE_LABELS[u.role] || u.title || '', color: u.color, title: u.title } : null
+  u ? { id: u.id, name: u.name, email: u.email, role: u.role, roleLabel: ROLE_LABELS[u.role] || u.title || '', color: u.color, title: u.title,
+    /* [فیکس B26-UI] فرانت با این پرچم مودال اجباری تغییر رمز نشان می‌دهد */
+    mustChangePassword: !!Number(u.must_change_pw) } : null
 
 export const classRow = (c) => ({
   id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,

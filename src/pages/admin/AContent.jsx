@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { DataIcon } from '../../utils/icons'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
-import { blogPosts, banners } from '../../data/mock'
+import { banners } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { faNum } from '../../utils/format'
 import { req } from '../../services/http'
@@ -13,8 +13,19 @@ export default function AContent() {
  const { toast } = useApp()
  const [tab, setTab] = useState('blog')
  const [modal, setModal] = useState(null)
- const [posts, setPosts] = useState(blogPosts)
- const [bList, setBList] = useState(banners)
+ const [posts, setPosts] = useState([])
+ const [saving, setSaving] = useState(false)
+ const [bList] = useState(banners) // بنرها فعلاً نمایشی — F16 فقط وبلاگ را واقعی کرد
+
+ /* [فیکس F16-c] مقاله‌های واقعی دیتابیس — قبلاً فقط آرایهٔ mock محلی بود؛
+ نوشتن مقاله با هر رفرش پریده و در سایت هرگز منتشر نمی‌شد */
+ const loadPosts = async () => {
+ try {
+ const r = await req('/admin/posts')
+ setPosts(r.posts || [])
+ } catch (e) { toast(e.message || 'دریافت مقاله‌ها ناموفق بود', 'error') }
+ }
+ useEffect(() => { loadPosts() }, [])
 
  /* ---------- تب ویرایش متون سایت ---------- */
  const [q, setQ] = useState('')
@@ -76,15 +87,30 @@ export default function AContent() {
  } finally { setBusy(false) }
  }
 
- const save = (d) => {
+ const save = async (d) => {
+ setSaving(true)
+ try {
  if (modal === 'new') {
- setPosts((l) => [{ id: 'b' + Date.now(), date: '1404/09/13', read: 5, icon: 'filetext', color: 'grad-2', ...d }, ...l])
- toast('مقاله منتشر شد ')
+ const r = await req('/admin/posts', { method: 'POST', body: { title: d.title, cat: d.cat, excerpt: d.excerpt || '', body: d.body || '' } })
+ setPosts((l) => [r.post, ...l])
+ toast('مقاله در دیتابیس ذخیره و منتشر شد')
  } else {
- setPosts((l) => l.map((p) => (p.id === modal.id ? { ...p, ...d } : p)))
- toast('مقاله به‌روزرسانی شد')
+ const r = await req(`/admin/posts/${encodeURIComponent(modal.id)}`, { method: 'PATCH', body: { title: d.title, cat: d.cat, excerpt: d.excerpt || '', body: d.body || '' } })
+ setPosts((l) => l.map((p) => (p.id === modal.id ? r.post : p)))
+ toast('مقاله در دیتابیس به‌روزرسانی شد')
  }
  setModal(null)
+ } catch (e) { toast(e.message || 'ذخیره ناموفق بود', 'error') }
+ finally { setSaving(false) }
+ }
+
+ const removePost = async (p) => {
+ if (!window.confirm(`مقاله «${p.title}» حذف شود؟`)) return
+ try {
+ await req(`/admin/posts/${encodeURIComponent(p.id)}`, { method: 'DELETE' })
+ setPosts((l) => l.filter((x) => x.id !== p.id))
+ toast('مقاله حذف شد', 'info')
+ } catch (e) { toast(e.message || 'حذف ناموفق بود', 'error') }
  }
 
  return (
@@ -125,7 +151,7 @@ export default function AContent() {
  actions={(r) => (
  <>
  <button className="icon-btn" title="ویرایش" onClick={() => setModal(r)}><Icon name="edit" /></button>
- <button className="icon-btn" title="حذف" onClick={() => { setPosts((l) => l.filter((p) => p.id !== r.id)); toast('مقاله حذف شد', 'info') }}><Icon name="trash" /></button>
+ <button className="icon-btn" title="حذف" onClick={() => removePost(r)}><Icon name="trash" /></button>
  </>
  )}
  />
@@ -142,20 +168,15 @@ export default function AContent() {
  <div className="muted small mt8">{b.place}</div>
  </div>
  <label className="switch">
- <input type="checkbox" checked={b.active} onChange={() => {
- setBList((l) => l.map((x) => (x.id === b.id ? { ...x, active: !x.active } : x)))
- toast(b.active ? 'بنر غیرفعال شد' : 'بنر فعال شد', 'info')
- }} />
+ {/* بنرها فعلاً نمایشی‌اند — کلید غیرفعال تا «فعال‌سازی قلابی» گمراه نکند */}
+ <input type="checkbox" checked={b.active} disabled onChange={() => {}} />
  <i />
  </label>
  </div>
  </div>
  ))}
  <button className="card pad" style={{ borderStyle: 'dashed', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--muted)' }}
- onClick={() => {
- setBList((l) => [...l, { id: 'bn' + Date.now(), title: 'بنر جدید — عنوان نمونه', place: 'صفحه نخست — بالای صفحه', active: false }])
- toast('بنر جدید اضافه شد — برای فعال‌سازی کلید را بزنید')
- }}>
+ onClick={() => toast('مدیریت بنرها در نسخه بعدی متصل به دیتابیس می‌شود', 'info')}>
  <Icon name="plus" /> افزودن بنر جدید
  </button>
  </div>
@@ -269,11 +290,13 @@ export default function AContent() {
  title={modal === 'new' ? 'نوشتن مقاله جدید' : 'ویرایش مقاله'}
  onClose={() => setModal(null)}
  onSubmit={save}
- initial={modal && modal !== 'new' ? { title: modal.title, cat: modal.cat } : {}}
+ submitLabel={saving ? 'در حال ذخیره…' : 'ذخیره'}
+ initial={modal && modal !== 'new' ? { title: modal.title, cat: modal.cat, excerpt: modal.excerpt || '', body: modal.body || '' } : {}}
  fields={[
  { key: 'title', label: 'عنوان مقاله', full: true },
  { key: 'cat', label: 'دسته', type: 'select', options: ['روش مطالعه', 'برنامه‌نویسی', 'بهره‌وری', 'طراحی', 'مدرس‌مارکت', 'آموزش آنلاین'] },
- { key: 'excerpt', label: 'خلاصه', type: 'textarea', full: true },
+ { key: 'excerpt', label: 'خلاصه (در کارت وبلاگ دیده می‌شود)', type: 'textarea', full: true, required: false },
+ { key: 'body', label: 'متن کامل مقاله (صفحهٔ مقاله)', type: 'textarea', full: true, required: false },
  ]}
  />
  </div>

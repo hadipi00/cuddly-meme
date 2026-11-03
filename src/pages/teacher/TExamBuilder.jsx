@@ -134,6 +134,9 @@ export default function TExamBuilder() {
  const serverQCountRef = useRef(0)
  const timerRef = useRef(null)
  const dragRef = useRef(null)
+ /* [فیکس F33-bis] کلاس «dragging» با ref هرگز رندر نمی‌شد (ref تغییر → re-render ندارد)؛
+ حالا اندیس درگ در state هم نگه داشته می‌شود تا کارت واقعاً برجسته شود */
+ const [dragIdx, setDragIdx] = useState(null)
  const fileRef = useRef(null)
 
  /* ---------- بارگذاری ----------
@@ -232,6 +235,7 @@ export default function TExamBuilder() {
  const onDrop = (to) => {
    const from = dragRef.current
    dragRef.current = null
+   setDragIdx(null)
    if (from == null || from === to) return
    moveQ(from, to)
    if (active === from) setActive(to)
@@ -444,8 +448,8 @@ export default function TExamBuilder() {
         )}
        </div>
        {questions.map((q, i) => (
-        <div key={q._id ?? i} className={`exm-qcard ${dragRef.current === i ? 'dragging' : ''} ${i === active ? 'active' : ''}`} draggable
-          onDragStart={() => { dragRef.current = i }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(i)}
+        <div key={q._id ?? i} className={`exm-qcard ${dragIdx === i ? 'dragging' : ''} ${i === active ? 'active' : ''}`} draggable
+          onDragStart={() => { dragRef.current = i; setDragIdx(i) }} onDragEnd={() => { setDragIdx(null) }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(i)}
           onClick={() => setActive(i)}>
          <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
           <span className="exm-grip" title="بکشید">⠿</span>

@@ -110,7 +110,8 @@ export function AppProvider({ children }) {
  setToken(r.token)
  patch(() => ({ user: r.user, token: r.token }))
  toast(`خوش آمدید، ${r.user.name}!`)
- return { ok: true, role: r.user.role, demo: false }
+ /* [فیکس B26-UI] پرچم اجبار تغییر رمز برای اکانت‌های دمو به فراخوان برمی‌گردد */
+ return { ok: true, role: r.user.role, demo: false, mustChangePassword: !!r.user?.mustChangePassword }
  },
  /** ثبت‌نام واقعی (نقش: دانش‌آموز) — اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو */
  async register(name, email, password) {
@@ -136,6 +137,19 @@ export function AppProvider({ children }) {
  logout() {
  setToken(null)
  patch(() => ({ user: null, token: null }))
+ },
+ /* [فیکس B26-UI] تغییر رمز (اجباری برای اکانت‌های دمو با پرچم mustChangePassword؛
+ داوطلبانه برای بقیه) — توکن تازه + کاربر به‌روزشده از سرور جایگزین می‌شود */
+ async changePassword(current, next) {
+ try {
+ const r = await req('/auth/change-password', { method: 'POST', body: { current, next } })
+ if (r.token) setToken(r.token)
+ patch(() => ({ user: r.user, token: r.token || getToken() }))
+ toast('رمز عبور با موفقیت عوض شد')
+ return { ok: true }
+ } catch (e) {
+ return { ok: false, error: e.message }
+ }
  },
  addToCart(item, qty = 1) {
  setState((s) => {

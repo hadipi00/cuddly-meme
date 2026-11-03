@@ -1,9 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { sysLogs } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
+import { req } from '../../services/http'
 import { site } from '../../config/site'
+
+/* [فیکس F16-d] تنظیمات واقعی — قبلاً «ذخیره» فقط toast جعلی می‌زد و هیچ مقداری
+   ذخیره نمی‌شد. حالا: بارگذاری از GET /api/admin/settings + ذخیره PUT.
+   بخش عمومی Footer/Contact را واقعاً عوض می‌کند (از /api/settings/public خوانده می‌شود).
+   درگاه/پیامک: مقادیر ذخیره‌شده fallback زرین‌پال/ملی‌پیامک‌اند (env اولویت دارد) و
+   وضعیت فعلی (payMode/smsConfigured) از سرور نمایش داده می‌شود. */
 
 const sections = [
  { key: 'general', icon: 'settings', label: 'عمومی' },
@@ -28,26 +35,71 @@ const perms = [
  ['مدیریت کدهای تخفیف', true, false, false],
 ]
 
+const PAY_MODE_LABEL = {
+ mock: 'آزمایشی محلی (بدون مرچنت)',
+ sandbox: 'زرین‌پال — Sandbox',
+ real: 'زرین‌پال — پرداخت واقعی',
+}
+
 export default function ASettings() {
  const { toast } = useApp()
  const [sec, setSec] = useState('general')
+ const [s, setS] = useState(null) // مقادیر فرم
+ const [meta, setMeta] = useState({ payMode: 'mock', smsConfigured: false })
+ const [busy, setBusy] = useState(false)
 
- const save = () => toast('تنظیمات ذخیره شد ')
+ useEffect(() => {
+ req('/admin/settings').then((r) => {
+ setS({
+ site_name: r.settings.site_name || site.name,
+ site_tagline: r.settings.site_tagline || site.tagline,
+ site_phone: r.settings.site_phone || site.phone,
+ site_email: r.settings.site_email || site.email,
+ site_address: r.settings.site_address || site.address,
+ site_working_hours: r.settings.site_working_hours || site.workingHours,
+ maintenance_mode: r.settings.maintenance_mode === '1',
+ registration_open: r.settings.registration_open !== '',
+ zarinpal_merchant: r.settings.zarinpal_merchant || '',
+ zarinpal_sandbox: r.settings.zarinpal_sandbox === '1',
+ sms_username: r.settings.sms_username || '',
+ sms_password: r.settings.sms_password || '',
+ sms_from: r.settings.sms_from || '',
+ sms_admin: r.settings.sms_admin || '',
+ })
+ setMeta({ payMode: r.payMode, smsConfigured: r.smsConfigured })
+ }).catch((e) => toast(e.message || 'دریافت تنظیمات ناموفق بود', 'error'))
+ }, [toast])
+
+ if (!s) return <div className="card pad">در حال بارگذاری تنظیمات…</div>
+
+ const save = async (keys, label) => {
+ setBusy(true)
+ try {
+ const body = {}
+ for (const k of keys) {
+ const v = s[k]
+ body[k] = typeof v === 'boolean' ? (v ? '1' : '') : v
+ }
+ await req('/admin/settings', { method: 'PUT', body })
+ toast(`${label} ذخیره شد`)
+ } catch (e) { toast(e.message || 'ذخیره ناموفق بود', 'error') }
+ finally { setBusy(false) }
+ }
 
  return (
- <div>
+ <div data-tx-skip>
  <div className="between wrap mb24">
  <div>
  <h2 style={{ fontSize: 17 }}>تنظیمات سیستم</h2>
- <span className="muted small">پیکربندی سایت، درگاه پرداخت، پیامک، دسترسی‌ها و لاگ رویدادها</span>
+ <span className="muted small">پیکربندی واقعی سایت، درگاه پرداخت و پیامک — متصل به دیتابیس</span>
  </div>
  </div>
 
  <div className="settings-grid">
  <div className="settings-nav">
- {sections.map((s) => (
- <button key={s.key} className={sec === s.key ? 'on' : ''} onClick={() => setSec(s.key)}>
- <Icon name={s.icon} /> {s.label}
+ {sections.map((sec0) => (
+ <button key={sec0.key} className={sec === sec0.key ? 'on' : ''} onClick={() => setSec(sec0.key)}>
+ <Icon name={sec0.icon} /> {sec0.label}
  </button>
  ))}
  </div>
@@ -56,56 +108,66 @@ export default function ASettings() {
  {sec === 'general' && (
  <div className="card pad">
  <h3 className="mb16">تنظیمات عمومی سایت</h3>
- <div className="field"><label>نام سایت</label><input className="input" defaultValue={site.name} /></div>
+ <div className="field"><label>نام سایت</label><input className="input" value={s.site_name} onChange={(e) => setS({ ...s, site_name: e.target.value })} /></div>
+ <div className="field"><label>شعار (زیر عنوان)</label><input className="input" value={s.site_tagline} onChange={(e) => setS({ ...s, site_tagline: e.target.value })} /></div>
  <div className="field-row">
- <div className="field"><label>تلفن پشتیبانی</label><input className="input" defaultValue={site.phone} /></div>
- <div className="field"><label>ایمیل</label><input className="input" defaultValue={site.email} /></div>
+ <div className="field"><label>تلفن پشتیبانی</label><input className="input" value={s.site_phone} onChange={(e) => setS({ ...s, site_phone: e.target.value })} /></div>
+ <div className="field"><label>ایمیل</label><input className="input" dir="ltr" value={s.site_email} onChange={(e) => setS({ ...s, site_email: e.target.value })} /></div>
  </div>
- <div className="field"><label>آدرس دفتر</label><input className="input" defaultValue={site.address} /></div>
- <div className="field"><label>ساعات کاری</label><input className="input" defaultValue={site.workingHours} /></div>
- <div className="toggle-row"><div><b>حالت تعمیر و نگهداری</b><p>در صورت فعال‌سازی، سایت عمومی برای کاربران عادی بسته می‌شود</p></div>
- <Toggle id="mnt" /></div>
+ <div className="field"><label>آدرس دفتر</label><input className="input" value={s.site_address} onChange={(e) => setS({ ...s, site_address: e.target.value })} /></div>
+ <div className="field"><label>ساعات کاری</label><input className="input" value={s.site_working_hours} onChange={(e) => setS({ ...s, site_working_hours: e.target.value })} /></div>
+ <div className="toggle-row"><div><b>حالت تعمیر و نگهداری</b><p>در صورت فعال‌سازی، پیام تعمیر در Footer و صفحات عمومی دیده می‌شود</p></div>
+ <Toggle on={s.maintenance_mode} onChange={(v) => setS({ ...s, maintenance_mode: v })} /></div>
  <div className="toggle-row"><div><b>فعال‌سازی ثبت‌نام دانشجو</b><p>اجازه ساخت حساب جدید توسط کاربران</p></div>
- <Toggle id="reg" defaultOn /></div>
- <button className="btn btn-primary mt16" onClick={save}><Icon name="check" size={16} /> ذخیره</button>
+ <Toggle on={s.registration_open} onChange={(v) => setS({ ...s, registration_open: v })} /></div>
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['site_name', 'site_tagline', 'site_phone', 'site_email', 'site_address', 'site_working_hours', 'maintenance_mode', 'registration_open'], 'تنظیمات عمومی')}>
+ <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیره'}
+ </button>
+ <p className="muted small mt8">نام/تلفن/ایمیل/آدرس ذخیره‌شده بلافاصله در Footer و صفحه تماس همه کاربران اعمال می‌شود.</p>
  </div>
  )}
 
  {sec === 'payment' && (
  <div className="card pad">
- <h3 className="mb16">درگاه‌های پرداخت</h3>
- <div className="field-row">
- <div className="field"><label>درگاه اصلی</label>
- <select className="select" defaultValue="زرین‌پال"><option>زرین‌پال</option><option>درگاه ملت</option><option>درگاه سامان</option><option>آیدی‌پی</option></select>
+ <h3 className="mb16">درگاه پرداخت زرین‌پال</h3>
+ <div className="badge b-teal mb16" style={{ maxWidth: 260 }}>
+ وضعیت فعلی: {PAY_MODE_LABEL[meta.payMode] || meta.payMode}
  </div>
- <div className="field"><label>واحد پول</label><select className="select"><option>تومان</option><option>ریال</option></select></div>
+ <div className="field"><label>مرچنت‌کد (Merchant ID) — UUID ۳۶ کاراکتری</label>
+ <input className="input" dir="ltr" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+ value={s.zarinpal_merchant} onChange={(e) => setS({ ...s, zarinpal_merchant: e.target.value })} />
  </div>
- <div className="field"><label>مرچنت‌کد (Merchant ID)</label><input className="input" dir="ltr" defaultValue="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" /></div>
- <div className="field"><label>کلید API درگاه دوم</label><input className="input" dir="ltr" placeholder="در صورت داشتن درگاه پشتیبان" /></div>
- <div className="toggle-row"><div><b>حالت تست (Sandbox)</b><p>پرداخت واقعی انجام نمی‌شود — برای تست فرانت</p></div><Toggle id="sb" defaultOn /></div>
- <div className="toggle-row"><div><b>کشف خودکار تراکنش‌های معلق</b><p>بررسی دوره‌ای پرداخت‌های نیمه‌کاره هر ۱۰ دقیقه</p></div><Toggle id="au" defaultOn /></div>
- <button className="btn btn-primary mt16" onClick={save}><Icon name="check" size={16} /> ذخیره</button>
+ <div className="toggle-row"><div><b>حالت Sandbox</b><p>پرداخت واقعی انجام نمی‌شود — با مرچنت آزمایشی زرین‌پال تست کنید</p></div>
+ <Toggle on={s.zarinpal_sandbox} onChange={(v) => setS({ ...s, zarinpal_sandbox: v })} /></div>
+ <div className="toggle-row"><div><b>کشف خودکار تراکنش‌های معلق</b><p>سوییپ دوره‌ای پرداخت‌های رهاشده — همیشه فعال است (سرورمحور)</p></div>
+ <Toggle on onChange={() => {}} /></div>
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['zarinpal_merchant', 'zarinpal_sandbox'], 'تنظیمات درگاه')}>
+ <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیره'}
+ </button>
+ <p className="muted small mt8">
+ مرچنت ذخیره‌شده در دیتابیس fallback env است؛ تا وقتی خالی باشد سرور در حالت mock می‌ماند.
+ پس از ذخیره، وضعیت بالا با اولین درخواست بعدی به‌روز می‌شود.
+ </p>
  </div>
  )}
 
  {sec === 'sms' && (
  <div className="card pad">
- <h3 className="mb16">تنظیمات پیامک</h3>
+ <h3 className="mb16">تنظیمات پیامک — ملی پیامک</h3>
+ <div className={`badge ${meta.smsConfigured ? 'b-green' : 'b-amber'} mb16`} style={{ maxWidth: 260 }}>
+ {meta.smsConfigured ? 'پیامک پیکربندی شده و فعال است' : 'پیکربندی نشده — پیام‌ها فقط لاگ می‌شوند'}
+ </div>
  <div className="field-row">
- <div className="field"><label>سرویس‌دهنده</label>
- <select className="select"><option>کاوه‌نگار</option><option>ملی پیامک</option><option>پیامک آسان</option></select>
+ <div className="field"><label>نام کاربری پنل</label><input className="input" dir="ltr" value={s.sms_username} onChange={(e) => setS({ ...s, sms_username: e.target.value })} /></div>
+ <div className="field"><label>شماره فرستنده</label><input className="input" dir="ltr" placeholder="50004001…" value={s.sms_from} onChange={(e) => setS({ ...s, sms_from: e.target.value })} /></div>
  </div>
- <div className="field"><label>شماره فرستنده</label><input className="input" dir="ltr" defaultValue="50004001234567" /></div>
- </div>
- <div className="field"><label>کلید API</label><input className="input" dir="ltr" defaultValue="••••••••••••••••" /></div>
- <h4 className="mb16 mt16" style={{ fontSize: 14 }}>رویدادهای ارسال پیامک</h4>
- {[
- ['ثبت‌نام موفق', 'خوش‌آمد + کد فعال‌سازی'],
- ['یادآوری کلاس زنده', '۳۰ دقیقه قبل از شروع با لینک ورود'],
- ['تأیید سفارش مدرس‌مارکت', 'کد سفارش + کد رهگیری پست'],
- ['صدور گواهی‌نامه', 'لینک دانلود گواهی'],
- ].map(([t, d], i) => <ToggleRow key={t} t={t} d={d} defaultOn={i !== 3} />)}
- <button className="btn btn-primary mt16" onClick={save}><Icon name="check" size={16} /> ذخیره</button>
+ <div className="field"><label>کلید API وب‌سرویس</label><input className="input" dir="ltr" type="password" placeholder="در پنل: تنظیمات ← وب‌سرویس"
+ value={s.sms_password} onChange={(e) => setS({ ...s, sms_password: e.target.value })} /></div>
+ <div className="field"><label>موبایل مدیر (اطلاع‌رسانی سفارش)</label><input className="input" dir="ltr" placeholder="09…" value={s.sms_admin} onChange={(e) => setS({ ...s, sms_admin: e.target.value })} /></div>
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['sms_username', 'sms_password', 'sms_from', 'sms_admin'], 'تنظیمات پیامک')}>
+ <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیره'}
+ </button>
+ <p className="muted small mt8">رویدادهای پیامکی (خرید موفق، ثبت‌نام کلاس و…) روی همین پیکربندی کار می‌کنند؛ بدون تنظیم، متن پیام فقط در لاگ سرور ثبت می‌شود.</p>
  </div>
  )}
 
@@ -116,10 +178,10 @@ export default function ASettings() {
  <table className="matrix-table">
  <thead><tr><th>قابلیت</th><th>مدیر</th><th>مدرس</th><th>دانش‌آموز</th></tr></thead>
  <tbody>
- {perms.map(([label, a, t, s]) => (
+ {perms.map(([label, a, t, st]) => (
  <tr key={label}>
  <td className="cell-strong">{label}</td>
- {[a, t, s].map((on, i) => (
+ {[a, t, st].map((on, i) => (
  <td key={i}><input type="checkbox" className="matrix-check" defaultChecked={on} disabled={i === 0} /></td>
  ))}
  </tr>
@@ -127,8 +189,7 @@ export default function ASettings() {
  </tbody>
  </table>
  </div>
- <p className="muted small mt16">دسترسی مدیر همیشه کامل است و قابل تغییر نیست.</p>
- <button className="btn btn-primary mt8" onClick={save}><Icon name="check" size={16} /> ذخیره دسترسی‌ها</button>
+ <p className="muted small mt16">دسترسی مدیر همیشه کامل است و قابل تغییر نیست. (این ماتریس نمای وضعیت فعلی کد است)</p>
  </div>
  )}
 
@@ -136,7 +197,7 @@ export default function ASettings() {
  <div className="card pad">
  <div className="between mb16">
  <h3 style={{ fontSize: 15 }}>لاگ رویدادهای سیستم</h3>
- <button className="btn btn-ghost btn-sm" onClick={() => toast('فایل لاگ کامل دانلود شد (دمو)')}><Icon name="download" size={14} /> دانلود کامل</button>
+ <button className="btn btn-ghost btn-sm" onClick={() => toast('گزارش خطاهای کلاینت در سرور ثبت می‌شود (POST /api/client-errors)', 'info')}><Icon name="download" size={14} /> دانلود کامل</button>
  </div>
  <DataTable
  columns={[
@@ -163,25 +224,11 @@ export default function ASettings() {
  )
 }
 
-function Toggle({ id, defaultOn = false }) {
- const [on, setOn] = useState(defaultOn)
+function Toggle({ on, onChange }) {
  return (
  <label className="switch">
- <input type="checkbox" checked={on} onChange={() => setOn(!on)} />
+ <input type="checkbox" checked={!!on} onChange={() => onChange(!on)} />
  <i />
  </label>
- )
-}
-
-function ToggleRow({ t, d, defaultOn = true }) {
- const [on, setOn] = useState(defaultOn)
- return (
- <div className="toggle-row">
- <div><b>{t}</b><p>{d}</p></div>
- <label className="switch">
- <input type="checkbox" checked={on} onChange={() => setOn(!on)} />
- <i />
- </label>
- </div>
  )
 }

@@ -7,6 +7,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { RouteGuard } from './components/guards'
 import { LoadingScreen } from './components/LoadingScreen'
 import { CartDrawer, Toasts } from './components/CartDrawer'
+import ForcePwChange from './components/ForcePwChange'
 import { useApp } from './store/AppContext'
 import { initPrefetch } from './lib/prefetch'
 import { seoOwnsTitle } from './components/Seo'
@@ -281,6 +282,7 @@ export default function App() {
  </Routes>
  </Suspense>
  <CartDrawerHolder />
+ <ForcePwChange />
  <Toasts />
  </ErrorBoundary>
  )

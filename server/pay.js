@@ -30,26 +30,35 @@
 // =====================================================================
 import express from 'express'
 import jwt from 'jsonwebtoken'
-import { db, JWT_SECRET } from './db.js'
+import { db, JWT_SECRET, getSetting } from './db.js'
 import { priceCart, reserveStock, restoreStock, uniqueOrderCode, faNum } from './checkout-core.js'
 import { smsConfigured, normalizePhone, notifyOrderPaid } from './sms.js'
 
 const nowMs = () => Date.now()
 
-/* ---------------- تنظیمات و حالت کارکرد ---------------- */
-const MERCHANT = (process.env.ZARINPAL_MERCHANT_ID || '').trim()
-const SANDBOX = process.env.ZARINPAL_SANDBOX === 'true'
-export const PAYMENT_MODE = MERCHANT ? (SANDBOX ? 'sandbox' : 'real') : 'mock'
+/* ---------------- تنظیمات و حالت کارکرد ----------------
+   [فیکس F16-d] منبع تنظیمات: اول DB (پنل ادمین → PUT /api/admin/settings)،
+   بعد env. قبلاً فقط env خوانده می‌شد و تغییر مرچنت بدون دیپلوی/ری‌استارت غیرممکن بود */
+const merchantCfg = () => (getSetting('zarinpal_merchant', '') || process.env.ZARINPAL_MERCHANT_ID || '').trim()
+const sandboxCfg = () => {
+  const s = getSetting('zarinpal_sandbox', null)
+  if (s !== null) return s === '1'
+  return process.env.ZARINPAL_SANDBOX === 'true'
+}
+export const payMode = () => (merchantCfg() ? (sandboxCfg() ? 'sandbox' : 'real') : 'mock')
+/* سازگاری با مصرف‌کننده‌های قدیمی — مقدار هنگام بوت (env) */
+export const PAYMENT_MODE = (process.env.ZARINPAL_MERCHANT_ID || '').trim()
+  ? (process.env.ZARINPAL_SANDBOX === 'true' ? 'sandbox' : 'real') : 'mock'
 
-const API_BASE = PAYMENT_MODE === 'sandbox' ? 'https://sandbox.zarinpal.com' : 'https://api.zarinpal.com'
-const PAY_BASE = PAYMENT_MODE === 'sandbox' ? 'https://sandbox.zarinpal.com' : 'https://www.zarinpal.com'
+const apiBase = () => (payMode() === 'sandbox' ? 'https://sandbox.zarinpal.com' : 'https://api.zarinpal.com')
+const payBase = () => (payMode() === 'sandbox' ? 'https://sandbox.zarinpal.com' : 'https://www.zarinpal.com')
 
 /* آدرس عمومی سایت — مقصد ریدایرکت‌های درگاه در حالت واقعی.
    در production حتماً PUBLIC_BASE_URL را روی دامنه واقعی تنظیم کنید؛
    در حالت mock نیازی به آن نیست — از origin خود درخواست مرورگر استفاده می‌شود
    (تا چه روی Vite dev :3000 باشد چه سرور dist :4000 — هر دو درست کار می‌کنند) */
 const PUBLIC_BASE = (process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || 4000}`).replace(/\/+$/, '')
-if (PAYMENT_MODE !== 'mock' && !process.env.PUBLIC_BASE_URL)
+if (payMode() !== 'mock' && !process.env.PUBLIC_BASE_URL)
   console.warn('[pay] هشدار: PUBLIC_BASE_URL تنظیم نشده — callback زرین‌پال روی آدرس محلی ثبت می‌شود و پرداخت کامل نخواهد شد')
 
 /* origin درخواست جاری — در حالت mock مبنای ریدایرکت‌ها (همان جایی که مرورگر است) */
@@ -59,8 +68,8 @@ export const reqOrigin = (req) => {
   return `${proto}://${host}`
 }
 
-const MERCHANT_OK = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(MERCHANT)
-if (PAYMENT_MODE !== 'mock' && !MERCHANT_OK)
+const MERCHANT_OK = () => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(merchantCfg())
+if (payMode() !== 'mock' && !MERCHANT_OK())
   console.warn('[pay] هشدار: ZARINPAL_MERCHANT_ID باید یک UUID معتبر ۳۶ کاراکتری باشد')
 
 export const PAYMENT_TTL_MS = 30 * 60 * 1000 // عمر authority زرین‌پال ~۳۰ دقیقه
@@ -136,7 +145,7 @@ const authUser = (req) => {
 
 /* ---------------- فراخوانی REST زرین‌پال ---------------- */
 async function zarinCall(path, body) {
-  const r = await fetch(`${API_BASE}/pg/v4/payment/${path}.json`, {
+  const r = await fetch(`${apiBase()}/pg/v4/payment/${path}.json`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Modaresyar/1.0' },
     body: JSON.stringify(body),
@@ -148,7 +157,7 @@ async function zarinCall(path, body) {
 /* ایجاد درخواست پرداخت → { authority } یا { error } */
 async function zarinRequest({ amountRial, callbackUrl, description, mobile, email }) {
   const payload = {
-    merchant_id: MERCHANT || '00000000-0000-0000-0000-000000000000', // مقدار صوری فقط برای sandbox
+    merchant_id: merchantCfg() || '00000000-0000-0000-0000-000000000000', // مقدار صوری فقط برای sandbox
     amount: amountRial,
     currency: 'IRR', // مبلغ درخواست همیشه ریال است (تومان × ۱۰)
     description: String(description || 'پرداخت مدرس‌یار').slice(0, 255),
@@ -170,7 +179,7 @@ async function zarinRequest({ amountRial, callbackUrl, description, mobile, emai
 /* تأیید پرداخت → { ok, refId, cardPan, already } یا { error } */
 async function zarinVerify({ amountRial, authority }) {
   const j = await zarinCall('verify', {
-    merchant_id: MERCHANT || '00000000-0000-0000-0000-000000000000',
+    merchant_id: merchantCfg() || '00000000-0000-0000-0000-000000000000',
     amount: amountRial,
     authority,
   })
@@ -286,7 +295,7 @@ export async function startZarinPayment({ user, lines, total, description, meta,
 
   let authority = null
   let redirectUrl = null
-  if (PAYMENT_MODE === 'mock') {
+  if (payMode() === 'mock') {
     /* درگاه آزمایشی محلی — همان قرارداد callback (Authority/Status)؛
        مقصد ریدایرکت = origin مرورگرِ شروع‌کننده پرداخت */
     authority = 'MOCK' + Math.random().toString(36).slice(2, 12).toUpperCase()
@@ -301,11 +310,11 @@ export async function startZarinPayment({ user, lines, total, description, meta,
       return { error: rq.error }
     }
     authority = rq.authority
-    redirectUrl = `${PAY_BASE}/pg/StartPay/${authority}`
+    redirectUrl = `${payBase()}/pg/StartPay/${authority}`
   }
 
   db.prepare(`INSERT INTO payments (authority, code, user_id, amount, status, mode, created_at)
-    VALUES (?,?,?,?,'pending',?,?)`).run(authority, code, user.id, total, PAYMENT_MODE, nowMs())
+    VALUES (?,?,?,?,'pending',?,?)`).run(authority, code, user.id, total, payMode(), nowMs())
 
   return { ok: true, authority, redirectUrl, code }
 }
@@ -316,13 +325,13 @@ export function registerPayRoutes(app) {
 
   /* وضعیت پیکربندی پرداخت/پیامک — برای نمایش حالت آزمایشی در UI (بدون داده حساس) */
   payRoutes.get('/config', (req, res) =>
-    res.json({ mode: PAYMENT_MODE, minAmount: MIN_AMOUNT, sms: smsConfigured() }))
+    res.json({ mode: payMode(), minAmount: MIN_AMOUNT, sms: smsConfigured() }))
 
   /* شروع پرداخت سبد خرید — همان بدنهٔ /api/checkout */
   payRoutes.post('/zarinpal/start', async (req, res) => {
     const u = authUser(req)
     if (!u) return res.status(401).json({ error: 'برای پرداخت ابتدا وارد حساب شوید' })
-    if (PAYMENT_MODE !== 'mock' && !MERCHANT_OK)
+    if (payMode() !== 'mock' && !MERCHANT_OK())
       return res.status(500).json({ error: 'مرچنت‌کد زرین‌پال معتبر نیست — تنظیمات سرور را بررسی کنید' })
     sweepExpiredPayments()
 
@@ -341,7 +350,7 @@ export function registerPayRoutes(app) {
         origin: reqOrigin(req),
       })
       if (r.error) return res.status(502).json({ error: r.error })
-      res.json({ ok: true, code: r.code, total: p.total, redirectUrl: r.redirectUrl, mode: PAYMENT_MODE })
+      res.json({ ok: true, code: r.code, total: p.total, redirectUrl: r.redirectUrl, mode: payMode() })
     } catch (e) {
       console.error('[pay] start failed:', e.message)
       res.status(502).json({ error: 'خطا در اتصال به درگاه پرداخت — دوباره تلاش کنید' })
@@ -352,7 +361,7 @@ export function registerPayRoutes(app) {
      مقصد ریدایرکت: mock → origin جاری مرورگر؛ real/sandbox → PUBLIC_BASE */
   payRoutes.get('/zarinpal/callback', async (req, res) => {
     sweepExpiredPayments()
-    const base = PAYMENT_MODE === 'mock' ? reqOrigin(req) : PUBLIC_BASE
+    const base = payMode() === 'mock' ? reqOrigin(req) : PUBLIC_BASE
     const authority = String(req.query.Authority || req.query.authority || '').trim()
     const status = String(req.query.Status || req.query.status || '').trim().toUpperCase()
     const fail = (reason, code) =>
@@ -374,7 +383,7 @@ export function registerPayRoutes(app) {
     /* تأیید سمت سرور — مبلغ از DB، نه از کوئری.
        در حالت mock تأیید محلی شبیه‌سازی می‌شود (درگاه آزمایشی «پول را گرفته»)؛
        در sandbox/real تأیید واقعی نزد زرین‌پال انجام می‌شود */
-    const v = PAYMENT_MODE === 'mock'
+    const v = payMode() === 'mock'
       ? { ok: true, refId: 'MR' + String(nowMs()).slice(-9), cardPan: '6037******9999' }
       : await zarinVerify({ amountRial: p.amount * 10, authority })
     if (!v.ok) {
@@ -396,7 +405,7 @@ export function registerPayRoutes(app) {
   })
 
   /* درگاه آزمایشی محلی — فقط در حالت mock؛ قرارداد دقیقاً مثل زرین‌پال */
-  if (PAYMENT_MODE === 'mock') {
+  if (payMode() === 'mock') {
     payRoutes.get('/mock-gateway', (req, res) => {
       const a = String(req.query.authority || '')
       const code = String(req.query.code || '')

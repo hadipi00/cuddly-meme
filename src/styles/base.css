@@ -928,3 +928,24 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 @media (max-width: 860px) {
  .p-content, .section { min-width: 0; }
 }
+
+/* ---------- [فیکس B26-UI] گیت اجباری تغییر رمز اولین ورود ---------- */
+.force-pw-overlay {
+ position: fixed; inset: 0; z-index: 1200;
+ background: rgba(8, 15, 30, 0.62); backdrop-filter: blur(6px);
+ display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.force-pw-card {
+ width: min(430px, 100%); max-height: 92vh; overflow-y: auto;
+ background: var(--card, #fff); border-radius: 20px; padding: 28px 24px;
+ display: flex; flex-direction: column; gap: 14px; align-items: center; text-align: center;
+ box-shadow: 0 24px 60px rgba(2, 8, 23, 0.35);
+}
+.force-pw-card h2 { font-size: 17px; margin: 0; }
+.force-pw-card p { font-size: 13px; margin: 0; }
+.force-pw-icon {
+ width: 54px; height: 54px; border-radius: 16px; display: flex; align-items: center; justify-content: center;
+ color: #fff; background: linear-gradient(135deg, var(--teal, #0d9488), var(--sky, #0ea5e9));
+ box-shadow: 0 10px 24px rgba(13, 148, 136, 0.35);
+}
+.force-pw-card .field { width: 100%; }

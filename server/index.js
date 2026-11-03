@@ -18,7 +18,7 @@ import { db, JWT_SECRET, publicUser, classRow } from './db.js'
 import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
-import { registerPayRoutes, startZarinPayment, PAYMENT_MODE, reqOrigin } from './pay.js'
+import { registerPayRoutes, startZarinPayment, payMode, reqOrigin } from './pay.js'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -133,6 +133,28 @@ app.post('/api/auth/login', rateLimit(10, 60_000), (req, res) => {
 /* تمدید اسلایدی سشن: هر بار هویت چک می‌شود، یک توکن تازه هم برمی‌گردد تا
    کاربر فعال هرگز به دیوار انقضا نخورد (سشن واقعاً برای همیشه می‌ماند) */
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user), token: signToken(req.user) }))
+
+/* [فیکس B26-UI] تغییر رمز اجباری اولین ورود اکانت‌های دمو —
+   قبلاً پرچم must_change_pw فقط ساختار بود و هیچ مسیر UI/APIای برای خلاص‌شدن از آن نبود.
+   قوانین: رمز فعلی درست باشد + رمز جدید ≥۶ کاراکتر + عین رمز عمومی دمو («12345678») نه */
+app.post('/api/auth/change-password', requireAuth, (req, res) => {
+  const current = String(req.body?.current || '')
+  const next = String(req.body?.next || '')
+  if (!current || !next) return res.status(400).json({ error: 'رمز فعلی و رمز جدید الزامی است' })
+  if (next.length < 6) return res.status(400).json({ error: 'رمز جدید باید حداقل ۶ کاراکتر باشد' })
+  if (next.length > 100) return res.status(400).json({ error: 'رمز جدید خیلی بلند است' })
+  if (!bcrypt.compareSync(current, req.user.password_hash)) {
+    return res.status(400).json({ error: 'رمز فعلی اشتباه است' })
+  }
+  if (bcrypt.compareSync(next, req.user.password_hash)) {
+    return res.status(400).json({ error: 'رمز جدید نباید همان رمز فعلی باشد' })
+  }
+  if (next === '12345678') return res.status(400).json({ error: 'این رمز عمومی دمو است — رمز دیگری انتخاب کنید' })
+  db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 0 WHERE id = ?')
+    .run(bcrypt.hashSync(next, 10), req.user.id)
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
+  res.json({ ok: true, token: signToken(u), user: publicUser(u) })
+})
 
 /* ---------------- کلاس‌های آنلاین ---------------- */
 const enrolledCount = (classId) =>
@@ -303,7 +325,7 @@ app.post('/api/classes/:id/purchase', requireAuth, async (req, res) => {
   /* پرداخت واقعی با زرین‌پال — ثبت‌نام نهایی فقط بعد از تأیید callback انجام
      می‌شود (fulfill در server/pay.js)؛ تا قبل از آن ظرفیت هم رزرو نمی‌ماند */
   if (c.price > 0 && req.body?.gateway === 'zarinpal') {
-    if (PAYMENT_MODE !== 'mock' && !process.env.PUBLIC_BASE_URL)
+    if (payMode() !== 'mock' && !process.env.PUBLIC_BASE_URL)
       return res.status(500).json({ error: 'PUBLIC_BASE_URL تنظیم نشده — درگاه نمی‌تواند به سایت برگردد' })
     const r = await startZarinPayment({
       user: req.user,
@@ -314,14 +336,14 @@ app.post('/api/classes/:id/purchase', requireAuth, async (req, res) => {
       origin: reqOrigin(req),
     })
     if (r.error) return res.status(502).json({ error: r.error })
-    return res.json({ ok: true, pending: true, code: r.code, total: c.price, redirectUrl: r.redirectUrl, mode: PAYMENT_MODE })
+    return res.json({ ok: true, pending: true, code: r.code, total: c.price, redirectUrl: r.redirectUrl, mode: payMode() })
   }
 
   /* [فیکس B1] کلاس پولی فقط از مسیر درگاه قابل خرید است — بدون gateway (یا با
      هر مقدار دیگر) ثبت‌نام ممنوع؛ قبلاً اینجا سفارش 'paid' آزمایشی ساخته می‌شد
      و کلاینت بدون هیچ پرداختی ثبت‌نام می‌شد = دور زدن کامل پرداخت */
   if (c.price > 0)
-    return res.status(400).json({ error: 'این کلاس پولی است — پرداخت با درگاه الزامی است', needPurchase: true, gateway: PAYMENT_MODE })
+    return res.status(400).json({ error: 'این کلاس پولی است — پرداخت با درگاه الزامی است', needPurchase: true, gateway: payMode() })
 
   /* [فیکس B9] ثبت‌نام اتمیک با چک ظرفیت داخل INSERT شرطی (کلاس رایگان) */
   const ins = db.prepare(`INSERT INTO enrollments (class_id, user_id, created_at)

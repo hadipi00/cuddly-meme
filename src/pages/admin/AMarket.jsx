@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   PackagePlus, Truck, Printer, X, Plus, Minus, Eye, PackageCheck, AlertTriangle,
   ClipboardList, Boxes, TrendingUp, PackageSearch,
 } from 'lucide-react'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
-import { products, marketCats, marketOrders } from '../../data/mock'
+import { marketCats } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { faNum, toman } from '../../utils/format'
 import { DataIcon } from '../../utils/icons'
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog'
 import { Button } from '../../components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../components/ui/tabs'
+import { req } from '../../services/http'
 
 const SHIP_METHODS = ['پیش‌کرایه', 'پس‌کرایه', 'پیک فوری تهران']
 const ORDER_STATUS = {
@@ -27,41 +28,81 @@ const ORDER_STATUS = {
 export default function AMarket() {
   const { toast } = useApp()
   const [modal, setModal] = useState(null)
-  const [list, setList] = useState(products)
+  const [list, setList] = useState([])
   const [detail, setDetail] = useState(null)
-  // به هر سفارش نمونه، روش ارسال پیش‌فرض می‌دهیم (تا اتصال به بک‌اند)
-  const [orders, setOrders] = useState(
-    marketOrders.map((o, i) => ({ ...o, ship: o.ship || SHIP_METHODS[i % SHIP_METHODS.length] }))
-  )
+  const [orders, setOrders] = useState([])
+  const [saving, setSaving] = useState(false)
 
-  const save = (d) => {
-    if (modal === 'new') {
-      setList((l) => [{ id: 'm' + Date.now(), rating: 5, sold: 0, icon: 'backpack', color: 'grad-0', stock: Number(d.stock) || 10, ...d }, ...l])
-      toast('محصول جدید به مدرس‌مارکت اضافه شد')
-    } else {
-      setList((l) => l.map((p) => (p.id === modal.id ? { ...p, ...d } : p)))
-      toast('محصول به‌روزرسانی شد')
+  /* [فیکس F16-b] محصولات و سفارش‌های فروشگاه واقعی — قبلاً دادهٔ mock ثابت بود؛
+     تغییر وضعیت سفارش/موجودی با هر رفرش پریده و خریدار واقعی هیچ‌وقت دیده نمی‌شد */
+  const load = async () => {
+    try {
+      const p = await req('/admin/products')
+      setList(p.products || [])
+    } catch (e) { toast(e.message || 'دریافت محصولات ناموفق بود', 'error') }
+    try {
+      const o = await req('/admin/market-orders')
+      setOrders((o.orders || []).map((r) => ({ ...r, ship: r.ship || SHIP_METHODS[0] })))
+    } catch { /* سفارش خالی مجاز است */ }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (d) => {
+    setSaving(true)
+    try {
+      if (modal === 'new') {
+        const r = await req('/admin/products', {
+          method: 'POST',
+          body: { name: d.name, cat: d.cat, price: Number(d.price) || 0, stock: Number(d.stock) || 0, desc: d.desc || '' },
+        })
+        setList((l) => [r.product, ...l])
+        toast('محصول جدید در دیتابیس ثبت شد')
+      } else {
+        const r = await req(`/admin/products/${modal.id}`, {
+          method: 'PATCH',
+          body: { name: d.name, cat: d.cat, price: Number(d.price) || 0, stock: Number(d.stock) || 0, desc: d.desc || '' },
+        })
+        setList((l) => l.map((p) => (p.id === modal.id ? r.product : p)))
+        toast('محصول در دیتابیس به‌روزرسانی شد')
+      }
+      setModal(null)
+    } catch (e) { toast(e.message || 'ذخیره ناموفق بود', 'error') }
+    finally { setSaving(false) }
+  }
+
+  /* تغییر وضعیت/روش ارسال — واقعی روی orders (kind=market) */
+  const patchOrder = async (o, patch) => {
+    setOrders((os) => os.map((x) => (x.id === o.id ? { ...x, ...patch } : x)))
+    try {
+      await req(`/admin/market-orders/${encodeURIComponent(o.id)}`, { method: 'POST', body: patch })
+      if (patch.status) toast(`سفارش ${o.id} → ${ORDER_STATUS[patch.status][0]}`, patch.status === 'canceled' ? 'info' : 'success')
+      else if (patch.ship) toast(`روش ارسال سفارش ${o.id} → ${patch.ship}`)
+    } catch (e) {
+      toast(e.message || 'ثبت تغییر ناموفق بود', 'error')
+      load() // برگشت به وضعیت واقعی سرور
     }
-    setModal(null)
+  }
+  const setStatus = (o, status) => { if (status !== o.status) patchOrder(o, { status }) }
+  const setShip = (o, ship) => { if (ship !== o.ship) patchOrder(o, { ship }) }
+
+  /* موجودی واقعی — PATCH /admin/products/:id */
+  const bumpStock = async (p, delta) => {
+    const next = Math.max(0, p.stock + delta)
+    setList((l) => l.map((x) => (x.id === p.id ? { ...x, stock: next } : x)))
+    try { await req(`/admin/products/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: { stock: next } }) }
+    catch (e) { toast(e.message || 'ثبت موجودی ناموفق بود', 'error'); load() }
   }
 
-  const setStatus = (o, status) => {
-    if (status === o.status) return
-    setOrders((os) => os.map((x) => (x.id === o.id ? { ...x, status } : x)))
-    toast(`سفارش ${o.id} → ${ORDER_STATUS[status][0]}`, status === 'canceled' ? 'info' : 'success')
+  const removeProduct = async (p) => {
+    if (!window.confirm(`محصول «${p.name}» حذف شود؟`)) return
+    try {
+      await req(`/admin/products/${encodeURIComponent(p.id)}`, { method: 'DELETE' })
+      setList((l) => l.filter((x) => x.id !== p.id))
+      toast('محصول از دیتابیس حذف شد', 'info')
+    } catch (e) { toast(e.message || 'حذف ناموفق بود', 'error') }
   }
 
-  const setShip = (o, ship) => {
-    if (ship === o.ship) return
-    setOrders((os) => os.map((x) => (x.id === o.id ? { ...x, ship } : x)))
-    toast(`روش ارسال سفارش ${o.id} → ${ship}`)
-  }
-
-  const bumpStock = (p, delta) => {
-    setList((l) => l.map((x) => (x.id === p.id ? { ...x, stock: Math.max(0, x.stock + delta) } : x)))
-  }
-
-  const revenue = orders.filter((o) => o.status !== 'canceled').reduce((a, o) => a + o.total, 0)
+  const revenue = orders.filter((o) => o.status !== 'canceled').reduce((a, o) => a + (o.total || 0), 0)
 
   return (
     <div>
@@ -179,8 +220,8 @@ export default function AMarket() {
               actions={(r) => (
                 <>
                   <button className="icon-btn" title="ویرایش" onClick={() => setModal(r)}><PackageSearch size={16} /></button>
-                  <button className="icon-btn" title="+۵۰ موجودی" onClick={() => { bumpStock(r, 50); toast('۵۰ عدد به موجودی اضافه شد') }}><Plus size={16} /></button>
-                  <button className="icon-btn" title="حذف" onClick={() => { setList((l) => l.filter((p) => p.id !== r.id)); toast('محصول حذف شد', 'info') }}>
+                  <button className="icon-btn" title="+۵۰ موجودی" onClick={() => bumpStock(r, 50)}><Plus size={16} /></button>
+                  <button className="icon-btn" title="حذف" onClick={() => removeProduct(r)}>
                     <X size={16} />
                   </button>
                 </>
@@ -228,6 +269,7 @@ export default function AMarket() {
         title={modal === 'new' ? 'افزودن محصول جدید' : 'ویرایش محصول'}
         onClose={() => setModal(null)}
         onSubmit={save}
+        submitLabel={saving ? 'در حال ذخیره…' : 'ذخیره'}
         initial={modal && modal !== 'new' ? { name: modal.name, cat: modal.cat, price: String(modal.price), stock: String(modal.stock) } : {}}
         fields={[
           { key: 'name', label: 'نام محصول', full: true },

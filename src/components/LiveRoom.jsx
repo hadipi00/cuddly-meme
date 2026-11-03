@@ -1158,10 +1158,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [live?.status])
 
- /* ---------- گیت اجازه مدرس — بدون شروع خودکار رسانه؛ دانش‌آموز خودش میکروفون/دوربین را روشن می‌کند ---------- */
+ /* ---------- گیت اجازه مدرس — بدون شروع خودکار رسانه؛ دانش‌آموز خودش میکروفون/دوربین را روشن می‌کند ----------
+    [فیکس F9] ادمین سوپروایزر است (همه‌جا دسترسی کامل دارد: RouteGuard، canControl سرور)
+    ولی اینجا مثل دانش‌آموز بدون اجازه بود — حالا مثل مدرس همیشه مجاز است */
+ const isAdminUser = user?.role === 'admin'
  const participantsPre = live?.participants || []
  const myPartPre = participantsPre.find((p) => p.id === user?.id)
- const canSpeakPre = isTeacher || !!myPartPre?.canSpeak
+ const canSpeakPre = isTeacher || isAdminUser || !!myPartPre?.canSpeak
  canSpeakRef.current = canSpeakPre
  const prevCanSpeakRef = useRef(canSpeakPre)
  useEffect(() => {
@@ -1170,7 +1173,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      // اجازه داده شد — اگر رسانه از قبل باز است رله ادامه می‌یابد؛ وگرنه پنل میکروفون/دوربین نمایش داده می‌شود
      if (localStreamRef.current) { setMediaErr(null); setMediaSkipped(false); rebuildOutgoing() }
    }
-   if (!canSpeakPre && prevCanSpeakRef.current && !isTeacher) revokeMyMedia()
+   if (!canSpeakPre && prevCanSpeakRef.current && !isTeacher && !isAdminUser) revokeMyMedia()
    prevCanSpeakRef.current = canSpeakPre
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [canSpeakPre, user?.id])
@@ -1210,11 +1213,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classEnded])
 
- /* اجازه فعال‌سازی صدا/تصویر — مدرس همیشه دارد؛ دانش‌آموز فقط با تایید مدرس */
+ /* اجازه فعال‌سازی صدا/تصویر — مدرس و ادمین همیشه دارند؛ دانش‌آموز فقط با تایید مدرس [فیکس F9] */
  const myPart = participants.find((p) => p.id === user?.id)
  const myHand = !!myPart?.hand
- const canSpeak = isTeacher || !!myPart?.canSpeak
- const needsApproval = !isTeacher && !canSpeak
+ const canSpeak = isTeacher || isAdminUser || !!myPart?.canSpeak
+ const needsApproval = !isTeacher && !isAdminUser && !canSpeak
  canSpeakRef.current = canSpeak
 
  /** مدرس: دادن/لغو اجازه صدا/تصویر به یک دانش‌آموز */

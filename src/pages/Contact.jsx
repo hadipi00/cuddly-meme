@@ -6,9 +6,12 @@ import { Reveal } from '../components/ui'
 import { site } from '../config/site'
 import { useApp } from '../store/AppContext'
 import { req } from '../services/http'
+import { useSiteSettings, pick } from '../services/siteSettings'
 
 export default function Contact() {
  const { toast } = useApp()
+ /* [فیکس F16-d] اطلاعات تماس از تنظیمات پنل ادمین */
+ const pub = useSiteSettings()
  const [sending, setSending] = useState(false)
  const [sent, setSent] = useState(false)
 
@@ -87,10 +90,10 @@ export default function Contact() {
  <Reveal className="card pad">
  <h3 className="mb16">اطلاعات تماس</h3>
  {[
- { icon: 'phone', t: 'تلفن پشتیبانی', d: site.phone },
- { icon: 'mail', t: 'ایمیل', d: site.email },
- { icon: 'mapPin', t: 'آدرس', d: site.address },
- { icon: 'clock', t: 'ساعات پاسخگویی', d: site.workingHours },
+ {icon: 'phone', t: 'تلفن پشتیبانی', d: pick(pub.site?.phone, site.phone) },
+ {icon: 'mail', t: 'ایمیل', d: pick(pub.site?.email, site.email) },
+ {icon: 'mapPin', t: 'آدرس', d: pick(pub.site?.address, site.address) },
+ {icon: 'clock', t: 'ساعات پاسخگویی', d: pick(pub.site?.workingHours, site.workingHours) },
  ].map((x) => (
  <div className="info-tile mb16" key={x.t}>
  <span className="it-icon"><Icon name={x.icon} /></span>
