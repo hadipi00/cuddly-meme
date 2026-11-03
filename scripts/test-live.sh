@@ -1,6 +1,7 @@
 #!/bin/bash
 # تست اجرایی سناریوی کلاس زنده — فید مستقل اشتراک صفحه + دوربین موازی
-B=http://127.0.0.1:4123/api
+# پایه قابل تغییر:  B=http://127.0.0.1:4000/api bash scripts/test-live.sh
+B=${B:-http://127.0.0.1:4123/api}
 set -e
 echo "== 1) ورود مدرس (u-reza) و دانش‌آموز (u-sara)"
 TT=$(curl -s -X POST $B/auth/login -H 'Content-Type: application/json' -d '{"email":"reza@demo.ir","password":"12345678"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")

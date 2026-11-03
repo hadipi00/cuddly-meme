@@ -107,92 +107,252 @@ function createFeedPlayer(fmt, cd) {
   if (!mime) return createBlobPlayer(fmt)
   const p = {
     mime, fmt, cd, el: null, objUrl: null, ms: null, sb: null, sess: null,
-    queue: [], alive: true, keepT: null, trimT: null, broken: false, pid: ++FEED_PID,
+    queue: [], alive: true, keepT: null, broken: false, pid: ++FEED_PID, lastRebuildAt: 0,
+    sbFails: 0, rebuilds: 0, recovers: 0, pendingRebuild: false, mode: 'mse',
+    firstPushAt: 0, lastPushAt: 0,
   }
-  const pump = () => {
-    if (!p.sb || p.sb.updating || !p.queue.length || !p.alive) return
-    const buf = p.queue.shift()
+  /* [دیباگ F37-e] لاگ سبک برای تشخیص گیرکردن پلیر در مرورگر واقعی */
+  const dbg = (ev, extra = '') => {
     try {
-      p.sb.appendBuffer(buf)
-    } catch (e0) {
-      /* صف پر/حجم — کمی از عقب پخش‌شده پاک و دوباره صف */
-      try {
-        const el = p.el
-        const b = el?.buffered
-        if (b?.length && el.currentTime - b.start(0) > 4) {
-          p.sb.remove(b.start(0), el.currentTime - 3)
-          p.queue.unshift(buf)
-        } else if (e0?.name === 'InvalidStateError') {
-          breakStream('append-threw:' + e0.name)
-        }
-      } catch { /* noop */ }
-    }
+      const w = typeof window !== 'undefined' ? window : null
+      if (!w) return
+      ;(w.__liveLog = w.__liveLog || [])
+      w.__liveLog.push(`${p.pid}|${ev}${extra ? '|' + extra : ''}`)
+      if (w.__liveLog.length > 3000) w.__liveLog.splice(0, w.__liveLog.length - 3000)
+    } catch { /* noop */ }
   }
-  /** خود-ترمیمی: خطای decode/اپند → کرسر گیرنده صفر شود تا سرور init تازه بفرستد */
+  dbg('create', `mime=${mime}`)
+
   let lastBreak = 0
+  let lastRecoverAt = 0
+  let lastBufEnd = -1
+  let lastBufChangeAt = Date.now()
+
+  /* ================= [فیکس F37-e] قانون طلایی اتصال =================
+   * هر MediaSource در تمام عمرش فقط به «یک» عنصر ویدیو بسته می‌شود.
+   * اتصال دوباره‌ی یک MS جداشده به عنصر دوم در کروم، پایپ‌لاین را می‌شکند
+   * (sourceopen شلیک می‌شود ولی append بعدی decode-error می‌دهد — باگ
+   * «پلیر بعد از تعویض صحنه/جابه‌جایی برای همیشه می‌میرد»؛ ریشه‌ی
+   * شکنندگی MSE هنگام اتصال). پس:
+   *   • rebuild → فقط یک MS «باز» می‌سازد و pid تازه می‌دهد (→ tile با
+   *     عنصر ویدیوی نو remount می‌شود؛ کلید tile شامل pv است)
+   *   • bind → تنها جای el.src است و فقط وقتی MS هنوز باز است */
+
+  const bind = () => {
+    if (!p.alive || !p.el || !p.ms || p.objUrl) return
+    try {
+      p.objUrl = URL.createObjectURL(p.ms)
+      p.el.src = p.objUrl
+      p.el.play?.().catch(() => {})
+      dbg('bind', `rs=${p.el.readyState}`)
+    } catch { /* noop */ }
+  }
+
+  /** خودترمیمی سطح ۱ — خطای decode/اپند → SourceBuffer تازه روی «همان» MS و عنصر:
+   *  ارزان، بدون remount و بدون پارگی پخش. اگر MS دیگر open نبود یا
+   *  addSourceBuffer شکست خورد → سطح ۲ (breakStream → rebuild کامل) */
+  const softRecover = (why) => {
+    if (!p.alive || p.mode === 'blob') return
+    const t = Date.now()
+    if (t - lastRecoverAt < 2500) return
+    lastRecoverAt = t
+    p.recovers += 1
+    dbg('soft-recover', `${why} n=${p.recovers}`)
+    p.queue = []
+    try { p.sb?.abort?.() } catch { /* noop */ }
+    try { if (p.ms && p.sb) p.ms.removeSourceBuffer(p.sb) } catch { /* noop */ }
+    p.sb = null
+    if (p.ms && p.ms.readyState === 'open') {
+      try {
+        p.sb = p.ms.addSourceBuffer(p.mime)
+        try { p.sb.mode = 'sequence' } catch { /* noop */ } // گپ تایم‌استمپ هرگز sb-error نمی‌دهد
+        p.sb.addEventListener('updateend', pump)
+        p.sb.addEventListener('error', () => softRecover('sb-error'))
+        p.broken = false
+        /* کرسر همین فید صفر → سرور در poll بعدی init + تکه‌های تازه می‌فرستد */
+        try { p.onNeedReset?.() } catch { /* noop */ }
+        return
+      } catch (e1) {
+        dbg('soft-fail', e1?.name || '?')
+        p.sb = null
+      }
+    }
+    breakStream('soft-failed:' + why)
+  }
+
+  /** خودترمیمی سطح ۲ — کرسر گیرنده صفر → سرور init تازه → rebuild کامل با عنصر نو */
   const breakStream = (why) => {
+    dbg('break', why)
     if (!p.alive || Date.now() - lastBreak < 2500) return
     lastBreak = Date.now()
     p.broken = true
     try { p.onNeedReset?.() } catch { /* noop */ }
   }
+
   const rebuild = (sess) => {
+    /* ضد توفان — rebuild همگام زنجیره‌ای ممنوع؛ حداقل ۷۰۰ms فاصله
+       (هم‌اندازه‌ی تکه‌ها). اگر زودتر خواسته شود، برای push بعدی صف می‌شود */
+    if (Date.now() - (p.lastRebuildAt || 0) < 700) { p.pendingRebuild = true; return }
+    /* [فیکس F37-e] شمارنده با هر «پیشرفت واقعی بافر» صفر می‌شود (نگهبان) —
+       پس این آستانه فقط برای زنجیره‌ی ترمیم‌های بی‌نتیجه است، نه عمر پلیر */
+    if (p.rebuilds > 3) { fallbackToBlob('too-many-rebuilds'); return }
+    dbg('rebuild', `sess=${sess} hasEl=${!!p.el} msWas=${p.ms?.readyState} n=${p.rebuilds + 1}`)
+    p.rebuilds += 1
     p.sess = sess
     p.queue = []
     p.broken = false
+    p.pendingRebuild = false
+    p.lastRebuildAt = Date.now()
+    /* تخلیه‌ی کامل منابع MediaSource قبلی — هیچ MS بازی نشت نمی‌کند */
     try { p.sb?.abort?.() } catch { /* noop */ }
     p.sb = null
+    try { if (p.ms && p.ms.readyState === 'open') p.ms.endOfStream?.() } catch { /* noop */ }
+    p.ms = null
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
+    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+    p.objUrl = null
+    /* [فیکس F37-e] pid تازه → feedInfo.pv عوض → کلید tile عوض → RelayVideo با
+       «عنصر ویدیوی نو» mount می‌شود و attach، MS نو را به همان عنصر نو می‌بندد */
+    p.pid = ++FEED_PID
     const MS = getMS()
     if (!MS) return
     const ms = new MS()
     p.ms = ms
     ms.addEventListener('sourceopen', () => {
       if (!p.alive || p.ms !== ms) return
+      if (p.sb) return // کروم در شرایط خاص sourceopen را دوباره شلیک می‌کند
+      dbg('sourceopen')
       try {
         p.sb = ms.addSourceBuffer(p.mime)
-        try { p.sb.mode = 'segments' } catch { /* noop */ }
+        try { p.sb.mode = 'sequence' } catch { /* noop */ }
         p.sb.addEventListener('updateend', pump)
-        p.sb.addEventListener('error', () => breakStream('sb-error')) // خطای دکود → init تازه
+        p.sb.addEventListener('error', () => softRecover('sb-error'))
         pump()
-      } catch { /* noop */ }
+      } catch (e) {
+        dbg('sb-add-throw', e?.name || '?')
+        p.sbFails += 1
+        p.sb = null
+        if (p.sbFails >= 2) fallbackToBlob('addsourcebuffer-fails') // فال‌بک سریع — تعویق فقط فریز طولانی‌تر می‌سازد
+      }
     })
-    if (p.el) {
-      try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
-      p.objUrl = URL.createObjectURL(ms)
-      p.el.src = p.objUrl
-      p.el.play?.().catch(() => {})
+    /* [فیکس F37-e] اتصال عمداً اینجا انجام نمی‌شود — فقط attach/keepT می‌بندد */
+  }
+
+  /* ================= فال‌بک نهایی — پلیر Blob =================
+   * اگر MSE در این مرورگر/موقعیت مدام شکست بخورد (QuotaExceeded مزمن و …)،
+   * کلاس هرگز نباید بمیرد: همان شیء پلیر به پلیر Blob تبدیل می‌شود —
+   * هدر + ۱۲ تکه‌ی آخر هر ~۳ ثانیه یک Blob تازه پخش می‌شود (تاخیر بیشتر ولی کار می‌کند) */
+  const fallbackToBlob = (why) => {
+    if (p.mode === 'blob') return
+    dbg('fallback-blob', why)
+    clearInterval(p.keepT)
+    try { p.sb?.abort?.() } catch { /* noop */ }
+    try { if (p.ms && p.ms.readyState === 'open') p.ms.endOfStream?.() } catch { /* noop */ }
+    p.sb = null
+    p.ms = null
+    if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
+    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
+    p.objUrl = null
+    const bp = createBlobPlayer(fmt)
+    /* [فیکس F37-d] پلیر Blob «نمای» (facade) می‌شود — delegate به bp؛ pid تازه →
+     * feedInfo عوض می‌شود → RelayVideo دوباره attach می‌کند */
+    bp.el = p.el
+    p.mode = 'blob'
+    p.pid = bp.pid
+    p.broken = false // پرچم شکستگی MSE نباید پلیر Blob را هم گرسنه کند
+    p.push = (...a) => bp.push(...a)
+    p.hardReset = (...a) => bp.hardReset(...a)
+    p.attach = (...a) => bp.attach(...a)
+    p.liveEdge = () => {}
+    p.destroy = () => { p.alive = false; bp.destroy() }
+    try { p.onNeedReset?.() } catch { /* noop */ } // کرسر صفر → سرور init تازه بفرستد
+  }
+
+  const pump = () => {
+    if (!p.sb || p.sb.updating || !p.queue.length || !p.alive || p.mode === 'blob') return
+    const buf = p.queue.shift()
+    try {
+      p.sb.appendBuffer(buf)
+    } catch (e0) {
+      dbg('append-throw', e0?.name || '?')
+      /* [فیکس F37-e] ترمیم با sb.remove اینجا ممنوع — remove روی SourceBuffer در
+       * حالت sequence با webm در کروم معیوب است و خودش decode-error بعدی می‌سازد
+       * (مرگ ~۲۵ ثانیه‌ای پلیر در تست واقعی: اولین trim → اولین sb-error).
+       * کروم پشتِ currentTime را خودش auto-evict می‌کند؛ اینجا فقط ترمیم ساختاری */
+      p.queue.unshift(buf)
+      softRecover('append-throw:' + (e0?.name || '?'))
     }
   }
   /** تکه تازه — اگر سشن عوض شده بود، خودکار از نو ساخته می‌شود */
   p.push = (sess, b64) => {
     if (!p.alive || !b64) return
-    if (p.sess !== sess) rebuild(sess)
+    const t0 = Date.now()
+    if (!p.firstPushAt) p.firstPushAt = t0
+    p.lastPushAt = t0
+    /* فشار صف — گیرنده‌ی عقب‌مانده (شبکه‌ی کند) قربانی حافظه نشود */
+    if (p.queue.length > 40) {
+      dbg('queue-overflow')
+      p.queue = []
+      p.broken = true
+      try { p.onNeedReset?.() } catch { /* noop */ }
+      return
+    }
+    if (p.sess !== sess) { dbg('sess-change', `${p.sess}→${sess}`); rebuild(sess) }
+    else if (p.pendingRebuild && t0 - (p.lastRebuildAt || 0) >= 700) rebuild(sess)
     const buf = b64ToBuf(b64)
     p.queue.push(buf)
     pump()
   }
   /** شروع از سر (گپ یا تازه‌وارد) — همیشه MediaSource تازه ساخته می‌شود؛
    *  چون init دوباره می‌آید و افزودن دوباره‌ی init به SourceBuffer قبلی، دکودر را
-   *  برای همیشه می‌شکند (باگ «تصویر بعد از یک گپ دیگر نمی‌آید») */
+   *  برای همیشه می‌شکند (باگ «تصویر بعد از یک گپ دیگر نمی‌آید»)
+   *  [فیکس F37-d] اما اگر «همین سشن» هنوز سالم در حال پخش است، هاردریست ممنوع —
+   *  هر reset تکراری سرور (پس از هر breakStream) یک rebuild تازه می‌ساخت و
+   *  حلقه‌ی مرگ rebuild/reset می‌ساخت. خروجی false یعنی «ریست لازم نبود» */
   p.hardReset = (sess) => {
+    /* fresh = rebuild همین چند صدهزارم ثانیه پیش انجام شده و sourceopen هنوز در راه است */
+    const fresh = Date.now() - (p.lastRebuildAt || 0) < 1200
+    if (p.sess === sess && (p.sb || fresh) && !p.broken) {
+      dbg('hardReset-skip', `sess=${sess} sb=${!!p.sb} fresh=${fresh}`)
+      return false
+    }
     p.queue = []
     rebuild(sess)
+    return true
   }
+  /* [فیکس F37-e] attach — قانون یک‌MS-یک‌عنصر:
+   *  • عنصر تازه از React (بعد از هر remount) می‌آید؛ MS بازی به عنصر دوم
+   *    بسته نمی‌شود — یا MS هنوز باز است (bind) یا MS تازه ساخته می‌شود */
   p.attach = (el) => {
-    if (!el || p.el === el || !p.alive) return // پلیر مرده هرگز به عنصر وصل نمی‌شود
-    /* عنصر قبلی آزاد شود تا MediaSource بتواند به عنصر تازه وصل شود */
+    if (!el || p.el === el || !p.alive) return
+    dbg('attach', `hadEl=${!!p.el} ms=${p.ms ? p.ms.readyState : 'null'} bound=${p.objUrl ? 1 : 0}`)
     if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
     p.el = el
-    if (!p.ms) return
-    try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
-    p.objUrl = URL.createObjectURL(p.ms)
-    el.src = p.objUrl
-    el.play?.().catch(() => {})
+    if (!p.ms) return // اولین push هنوز نیامده — bind در keepT بعد از اولین rebuild
+    if (p.objUrl) {
+      /* MS قبلاً به عنصر دیگری بسته بوده — MS تازه لازم است؛ سرور تا ~۱ ثانیه
+         init + تکه‌های تازه می‌فرستد (پارگی ~۱ ثانیه‌ای فقط هنگام جابه‌جایی صحنه↔نوار) */
+      try { p.onNeedReset?.() } catch { /* noop */ }
+      rebuild(p.sess)
+      return
+    }
+    bind()
+    /* [فیکس F37-e] محافظ گیرکردن اتصال — عنصر تازه تا ۲ ثانیه دیتا نگرفت →
+     * MS از نو ساخته می‌شود (نه اتصال دوباره‌ی همان MS) */
+    setTimeout(() => {
+      try {
+        if (p.alive && p.mode !== 'blob' && p.el === el && el.readyState < 1 && p.objUrl) {
+          dbg('attach-stall')
+          p.objUrl = null
+          try { p.onNeedReset?.() } catch { /* noop */ }
+          rebuild(p.sess)
+        }
+      } catch { /* noop */ }
+    }, 2000)
   }
   p.destroy = () => {
     p.alive = false
     clearInterval(p.keepT)
-    clearInterval(p.trimT)
     try { p.sb?.abort?.() } catch { /* noop */ }
     try { if (p.ms && p.ms.readyState === 'open') p.ms.endOfStream?.() } catch { /* noop */ }
     try { if (p.objUrl) URL.revokeObjectURL(p.objUrl) } catch { /* noop */ }
@@ -204,7 +364,7 @@ function createFeedPlayer(fmt, cd) {
   }
   /* نگه‌داشتن پخش روی «لبه زنده» — تاخیر هدف ≈۱ ثانیه
    * • تازه‌وارد: از انتهای بافر شروع کن (پخش قدیمی‌ها از ابتدای سشن ممنوع)
-   * • عقب‌ماندگی > ۱.۶ ثانیه: جبران با پرش به لبه */
+   * • عقب‌ماندگی > ۱.۲ ثانیه: جبران با پرش به لبه */
   p.liveEdge = () => {
     const el = p.el
     if (!el || el.readyState < 1 || !p.alive) return
@@ -212,66 +372,129 @@ function createFeedPlayer(fmt, cd) {
       const b = el.buffered
       if (!b.length) return
       const end = b.end(b.length - 1)
+      /* [دیباگ] قفل‌شدن پمپ با صف پُر — قلب گیرکردن پلیر */
+      if (p.sb && !p.sb.updating && p.queue.length) dbg('pump-stall', `q=${p.queue.length} end=${end.toFixed(2)} cur=${el.currentTime.toFixed(2)} ms=${p.ms?.readyState}`)
       if (el.currentTime <= b.start(0) + 0.05 || end - el.currentTime > 1.2) {
+        dbg('seek', `to=${Math.max(0, end - 0.55).toFixed(2)} start=${b.start(0).toFixed(2)} end=${end.toFixed(2)} cur=${el.currentTime.toFixed(2)} rs=${el.readyState}`)
         el.currentTime = Math.max(0, end - 0.55)
       }
       if (el.paused) el.play?.().catch(() => {})
     } catch { /* noop */ }
   }
-  p.keepT = setInterval(() => p.liveEdge(), 700)
-  p.trimT = setInterval(() => {
-    const el = p.el
-    const sb = p.sb
-    if (!el || !sb || sb.updating || !p.alive) return
+  /* [فیکس F37-e] چشم‌به‌راه پیشرفت — دو نگهبان در یک تایمر:
+   *  ۱) تازه‌واردِ بی‌دکود: pushes می‌رسند ولی حتی یک فریم دکود نشده (end<0)
+   *     → بعد از ۸ ثانیه فال‌بک Blob (شکنندگی MSE هنگام join هرگز فریز ابدی نمی‌شود)
+   *  ۲) رکود بافر: بافر ۶ ثانیه رشد نکرده → فال‌بک Blob
+   *  و هر پیشرفت واقعی، بودجه‌ی ترمیم (rebuilds/recovers/sbFails) را صفر می‌کند */
+  const watchdog = () => {
+    if (!p.alive || p.mode === 'blob') return
     try {
-      const b = el.buffered
-      if (b.length && el.currentTime - b.start(0) > 15) sb.remove(b.start(0), el.currentTime - 8)
+      const el = p.el
+      const b = el?.buffered
+      const end = b?.length ? b.end(b.length - 1) : -1
+      if (end !== lastBufEnd) {
+        if (end > lastBufEnd) { p.rebuilds = 0; p.recovers = 0; p.sbFails = 0 }
+        lastBufEnd = end
+        lastBufChangeAt = Date.now()
+        return
+      }
+      const t = Date.now()
+      if (end < 0) {
+        if (p.firstPushAt && t - p.firstPushAt > 8000 && t - p.lastPushAt < 12000) fallbackToBlob('no-decode-since-join')
+        return
+      }
+      if (t - lastBufChangeAt > 6000 && t - (p.lastRebuildAt || 0) > 6000 && t - lastRecoverAt > 6000) fallbackToBlob('buffered-stalled')
     } catch { /* noop */ }
-  }, 6000)
+  }
+  p.keepT = setInterval(() => {
+    bind() // [فیکس F37-e] پل مسیر «rebuild قبل از attach» — اتصال تنها وقتی MS هنوز باز است
+    p.liveEdge()
+    watchdog()
+  }, 700)
   return p
 }
 
 /**
- * پلیر جایگزین برای مرورگرهای بدون MediaSource (سافاری iOS قدیمی‌تر از ۱۷٫۱):
- * تکه‌ها جمع و هر ~۳٫۵ ثانیه یک Blob تازه ساخته و پخش می‌شود —
- * تاخیر بیشتر ولی کار می‌کند. حافظه سقف دارد؛ در سقف init تازه از سرور می‌آید.
+ * پلیر جایگزین برای مرورگرهای بدون MediaSource (سافاری iOS قدیمی‌تر از ۱۷٫۱)
+ * و فال‌بک نهایی MSE: [فیکس F37-e] «لگ ذاتی Blob» ریشه‌اش این بود که «همه‌ی»
+ * تکه‌ها از ابتدای سشن جمع می‌شدند (تا سقف ۳۰MB) و هر بار کل آن Blob از نو
+ * ساخته و از سر پخش می‌شد — هرچه کلاس طولانی‌تر، rebuild سنگین‌تر و پرش به
+ * لبه‌ی زنده دیرتر. حالا:
+ *   • هدر (init) جدا نگه داشته می‌شود و هر Blob = هدر + فقط ۱۲ تکه‌ی آخر (~۱۲ ثانیه)
+ *   • حافظه ثابت می‌ماند؛ rebuild همیشه سبک و سریع است
+ *   • بعد از هر rebuild پرش به لبه‌ی زنده → تاخیر مؤثر ≈۰٫۵-۳ ثانیه
  */
 function createBlobPlayer(fmt) {
   const p = {
     mime: null, fmt, mode: 'blob', el: null, objUrl: null, sess: null, alive: true,
-    parts: [], bytes: 0, dirty: false, buildT: null, onNeedReset: null, pid: ++FEED_PID,
+    initBuf: null, parts: [], bytes: 0, dirty: false, buildT: null, onNeedReset: null, pid: ++FEED_PID,
+  }
+  const MAX_PARTS = 12 // پنجره‌ی سرگردان ~۱۲ ثانیه‌ای (تکه‌های ~۱ ثانیه‌ای)
+  /** هدر واقعی؟ webm → جادوی EBML • mp4 → باکس ftyp در آفست ۴ */
+  const looksHdr = (buf) => {
+    if (!buf || buf.byteLength < 12) return false
+    const u = new Uint8Array(buf)
+    if (u[0] === 0x1a && u[1] === 0x45 && u[2] === 0xdf && u[3] === 0xa3) return true
+    return String.fromCharCode(u[4], u[5], u[6], u[7]) === 'ftyp'
   }
   const rebuild = () => {
     if (!p.el || !p.parts.length || !p.alive) return
+    if (!p.initBuf) return // بدون هدر هیچ — Blob ناقص هرگز پخش نمی‌شود
     try {
       if (p.objUrl) URL.revokeObjectURL(p.objUrl)
-      const blob = new Blob(p.parts, { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' })
+      const blob = new Blob([p.initBuf, ...p.parts], { type: p.fmt === 'mp4' ? 'video/mp4' : 'video/webm' })
       p.objUrl = URL.createObjectURL(blob)
       p.el.src = p.objUrl
       p.el.play?.().catch(() => {})
-      /* پرش به لبه زنده */
+      /* پرش به لبه زنده — webm ضبط‌شده duration=Infinity دارد؛
+       * پرش فقط با buffered.end درست کار می‌کند (duration قابل اعتماد نیست) */
       p.el.addEventListener('loadedmetadata', () => {
         try {
-          if (p.el && p.el.duration && isFinite(p.el.duration)) p.el.currentTime = Math.max(0, p.el.duration - 0.4)
-          p.el?.play?.().catch(() => {})
+          const el = p.el
+          if (!el) return
+          const b = el.buffered
+          if (el.duration && isFinite(el.duration) && el.duration > 1) el.currentTime = Math.max(0, el.duration - 0.4)
+          else if (b.length) el.currentTime = Math.max(0, b.end(b.length - 1) - 0.4)
+          el.play?.().catch(() => {})
+        } catch { /* noop */ }
+      }, { once: true })
+      /* اگر loadedmetadata به‌خاطر Infinity دیر بماند، با اولین دیتا بپر */
+      p.el.addEventListener('loadeddata', () => {
+        try {
+          const el = p.el
+          if (!el || el.currentTime > 1) return
+          const b = el.buffered
+          if (b.length && b.end(b.length - 1) > 2) el.currentTime = Math.max(0, b.end(b.length - 1) - 0.4)
         } catch { /* noop */ }
       }, { once: true })
     } catch { /* noop */ }
   }
   p.push = (sess, b64) => {
     if (!p.alive || !b64) return
-    if (p.sess !== sess) { p.sess = sess; p.parts = []; p.bytes = 0 }
     const buf = b64ToBuf(b64)
+    if (looksHdr(buf)) {
+      /* هدر تازه (شروع سشن جدید فرستنده) — پنجره از نو */
+      p.initBuf = buf
+      if (p.sess !== sess) { p.sess = sess; p.parts = []; p.bytes = 0 }
+      p.dirty = true
+      return
+    }
+    if (p.sess !== sess) { p.sess = sess; p.parts = []; p.bytes = 0 }
     p.parts.push(buf)
     p.bytes += buf.byteLength
+    while (p.parts.length > MAX_PARTS) p.parts.shift() // [فیکس F37-e] پنجره‌ی سرگردان — حافظه ثابت
     p.dirty = true
-    if (p.bytes > 30 * 1024 * 1024) {
-      /* سقف حافظه — کرسر گیرنده صفر شود تا سرور init تازه بفرستد */
-      p.parts = []; p.bytes = 0; p.sess = null
-      try { p.onNeedReset?.() } catch { /* noop */ }
-    }
   }
-  p.hardReset = (sess) => { p.sess = null }
+  p.hardReset = (sess) => {
+    /* [فیکس F37-d] true = «ریست واقعی شد» — وگرنه applyFeed دسته‌ی init+تکه‌های
+     * reset را دور می‌ریزد و پلیر Blob گرسنه می‌ماند */
+    p.sess = null
+    p.parts = []
+    p.bytes = 0
+    p.initBuf = null
+    p.dirty = true
+    return true
+  }
   p.attach = (el) => {
     if (!el || p.el === el || !p.alive) return
     if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
@@ -285,10 +508,11 @@ function createBlobPlayer(fmt) {
     if (p.el) { try { p.el.removeAttribute('src'); p.el.load?.() } catch { /* noop */ } }
     p.el = null
     p.parts = []
+    p.initBuf = null
   }
   p.buildT = setInterval(() => {
     if (p.dirty && p.el && p.alive) { p.dirty = false; rebuild() }
-  }, 1800)
+  }, 3000)
   return p
 }
 
@@ -351,11 +575,15 @@ function ScreenPreview({ stream }) {
   return <video ref={ref} autoPlay playsInline muted className="wb-canvas" style={{ background: '#000', objectFit: 'contain' }} />
 }
 
-/* سیاست autoplay موبایل: با اولین لمس کاربر در صفحه، صدای همه استریم‌های در انتظار فعال می‌شود */
+/* سیاست autoplay موبایل: با اولین لمس کاربر در صفحه، صدای همه استریم‌های در انتظار فعال می‌شود.
+ * [فیکس F37-e] پرچم userInteracted — بعد از اولین تعامل، تازه‌واردان (remount پس از
+ * هر rebuild پلیر) مستقیم با صدا پخش می‌شوند؛ کاربر نباید بعد از هر ترمیم دوباره بزند */
+let userInteracted = false
 const pendingUnmute = new Set()
 if (typeof document !== 'undefined' && !pendingUnmute.armed) {
   pendingUnmute.armed = true
   document.addEventListener('pointerdown', () => {
+    userInteracted = true
     for (const fn of [...pendingUnmute]) { try { fn() } catch { /* noop */ } }
   }, { passive: true })
 }
@@ -372,18 +600,21 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
     const v = ref.current
     if (!v || !player || !player.alive) return // پلیر مرده → منتظر پلیر تازه از polling
     player.attach(v)
-    /* بی‌صدا شروع کن — پخش همیشه موفق می‌شود و فریم‌ها می‌آیند */
-    v.muted = true
-    v.play?.().catch(() => {})
-    /* فعال‌سازی صدا با اولین تعامل کاربر در صفحه */
+    /* فعال‌سازی صدا: اگر کاربر قبلاً تعامل کرده مستقیم وصل می‌شود؛
+     * وگرنه بی‌صدا شروع کن (autoplay بی‌صدا همیشه مجاز است) تا اولین لمس */
     const unmute = () => {
       const vv = ref.current
       if (!vv) return
       vv.muted = false
       vv.play?.().then(() => { setNeedTap(false); pendingUnmute.delete(unmute) }).catch(() => { vv.muted = true; setNeedTap(true) })
     }
-    pendingUnmute.add(unmute)
-    setNeedTap(true)
+    if (userInteracted) unmute()
+    else {
+      v.muted = true
+      v.play?.().catch(() => {})
+      pendingUnmute.add(unmute)
+      setNeedTap(true)
+    }
     return () => { pendingUnmute.delete(unmute) }
   }, [player, camOff])
   const unmuteNow = () => {
@@ -559,6 +790,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const switchingRef = useRef(false)
  const facingRef = useRef('user')
  const devicesRef = useRef([])
+ /* [فیکس F37-b] لیست دوربین‌ها به‌صورت state — برای «انتخابگر دوربین» در نوار کنترل */
+ const [camDevices, setCamDevices] = useState([])
+ const [camDeviceId, setCamDeviceId] = useState('')
+ const camDeviceIdRef = useRef('')
 
  /* ---------- رله رسانه — فرستنده (دو کانال مستقل: دوربین + صفحه) ---------- */
  /* [فیکس F36-c] کانال‌ها: cam = دوربین+میکروفون، scr = اشتراک صفحه (+صدای تب).
@@ -684,9 +919,23 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  const rememberDevices = () => {
    navigator.mediaDevices.enumerateDevices()
-     .then((ds) => { devicesRef.current = ds.filter((d) => d.kind === 'videoinput' && d.deviceId) })
+     .then((ds) => {
+       const cams = ds.filter((d) => d.kind === 'videoinput' && d.deviceId)
+       devicesRef.current = cams
+       setCamDevices(cams) // [فیکس F37-b] انتخابگر دوربین نیاز به state دارد، نه فقط ref
+       const st = localStreamRef.current?.getVideoTracks()[0]?.getSettings?.()
+       if (st?.deviceId) { camDeviceIdRef.current = st.deviceId; setCamDeviceId(st.deviceId) }
+     })
      .catch(() => {})
  }
+
+ /* [فیکس F37-b] اتصال/جدا شدن دوربین جدید (مثلاً وبکم USB) → لیست تازه شود */
+ useEffect(() => {
+   const h = () => rememberDevices()
+   try { navigator.mediaDevices?.addEventListener?.('devicechange', h) } catch { /* noop */ }
+   return () => { try { navigator.mediaDevices?.removeEventListener?.('devicechange', h) } catch { /* noop */ } }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [])
 
  /* ---------- درخواست/قطع رسانه محلی ---------- */
  const startMedia = async () => {
@@ -919,7 +1168,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    ch.cd = cd
    ch.micOn = micOn
    wireRecorder(ch, rec)
-   try { rec.start(500) } catch { /* noop */ } // تکه‌های ۰٫۵ ثانیه‌ای → تاخیر کم‌تر
+   try { rec.start(1000) } catch { /* noop */ } // [فیکس F37-d] تکه‌های ۱ ثانیه‌ای — تکه‌های ۰٫۵s کروم خروجی webm شکننده می‌دهد که MSE مرتباً رد می‌کند
  }
 
  /** قطع کامل رسانه خودم — لغو اجازه توسط مدرس یا ۴۰۳ سرور */
@@ -941,18 +1190,34 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    let alive = true
    const players = feedPlayersRef.current
    const cur = { t: null, ts: null, s: {} }
+   const lastSeen = new Map() // [فیکس F37-d] key → آخرین زمان دیده‌شدن فید
    let busy = false
 
    const applyFeed = (key, f) => {
      let p = players.get(key)
-     /* اگر قالب/کدک‌های فرستنده عوض شد (webm↔mp4 یا اضافه‌شدن ترک) پلیر از نو ساخته می‌شود */
-     if (p && (p.fmt !== (f.fmt || 'webm') || (p.cd || '') !== (f.cd || ''))) { try { p.destroy() } catch { /* noop */ } players.delete(key); p = null }
+     /* اگر قالب/کدک‌های فرستنده عوض شد (webm↔mp4 یا اضافه‌شدن ترک) پلیر از نو ساخته می‌شود
+      * [فیکس F37-d] اما پلیری که به فال‌بک Blob رفته هرگز به MSE برگردانده نمی‌شود —
+      * بعد از fallback، cd/fmt روی پلیر ست نمی‌ماند و بازسازی شرطی، فال‌بک را خنثی می‌کرد */
+     if (p && p.mode !== 'blob' && (p.fmt !== (f.fmt || 'webm') || (p.cd || '') !== (f.cd || ''))) { try { p.destroy() } catch { /* noop */ } players.delete(key); p = null }
      if (!p) {
        p = createFeedPlayer(f.fmt || 'webm', f.cd || '')
        p.onNeedReset = () => { if (key === 't' || key === 'ts') cur[key] = null; else delete cur.s[key] } // فقط کرسرِ همین فید صفر شود
        players.set(key, p)
      }
-     if (f.reset) p.hardReset(f.sess)
+     const resetApplied = f.reset ? p.hardReset(f.sess) : false
+     /* [فیکس F37-d] اگر هاردریست «لازم نبود» (همان سشنِ سالم)، دسته‌ی init+تکه‌های
+        تکراری نباید push شود — افزودن دوباره‌ی init به SourceBuffer زنده دکودر را می‌شکند
+        و همان تکه‌ها هم قبلاً پخش شده‌اند. فقط دسته‌ی بعد از ریستِ واقعی push می‌شود */
+     try { window.__liveLog?.push(`applyFeed|${key}|reset=${f.reset ? 1 : 0}|applied=${resetApplied ? 1 : 0}|broken=${p.broken ? 1 : 0}|sess=${f.sess}`) } catch { /* noop */ }
+     if (f.reset && !resetApplied) {
+       return f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null
+     }
+     /* [فیکس F37-d] باگ ریشه‌ای کرسر: breakStream کرسر را صفر می‌کرد ولی «همین poll»
+        بلافاصله بعد از applyFeed کرسر را دوباره q=lastSeq می‌کرد → صفر شدن هیچ‌وقت
+        به poll بعد نمی‌رسید → سرور هیچ‌وقت reset+init نمی‌فرستاد → SourceBuffer
+        شکسته برای همیشه می‌ماند و تصویر فریز می‌شد. حالا پلیرِ شکسته کرسر null
+        برمی‌گرداند تا سرور قطعاً reset+init بفرستد و خودترمیمی کامل شود */
+     if (p.broken) { try { window.__liveLog?.push(`applyFeed|${key}|BROKEN-cursor-null`) } catch { /* noop */ } return null }
      if (f.init) p.push(f.sess, f.init)
      for (const c of f.chunks) p.push(f.sess, c.b64)
      /* کرسر فقط تا «آخرین تکه‌ی واقعاً تحویل‌شده» جلو می‌رود — نه seq سرور؛
@@ -966,6 +1231,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      try {
        const r = await req(`/classes/${classId}/media/feeds?cur=${encodeURIComponent(JSON.stringify(cur))}`, { timeout: 7000 })
        const next = {}
+       const nowMs = Date.now()
+       /* [فیکس F37-d] آخرین زمان دیده‌شدن هر فید — پلیر تا ۱۵ ثانیه بعد از آخرین دیده‌شدن
+          زنده نگه داشته می‌شود؛ رکود لحظه‌ای فرستنده دیگر پلیر را نمی‌کشد */
+       const touch = (k) => { lastSeen.set(k, nowMs) }
        /* pv = شناسه‌ی پلیرِ زنده. اگر پلیر از نو ساخته شود (تعویض قالب/کدک مثل شروع
           اشتراک صفحه، یا re-mount افکت در StrictMode) باید feedInfo عوض شود تا
           re-render اتفاق بیفتد و RelayVideo پلیر تازه را بگیرد. بدون این، پروپ‌ها
@@ -979,24 +1248,40 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
         if (r.teacher) cur.t = { s: r.teacher.sess, q: r.teacher.seq }
         if (r.teacherScreen) cur.ts = { s: r.teacherScreen.sess, q: r.teacherScreen.seq }
       } else if (r.teacher) {
+        touch('t')
         const lastSeq = applyFeed('t', r.teacher)
         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('t')?.pid }
-        cur.t = { s: r.teacher.sess, q: lastSeq ?? (cur.t?.q || 0) }
-      } else if (cur.t) cur.t = null // فید مدرس قطع شد — کرسر صفر تا فید بعدی از سر init شود
+        /* [فیکس F37-d] پلیر شکسته → کرسر «واقعاً» صفر شود — قبلاً fallback به
+           cur.t?.q قدیمی بود و سرور هیچ‌وقت reset نمی‌فرستاد → پلیر مرده می‌ماند
+           [فیکس F37-e] پاسخ بدون تکه‌ی جدید (n:0) دیگر کرسر را صفر نمی‌کند —
+           قبلاً «q: lastSeq ?? 0» هر poll بی‌تکه را به q=0 تبدیل می‌کرد → سرور
+           stale می‌دید و بی‌نهایت reset+init می‌فرستاد (طوفان reset و داده‌ی تکراری) */
+        cur.t = players.get('t')?.broken ? null : { s: r.teacher.sess, q: lastSeq != null ? lastSeq : (cur.t?.q ?? 0) }
+      }
+      /* [فیکس F37-d] مرگ لحظه‌ای فید (رکود ضبط فرستنده) — کرسر نگه داشته می‌شود؛
+       * sess خودش حافظ‌ی ریست است: اگر فرستنده واقعاً از نو شروع کرده باشد sess++
+       * می‌شود و سرور reset می‌فرستد. صفر کردن کرسر اینجا هر رکود ~۵-۹ ثانیه‌ای را
+       * به «ریست کامل + rebuild» تبدیل می‌کرد (چرخه‌ی بی‌پایان برای دانش‌آموز) */
        /* [فیکس F36-c] فید مستقل اشتراک صفحه مدرس — موازی با دوربین (کلید 'ts') */
        if (!isTeacher && r.teacherScreen) {
+         touch('ts')
          const lastSeq2 = applyFeed('ts', r.teacherScreen)
          next.ts = { sess: r.teacherScreen.sess, mic: r.teacherScreen.mic, cam: false, screen: true, fmt: r.teacherScreen.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('ts')?.pid }
-         cur.ts = { s: r.teacherScreen.sess, q: lastSeq2 ?? (cur.ts?.q || 0) }
-       } else if (cur.ts) cur.ts = null
+         /* [فیکس F37-e] حفظ کرسر در پاسخ‌های بی‌تکه — مثل فید دوربین */
+         cur.ts = players.get('ts')?.broken ? null : { s: r.teacherScreen.sess, q: lastSeq2 != null ? lastSeq2 : (cur.ts?.q ?? 0) }
+       }
        for (const sf of r.students || []) {
+         touch(sf.uid)
          const lastSeq = applyFeed(sf.uid, sf)
          next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2', pv: players.get(sf.uid)?.pid }
-         cur.s[sf.uid] = { s: sf.sess, q: lastSeq ?? (cur.s[sf.uid]?.q || 0) }
+         /* [فیکس F37-e] حفظ کرسر در پاسخ‌های بی‌تکه — مثل فید دوربین */
+         cur.s[sf.uid] = players.get(sf.uid)?.broken ? null : { s: sf.sess, q: lastSeq != null ? lastSeq : (cur.s[sf.uid]?.q ?? 0) }
        }
-       for (const k of Object.keys(cur.s)) if (!(k in next)) delete cur.s[k]
+       for (const k of Object.keys(cur.s)) if (!(k in next) && nowMs - (lastSeen.get(k) || 0) > 15_000) delete cur.s[k]
+       /* [فیکس F37-d] پلیر فقط بعد از ۱۵ ثانیه غیبت کامل فید کشته می‌شود — نه با هر
+          رکود لحظه‌ای فرستنده (قبلاً هر رکود → destroy → reset → rebuild چرخه‌ی بی‌پایان) */
        for (const k of [...players.keys()]) {
-         if (!(k in next)) { try { players.get(k).destroy() } catch { /* noop */ } players.delete(k) }
+         if (!(k in next) && nowMs - (lastSeen.get(k) || 0) > 15_000) { try { players.get(k).destroy() } catch { /* noop */ } players.delete(k) }
        }
        setFeedInfo((prev) => (feedsEq(prev, next) ? prev : next))
      } catch { /* شبکه — دوباره */ }
@@ -1423,8 +1708,18 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setCam(v)
  }
 
- /* ---------- تعویض دوربین — جلو/عقب موبایل با facingMode دقیق + دوربین‌های دسکتاپ ---------- */
- const switchCam = async () => {
+ /* ---------- تعویض دوربین [فیکس F37-b] — بازنویسی کامل ----------
+  * باگ گزارش کاربر: «چرخش دوربین درست کار نمی‌کند». ریشه:
+  * ۱) روی دسکتاپِ تک‌دوربین، محدودیت facingMode:{ideal} همان وبکم قبلی را برمی‌گرداند
+  *    ولی شرط ردِ «همان دوربین» فقط وقتی اجرا می‌شد که محدودیت facingMode «نداشته باشد»
+  *    → همان دوربین دوباره باز می‌شد، استریم ری‌بیلد می‌شد و پیام قلابی «دوربین عوض شد» می‌آمد.
+  * ۲) سافاری deviceId را در getSettings نمی‌دهد → مقایسه deviceId همیشه بی‌اثر بود.
+  * حالا:
+  *  • تشخیص «همان دوربین» با deviceId یا label (هر کدام که در دسترس باشد)
+  *  • تناقض facingMode (پرسیدیم عقب، جلو داد) هم رد می‌شود
+  *  • explicitId: انتخاب مستقیم از «انتخابگر دوربین»
+  *  • اگر واقعاً دوربین دیگری نیست → پیام صادقانه، بدون ری‌بیلد استریم */
+ const switchCam = async (explicitId) => {
    if (switchingRef.current) return
    if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
    const cur = localStreamRef.current
@@ -1433,58 +1728,78 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    const track = cur.getVideoTracks()[0]
    const settings = track.getSettings?.() || {}
    const isTouch = (navigator.maxTouchPoints || 0) > 0
-   /* جهت درخواستی — getSettings روی خیلی از گوشی‌ها facingMode برنمی‌گرداند،
-      پس جهتِ درخواستی را خودمان نگه می‌داریم تا فلپ واقعی بماند */
+   /* شناسه/برچسب دوربین فعلی — سافاری deviceId نمی‌دهد ولی label بعد از اجازه دارد */
+   const curId = explicitId ? '' : (camDeviceIdRef.current || settings.deviceId || '')
+   const curLabel = explicitId ? '' : (track.label || '')
    const curFacing = facingRef.current || settings.facingMode || 'user'
    const flip = curFacing === 'environment' ? 'user' : 'environment'
    const base = { width: { ideal: 1280 }, height: { ideal: 720 } }
    const candidates = []
-   if (isTouch) {
-     candidates.push({ ...base, facingMode: { exact: flip } })
-     candidates.push({ ...base, facingMode: flip })
-   }
-   try {
-     /* هر بار لیست تازه گرفته می‌شود — iOS تا بعد از اجازه لیست خالی می‌دهد */
-     const ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
-     devicesRef.current = ds
-     if (ds.length > 1) {
-       const others = ds.filter((d) => d.deviceId !== settings.deviceId)
-       if (others.length) candidates.push({ ...base, deviceId: { exact: others[0].deviceId } })
+   if (explicitId) {
+     /* انتخاب مستقیم از لیست انتخابگر */
+     candidates.push({ ...base, deviceId: { exact: explicitId } })
+   } else {
+     if (isTouch) {
+       candidates.push({ ...base, facingMode: { exact: flip } })
+       candidates.push({ ...base, facingMode: flip })
      }
-   } catch { /* noop */ }
-   candidates.push({ ...base, facingMode: { ideal: flip } })
-   candidates.push(base)
+     try {
+       /* هر بار لیست تازه گرفته می‌شود — iOS تا بعد از اجازه لیست خالی می‌دهد */
+       const ds = ((await navigator.mediaDevices.enumerateDevices()) || []).filter((d) => d.kind === 'videoinput' && d.deviceId)
+       devicesRef.current = ds
+       setCamDevices(ds)
+       /* همه دوربین‌های «دیگر» به ترتیب — نه فقط اولی (با ۳ دوربین هم هر سه در دسترس‌اند) */
+       for (const d of ds) {
+         if (d.deviceId && d.deviceId !== curId) candidates.push({ ...base, deviceId: { exact: d.deviceId } })
+       }
+     } catch { /* noop */ }
+     candidates.push({ ...base, facingMode: { ideal: flip } })
+   }
+
+   /** آیا این ترک جدید عملاً همان دوربین قبلی است؟ (deviceId یا label) */
+   const sameCam = (nv) => {
+     const s = nv.getSettings?.() || {}
+     if (s.deviceId && curId && s.deviceId === curId) return true
+     if (nv.label && curLabel && nv.label === curLabel) return true
+     return false
+   }
 
    for (const video of candidates) {
      try {
        const g = await navigator.mediaDevices.getUserMedia({ video, audio: false })
        const nv = g.getVideoTracks()[0]
        if (!nv) { g.getTracks().forEach((t) => t.stop()); continue }
-       /* اگر همان دوربین قبلی برگشت و دنبال فلپ بودیم — گزینه بعدی */
-       const newId = nv.getSettings?.().deviceId
-       if (newId && settings.deviceId && newId === settings.deviceId && !('facingMode' in video)) {
-         g.getTracks().forEach((t) => t.stop())
-         continue
+       /* [فیکس F37-b] اگر همان دوربین قبلی برگشت — بدون توجه به نوع محدودیت —
+          «تغییر قلابی» ممنوع؛ گزینه بعدی امتحان می‌شود */
+       if (sameCam(nv)) { g.getTracks().forEach((t) => t.stop()); continue }
+       /* تناقض facingMode: دقیق «عقب» خواستیم ولی ترک گزارش «جلو» می‌دهد */
+       const wantF = video.facingMode
+       const gotF = nv.getSettings?.().facingMode
+       if (wantF && typeof wantF === 'object' && wantF.exact && gotF && gotF !== wantF.exact) {
+         g.getTracks().forEach((t) => t.stop()); continue
        }
        const old = localStreamRef.current?.getVideoTracks()[0]
-       old?.stop()
        const audio = localStreamRef.current?.getAudioTracks()[0]
+       old?.stop()
        const nextStream = new MediaStream([...(audio ? [audio] : []), nv])
        nv.enabled = camRef.current // وضعیت روشن/خاموش دوربین حفظ شود
        /* جهتِ درخواستی ترجیح دارد — گزارش settings روی برخی گوشی‌ها undefined است */
-       const reqFacing = 'facingMode' in video
+       facingRef.current = nv.getSettings?.().facingMode || ('facingMode' in video
          ? (typeof video.facingMode === 'string' ? video.facingMode : (video.facingMode?.exact || video.facingMode?.ideal || flip))
-         : (nv.getSettings?.().facingMode || curFacing)
-       facingRef.current = reqFacing
+         : curFacing)
+       camDeviceIdRef.current = nv.getSettings?.().deviceId || ''
+       setCamDeviceId(camDeviceIdRef.current)
        localStreamRef.current = nextStream
        setLocalStream(nextStream)
        rebuildOutgoing()
+       rememberDevices()
        toast(isTouch ? (facingRef.current === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد') : 'دوربین عوض شد', 'success')
        switchingRef.current = false
        return
      } catch { /* گزینه بعدی */ }
    }
-   toast('دوربین دیگری روی این دستگاه پیدا نشد', 'info')
+   /* هیچ دوربین دیگری واقعاً پیدا نشد — صادقانه بگو، استریم را به‌هم نزن */
+   toast(camDevices.length > 1 ? 'تغییر به آن دوربین ممکن نشد — از انتخابگر دوربین استفاده کنید' : 'دوربین دیگری روی این دستگاه پیدا نشد', 'info')
    switchingRef.current = false
  }
 
@@ -1929,8 +2244,15 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const watchingFeed = !isTeacher && !watchingScreen && !!tFeed
  const stageBusy = watchingBoard || watchingScreen || watchingFeed
 
+ /* [فیکس F37-a] باگ بحرانی «دانش‌آموز صفحه را نمی‌بیند»: سرور برای فید اشتراک
+  * صفحه همیشه cam=false می‌فرستد (چون ترک دوربین ندارد) و camOff=!cam همیشه
+  * true می‌شد → ویدیو با visibility:hidden مخفی و زیر آواتار پوشاننده دفن می‌شد.
+  * فید صفحه هرگز نباید با گیت «دوربین خاموش» مخفی شود — آن گیت فقط برای فید دوربین معنا دارد
+  * [فیکس F37-e] کلید tile شامل pv (pid پلیر) است — بعد از هر rebuild پلیر،
+  * RelayVideo با «عنصر ویدیوی کاملاً تازه» remount می‌شود (قانون یک‌MS-یک‌عنصر:
+  * MediaSource بازی هرگز به عنصر دوم وصل نمی‌شود؛ پایپ‌لاین تمیز = بدون sb-error) */
  const feedTile = (key, f, big) => (
-   <RelayVideo key={key} player={feedPlayersRef.current.get(key)} name={f.name} color={f.color} camOff={!f.cam} screen={f.screen} big={big} />
+   <RelayVideo key={`${key}:${f.pv ?? 0}`} player={feedPlayersRef.current.get(key)} name={f.name} color={f.color} camOff={!f.cam && !f.screen} screen={f.screen} big={big} />
  )
 
  /* کاشی‌های حالت عادی: رسانه خودم + استریم دانش‌آموزان (برای مدرس) یا استریم بقیه (برای دانش‌آموز) */
@@ -2163,9 +2485,25 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <button className={ctl(cam) + (cam ? '' : ' off')} onClick={toggleCam} aria-pressed={!cam}>
  <Icon name="camera" /> <span className="ctl-tip">{cam ? 'خاموش کردن دوربین' : 'روشن کردن دوربین'}</span>
  </button>
- <button className={ctl(false)} onClick={switchCam}>
+ {/* [فیکس F37-b] onClick بدون آرگومان — رویداد موس نباید به‌جای explicitId برود */}
+ <button className={ctl(false)} onClick={() => switchCam()}>
  <Icon name="camFlip" /> <span className="ctl-tip">تعویض دوربین (جلو/عقب)</span>
  </button>
+ {camDevices.length > 1 && (
+ <select
+   className="ctl-select"
+   value={camDeviceId}
+   onChange={(e) => { if (e.target.value) switchCam(e.target.value) }}
+   onMouseDown={(e) => { if (!isTeacher && !canSpeakRef.current) { e.preventDefault(); requestSpeakPermission() } }}
+   aria-label="انتخاب دوربین"
+   dir="ltr"
+ >
+   {!camDeviceId && <option value="" disabled>دوربین</option>}
+   {camDevices.map((d) => (
+     <option key={d.deviceId} value={d.deviceId}>{d.label || `دوربین ${d.deviceId.slice(0, 6)}`}</option>
+   ))}
+ </select>
+ )}
  {isTeacher && (
  <button className={ctl(screen)} onClick={toggleScreenShare} aria-pressed={screen}>
  <Icon name="monitor" /> <span className="ctl-tip">{screen ? 'قطع اشتراک صفحه' : 'اشتراک صفحه سیستم'}</span>

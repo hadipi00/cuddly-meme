@@ -29,11 +29,24 @@ async function apiLogin(email, password) {
   })
   const d = await r.json()
   if (!d.token) throw new Error('login failed for ' + email + ': ' + JSON.stringify(d))
+  /* گیت تغییر رمز اجباری دمو — فقط برای این تست بی‌طرف می‌شود (DB دست نمی‌خورد) */
+  if (d.user) d.user.mustChangePassword = 0
   return d // { token, user }
 }
 
 /* ---------- شروع کلاس از API (مدرس) ---------- */
 async function apiStart(token) {
+  /* [فیکس F37-e] قطعی تست — جلسات زنده‌ی باقی‌مانده از ران‌های قبلی همه پایان می‌یابند
+   * تا «تنها کلاس زنده» همان کلاس هدف باشد؛ وگرنه کلیک ردیف، کلاس دیگری را باز می‌کرد
+   * و مدرس و دانش‌آموز در دو اتاق متفاوت قرار می‌گرفتند (شکست مبهم «ویدیو نیامد») */
+  try {
+    const list = await (await fetch(`${BASE}/api/classes`, { headers: { Authorization: `Bearer ${token}` } })).json()
+    for (const c of list.classes || list || []) {
+      if (c.status === 'live' && c.id !== CLASS_ID) {
+        await fetch(`${BASE}/api/classes/${c.id}/end`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
+      }
+    }
+  } catch { /* noop */ }
   const r = await fetch(`${BASE}/api/classes/${CLASS_ID}/start`, {
     method: 'POST', headers: { Authorization: 'Bearer ' + token },
   })
@@ -61,6 +74,14 @@ async function main() {
 
   const mkCtx = ({ token, user }) => browser.newContext({ viewport: { width: 1380, height: 860 } })
     .then(async (ctx) => {
+      /* پاسخ auth/me هم بی‌طرف می‌شود */
+      await ctx.route('**/api/auth/me', async (route) => {
+        const resp = await route.fetch()
+        let j = null
+        try { j = await resp.json() } catch { /* noop */ }
+        if (j?.user) j.user.mustChangePassword = 0
+        await route.fulfill({ response: resp, json: j })
+      })
       await ctx.addInitScript(({ t, u }) => {
         try {
           localStorage.setItem('modaresyar:token', t)
@@ -108,17 +129,24 @@ async function main() {
   // دکمه ورود (کلاس زنده است) یا مسیر آماده‌سازی
   let entered = false
   try {
-    const row = tPage.locator('div', { hasText: 'پرسش و پاسخ پروژه نهایی' }).locator('button.btn-danger').first()
+    /* [فیکس F37-e] کلیک فقط در «کارت همان کلاس» — قبلاً div با hasText همه‌ی
+       والدها را هم می‌گرفت و اولین دکمه‌ی قرمز، کلاس دیگری را باز می‌کرد */
+    const row = tPage.locator('.card', { hasText: 'پرسش و پاسخ پروژه نهایی' }).locator('button.btn-danger').first()
     await row.click({ timeout: 6000 })
     entered = true
   } catch {
     try {
-      const prep = tPage.locator('button.btn-primary', { hasText: 'برگزاری' }).first()
-      await prep.click({ timeout: 4000 })
-      await sleep(600)
-      await tPage.locator('button.btn-primary.btn-lg').first().click({ timeout: 4000 })
+      await tPage.locator('button', { hasText: 'ادامه کلاس' }).first().click({ timeout: 4000 })
       entered = true
-    } catch { entered = false }
+    } catch {
+      try {
+        const prep = tPage.locator('button', { hasText: 'آماده‌سازی و شروع' }).first()
+        await prep.click({ timeout: 4000 })
+        await sleep(600)
+        await tPage.locator('button.btn-primary.btn-lg').first().click({ timeout: 4000 })
+        entered = true
+      } catch { entered = false }
+    }
   }
   ok(entered, 'ورود مدرس به اتاق')
   await tPage.waitForSelector('.live-grid', { timeout: 15000 })
@@ -130,8 +158,9 @@ async function main() {
   const ups = tUploads.length
   const upsAfterInit = tUploads.filter((u) => !u.init).length
   const totalBytes = tUploads.reduce((a, u) => a + u.size, 0)
-  ok(ups >= 8, 'تکه‌های آپلودشده ≥ ۸', `${ups} تکه، ${Math.round(totalBytes / 1024)}KB`)
-  ok(upsAfterInit >= 6, 'تکه‌های بعد از init جریان دارد', `${upsAfterInit} تکه`)
+  /* [فیکس F37-d] تکه‌ها ۱ ثانیه‌ای‌اند (قبلاً ۰٫۵s) — آستانه نصف شد */
+  ok(ups >= 4, 'تکه‌های آپلودشده ≥ ۴ (تکه‌های ۱ ثانیه‌ای)', `${ups} تکه، ${Math.round(totalBytes / 1024)}KB`)
+  ok(upsAfterInit >= 3, 'تکه‌های بعد از init جریان دارد', `${upsAfterInit} تکه`)
   ok(tUploads[0]?.init, 'اولین تکه init (هدر) است')
   const badInit = tUploads.filter((u) => u.init).length - 1 // init های اضافه = ری‌ست‌های مداوم
   ok(badInit <= 2, 'ری‌ست جلسه ≤ ۲ (پایداری)', `${badInit} ری‌ست`)
@@ -140,7 +169,31 @@ async function main() {
   log('3) ورود دانش‌آموز — باید فوراً ویدیوی مدرس را ببیند')
   await sPage.goto(`${BASE}/panel/student/live/${CLASS_ID}`, { waitUntil: 'domcontentloaded' })
   await sPage.waitForSelector('.live-grid', { timeout: 20000 })
-  await sPage.waitForSelector('.live-stage video', { timeout: 12000 })
+  try {
+    await sPage.waitForSelector('.live-stage video', { timeout: 12000 })
+  } catch {
+    /* [دیباگ F37-e] dump وضعیت دانش‌آموز هنگام شکست — به‌جای فال خام */
+    const dump = await sPage.evaluate(async () => {
+      let feedProbe = null
+      try {
+        const tk = sessionStorage.getItem('modaresyar:token:tab') || localStorage.getItem('modaresyar:token') || ''
+        const r = await fetch('/api/classes/l2/media/feeds?cur=%7B%7D', { headers: { Authorization: 'Bearer ' + tk } })
+        feedProbe = { status: r.status, head: JSON.stringify(await r.json()).slice(0, 220) }
+      } catch (e) { feedProbe = { err: String(e) } }
+      return {
+        stageChildren: [...document.querySelectorAll('.live-stage > *')].map((e) => e.className).slice(0, 8),
+        mediaStatus: document.querySelector('.media-status')?.textContent?.slice(0, 140) || null,
+        liveLogLen: (window.__liveLog || []).length,
+        liveLogHead: (window.__liveLog || []).slice(0, 14),
+        feedsReqs: performance.getEntriesByType('resource').filter((x) => x.name.includes('/media/feeds')).length,
+        stateReqs: performance.getEntriesByType('resource').filter((x) => x.name.includes('/state')).length,
+        feedProbe,
+        bodyText: document.body.innerText.slice(0, 240),
+      }
+    })
+    console.log('   [dump دانش‌آموز]', JSON.stringify(dump, null, 1))
+    throw new Error('عنصر ویدیو در صحنه ظاهر نشد')
+  }
   ok(true, 'عنصر ویدیو در صحنه دانش‌آموز ظاهر شد')
 
   let vidState = null
@@ -179,8 +232,11 @@ async function main() {
       src.connect(an)
       const buf = new Float32Array(an.fftSize)
       let peak = 0
-      for (let i = 0; i < 12; i++) {
-        await new Promise((r) => setTimeout(r, 60))
+      /* [فیکس F37-e] پنجره ۳ ثانیه‌ای — صدای فیک کروم «بوق متناوب» است
+       * (بین بوق‌ها سکوت مطلق)؛ پنجره‌ی ۰٫۷ ثانیه‌ای قبلی در فاز سکوت می‌افتاد
+       * و تست سالم‌ترین خط لوله صدا را هم قرمز می‌کرد */
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 100))
         an.getFloatTimeDomainData(buf)
         let s = 0
         for (let k = 0; k < buf.length; k++) s += buf[k] * buf[k]
@@ -241,7 +297,8 @@ async function main() {
   })
   await sleep(1200)
   // تایید مدرس از API (مثل کلیک دکمه اجازه در تب حاضران)
-  const parts = await (await fetch(`${BASE}/api/classes/${CLASS_ID}/state`)).json()
+  /* [فیکس تست] state به احراز نیاز دارد — قبلاً بدون توکن صدا زده می‌شد و «سارا پیدا نشد» */
+  const parts = await (await fetch(`${BASE}/api/classes/${CLASS_ID}/state`, { headers: { Authorization: 'Bearer ' + teacherToken } })).json()
   const sara = (parts.participants || []).find((p) => p.role === 'student')
   ok(!!sara && sara.hand, 'دست دانش‌آموز برای مدرس دیده می‌شود', sara ? `${sara.name} ✋` : 'not found')
   if (sara) {

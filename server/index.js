@@ -801,7 +801,7 @@ app.get('/api/classes/:id/events', (req, res) => {
    • این روش از همان مسیر HTTP چت عبور می‌کند؛ اگر چت کار کند، صدا و
      تصویر هم صددرصد کار می‌کند (برخلاف WebRTC که پشت NAT گیر می‌کند).
    ================================================================ */
-const MEDIA_CHUNK_TTL = 12_000 // نگهداری تکه‌های اخیر برای تازه‌واردها [فیکس F36: ۹→۱۲ ثانیه — شبکه‌های ناپایدار]
+const MEDIA_CHUNK_TTL = 20_000 // نگهداری تکه‌های اخیر برای تازه‌واردها [فیکس F37-d: ۱۲→۲۰ — رکود ضبط فرستنده ریست بی‌دلیل نمی‌سازد]
 const mediaRooms = new Map()  // classId → { teacher: Feed|null, screen: Feed|null, students: Map<uid, Feed>, lastActivity }
 /* [فیکس F36-c] فید مستقل اشتراک صفحه — قبلاً تصویر صفحه جای دوربین را در «همان
  * یک فید» می‌گرفت و هر بار رکوردر از نو ساخته می‌شد (سشن تازه → ری‌بیلد گیرنده‌ها،
@@ -851,7 +851,7 @@ function feedPush(feed, buf, isInit, meta, fmt, cd) {
   while (feed.chunks.length && t - feed.chunks[0].ts > MEDIA_CHUNK_TTL) feed.chunks.shift()
 }
 
-function feedAlive(f) { return f && f.init && f.updatedAt && now() - f.updatedAt < 9_000 } // [فیکس F36: ۶→۹ ثانیه — با لرزش شبکه فید نمی‌میرد]
+function feedAlive(f) { return f && f.init && f.updatedAt && now() - f.updatedAt < 15_000 } // [فیکس F37-d: ۹→۱۵ — رکود MediaRecorder (تب پس‌زمینه/شبکه) فید را نکشد]
 
 app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'application/octet-stream', limit: '4mb' }), (req, res) => {
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
@@ -916,7 +916,8 @@ app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
     const stale = !c0 || c0.s !== f.sess || (f.chunks.length && c0.q < f.chunks[0].seq - 1)
     const base = { sess: f.sess, seq: f.seq, mic: !!f.meta?.mic, cam: !!f.meta?.cam, screen: !!f.meta?.screen, fmt: f.fmt || 'webm', cd: f.cd || '' }
     if (stale) {
-      return { ...base, reset: true, init: b64(f.init), chunks: f.chunks.slice(-6).map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
+      /* [فیکس F37-e] ۶→۸ تکه — تازه‌وارد بیشترِ زمینه را یک‌جا بگیرد (هدر + ~۸ ثانیه) */
+      return { ...base, reset: true, init: b64(f.init), chunks: f.chunks.slice(-8).map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
     }
     const fresh = f.chunks.filter((x) => x.seq > (c0.q || 0)).slice(0, 12)
     return { ...base, init: null, chunks: fresh.map((x) => ({ seq: x.seq, b64: b64(x.buf) })) }
@@ -953,9 +954,9 @@ app.post('/api/classes/:id/media/stop', requireAuth, (req, res) => {
 setInterval(() => {
   const t = now()
   for (const [cid, room] of mediaRooms) {
-    for (const [uid, f] of room.students) if (t - (f.updatedAt || 0) > 12_000) room.students.delete(uid)
-    if (room.teacher && t - (room.teacher.updatedAt || 0) > 12_000) room.teacher = null
-    if (room.screen && t - (room.screen.updatedAt || 0) > 12_000) room.screen = null
+    for (const [uid, f] of room.students) if (t - (f.updatedAt || 0) > 20_000) room.students.delete(uid)
+    if (room.teacher && t - (room.teacher.updatedAt || 0) > 20_000) room.teacher = null
+    if (room.screen && t - (room.screen.updatedAt || 0) > 20_000) room.screen = null
     if (!room.teacher && !room.screen && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
   }
   /* [فیکس B23] پاک‌سازی دوره‌ای وایت‌بردها — قبلاً wbDrafts/wbBgRev/wbClearRev فقط
