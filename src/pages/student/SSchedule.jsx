@@ -65,11 +65,13 @@ export default function SSchedule() {
  }
  }), [all])
 
- // مرتب‌سازی جلسات هر روز بر اساس زمان شروع
+ // مرتب‌سازی جلسات هر روز بر اساس زمان شروع — با نرمال‌سازی ارقام فارسی
+ // (قبلاً مقایسه رشته‌ای ارقام فارسی ترتیب غلط می‌داد: ۱۰:۰۰ قبل از ۸:۰۰)
+ const faTime = (s) => String(s || '').replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
  const byDay = useMemo(() => {
  const map = Array.from({ length: 7 }, () => [])
  withMeta.forEach((c) => map[c.day]?.push(c))
- map.forEach((list) => list.sort((a, b) => (a.start || '').localeCompare(b.start || '', 'en')))
+ map.forEach((list) => list.sort((a, b) => faTime(a.start).localeCompare(faTime(b.start), 'en')))
  return map
  }, [withMeta])
 

@@ -17,10 +17,15 @@ export default function PanelLayout({ role, roleLabel, nav }) {
  const { user, logout, toast } = useApp()
  const loc = useLocation()
  const nav2 = useNavigate()
- const me = user?.role === role ? user : null
+ const me = user && (user.role === role || user.role === 'admin') ? user : null
  // دسترسی پنل‌ها توسط RouteGuard در App.jsx کنترل می‌شود
  const notis = notifications[role] || []
- const current = nav.flatMap((g) => g.items).find((i) => loc.pathname.startsWith(i.to))
+ /* فعال‌ترین آیتم منو = طولانی‌ترین prefix منطبق — قبلاً find اولین match بود و
+    چون مسیر ریشه پنل پیش‌فرض همه است، همیشه «داشبورد» به‌عنوان صفحه فعلی و فعال نمایش داده می‌شد */
+ const best = nav.flatMap((g) => g.items)
+   .filter((i) => loc.pathname === i.to || loc.pathname.startsWith(i.to + '/') || (loc.pathname.startsWith(i.to) && i.to !== `/panel/${role}`))
+   .sort((a, b) => b.to.length - a.to.length)[0]
+ const current = best || nav[0]?.items?.[0]
 
  return (
  <div className="panel">
@@ -41,7 +46,7 @@ export default function PanelLayout({ role, roleLabel, nav }) {
  {group.items.map((item) => (
  <NavLink
  key={item.to} to={item.to} end={item.to === `/panel/${role}` || item.end}
- className={() => (loc.pathname.startsWith(item.to) ? 'p-link active' : 'p-link')}
+ className={() => (best?.to === item.to || (!best && item.to === `/panel/${role}` && loc.pathname === item.to) ? 'p-link active' : 'p-link')}
  onClick={() => setOpen(false)}
  >
  <Icon name={item.icon} />

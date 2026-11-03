@@ -9,7 +9,9 @@ import { useApp } from '../store/AppContext'
 export function RouteGuard({ role, children }) {
  const { user } = useApp()
  const loc = useLocation()
- const allowed = user?.role === role
+ /* ادمین سوپریوزر است — به همه پنل‌ها دسترسی دارد
+    (قبلاً ادمین روی «ورود به کلاس» به /auth?role=teacher هدایت می‌شد!) */
+ const allowed = user?.role === role || user?.role === 'admin'
 
  if (!allowed) {
  return (

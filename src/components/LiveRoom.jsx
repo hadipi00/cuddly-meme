@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { DataIcon } from '../utils/icons'
 import Icon from './Icon'
 import { Avatar } from './ui'
@@ -519,6 +519,7 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
 export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const isTeacher = variant === 'teacher'
  const { user, toast, startLive, endLive } = useApp()
+ const nav = useNavigate()
  const me = user?.name || (isTeacher ? 'مدرس' : 'دانش‌آموز')
  const classId = classInfo?.liveId || classInfo?.id
  const userIdRef = useRef(null)
@@ -590,7 +591,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const strokesRef = useRef([])
  const boardLocalTsRef = useRef(0) // جلوگیری از دوئل با echo سرور بعد از تغییر محلی
  const lockLocalTsRef = useRef(0)
- const liveWbCurRef = useRef({ after: 0, dt: 0, bgr: -1 }) // کرسر polling تخته
+ const liveWbCurRef = useRef({ after: 0, dt: 0, bgr: -1, clr: null }) // کرسر polling تخته (clr: نسخه پاک‌سازی — null = هنوز همگام نشده)
  strokesRef.current = strokes
 
  /* پس‌زمینه تخته (عکس/PDF) + رسم زنده (draft) بقیه */
@@ -968,6 +969,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
            if (msg.stroke.id != null) liveWbCurRef.current.after = Math.max(liveWbCurRef.current.after, msg.stroke.id)
          }
          break
+       case 'board-clear': {
+         /* پاک‌سازی تخته باید برای «همه» اعمال شود — قبلاً این رویداد هندل نمی‌شد و
+            تخته‌ی پاک‌شده‌ی مدرس برای دانش‌آموزها برای همیشه باقی می‌ماند */
+         setStrokes([])
+         draftsRef.current.clear()
+         liveWbCurRef.current.after = 0
+         if (typeof msg.rev === 'number') liveWbCurRef.current.clr = msg.rev
+         redrawBoard()
+         break
+       }
        case 'board-draft':
          if (msg.userId && msg.userId !== userIdRef.current && msg.stroke) {
            draftsRef.current.set(msg.userId, { ...msg.stroke, userId: msg.userId, ts: Date.now() })
@@ -1050,7 +1061,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      if (!alive || busy3) return
      busy3 = true
      try {
-       const r = await req(`/classes/${classId}/board/live?after=${cur.after}&dt=${cur.dt}&bgr=${cur.bgr}`, { timeout: 7000 })
+       const r = await req(`/classes/${classId}/board/live?after=${cur.after}&dt=${cur.dt}&bgr=${cur.bgr}&clr=${cur.clr ?? -1}`, { timeout: 7000 })
+       /* تشخیص پاک‌سازی از مسیر polling (وقتی SSE بافر/قطع است):
+          اولین پاسخ فقط همگام می‌شود؛ تغییر نسخه بعدی یعنی تخته پاک شده */
+       if (typeof r.clearRev === 'number') {
+         if (cur.clr === null) cur.clr = r.clearRev
+         else if (r.clearRev !== cur.clr) {
+           cur.clr = r.clearRev
+           setStrokes([])
+           draftsRef.current.clear()
+           cur.after = 0
+           redrawBoard()
+         }
+       }
        if (r.strokes?.length) {
          setStrokes((list) => {
            const known = new Set(list.filter((s) => s.id != null).map((s) => s.id))
@@ -1173,9 +1196,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setInput('')
    try {
      const r = await req(`/classes/${classId}/messages`, { method: 'POST', body: { body } })
-     setMessages((m) => m.map((x) => (x === optimistic ? { ...r.message, self: true } : x)))
      lastIdRef.current = Math.max(lastIdRef.current, r.message.id)
+     /* اگر SSE زودتر از پاسخ POST پیام واقعی را آورده بود، فقط پیام موقت حذف می‌شود —
+        قبلاً جایگزینی کور باعث «دوبار نمایش دادن پیام» می‌شد */
+     setMessages((m) => (m.some((x) => x.id === r.message?.id)
+       ? m.filter((x) => x !== optimistic)
+       : m.map((x) => (x === optimistic ? { ...r.message, self: true } : x))))
    } catch (err) {
+     /* پیام موقت حذف و متن بازگردانده می‌شود — قبلاً پیامِ ناموفق همیشه در چت می‌ماند */
+     setMessages((m) => m.filter((x) => x !== optimistic))
+     setInput((cur) => (cur ? cur : body))
      if (!err.serverDown) toast(err.message || 'ارسال پیام ناموفق بود', 'error')
    }
    setSending(false)
@@ -1405,12 +1435,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        const type = recChunksRef.current[0]?.type || 'video/webm'
        const blob = new Blob(recChunksRef.current, { type })
        recChunksRef.current = []
+       const ext = type.includes('mp4') ? 'mp4' : 'webm' // سافاری mp4 ضبط می‌کند — پسوند درست
        try {
          const url = URL.createObjectURL(blob)
          const a = document.createElement('a')
          const stamp = new Date(recStartRef.current || Date.now()).toISOString().slice(0, 16).replace(/[:T]/g, '-')
          a.href = url
-         a.download = `${String(classInfo?.title || 'modaresyar-class').replace(/\s+/g, '-')}-${stamp}.webm`
+         a.download = `${String(classInfo?.title || 'modaresyar-class').replace(/\s+/g, '-')}-${stamp}.${ext}`
          document.body.appendChild(a)
          a.click()
          a.remove()
@@ -1493,8 +1524,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
  const clearBoard = async () => {
    setStrokes([])
+   draftsRef.current.clear()
    liveWbCurRef.current.after = 0
-   try { await req(`/classes/${classId}/board`, { method: 'DELETE' }) } catch { /* noop */ }
+   try {
+     const r = await req(`/classes/${classId}/board`, { method: 'DELETE' })
+     if (typeof r?.rev === 'number') liveWbCurRef.current.clr = r.rev
+   } catch { /* noop */ }
+   redrawBoard()
  }
  const endClassNow = () => {
    setEndedModal(false)
@@ -1681,6 +1717,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
 
  /* ---------- صفحه پایان کلاس (هر دو نقش) ---------- */
+ const endedDur = live?.endedAt && startedAt ? Math.max(0, Math.floor((live.endedAt - startedAt) / 1000)) : elapsed
+ const endMm = String(Math.floor(endedDur / 60)).padStart(2, '0')
+ const endSs = String(endedDur % 60).padStart(2, '0')
  if (classEnded) {
    return (
      <div className="card pad" style={{ maxWidth: 560, margin: '30px auto', textAlign: 'center' }}>
@@ -1689,7 +1728,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        </div>
        <h2 style={{ fontSize: 19 }}>جلسه «{classInfo?.title || 'کلاس'}» به پایان رسید</h2>
        <p className="muted small mt8">
-         مدت برگزاری: <b dir="ltr">{mm}:{ss}</b> • {faNum(participants.length)} حاضر • {faNum(messages.length)} پیام
+         مدت برگزاری: <b dir="ltr">{endMm}:{endSs}</b> • {faNum(participants.length)} حاضر • {faNum(messages.length)} پیام
          {isTeacher ? ' — ضبط جلسه برای دانشجوهای غایب منتشر می‌شود.' : ' — حضور شما ثبت شد.'}
        </p>
        <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -2061,6 +2100,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    screenTrackRef.current?.stop()
    req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
    toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info')
+   /* خروج واقعی از اتاق — قبلاً کاربر بعد از «خارج شو» در همان اتاق می‌ماند */
+   nav(`/panel/student/classes/${classId}`)
  }}>بله، خارج شو</button>
  <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت</button>
  </div>

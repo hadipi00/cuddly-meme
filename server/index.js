@@ -170,10 +170,22 @@ app.delete('/api/classes/:id', requireRole('teacher', 'admin'), (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (req.user.role !== 'admin' && c.teacher_id !== req.user.id) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  /* پاک‌سازی کامل داده‌های وابسته — قبلاً board_strokes/class_sessions/class_materials
+     یتیم می‌ماندند و اتاق‌های درون‌حافظه‌ای (SSE/رسانه/تخته) هرگز آزاد نمی‌شدند */
+  db.prepare('DELETE FROM board_strokes WHERE class_id = ?').run(c.id)
+  db.prepare('DELETE FROM class_sessions WHERE class_id = ?').run(c.id)
+  db.prepare('DELETE FROM class_materials WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM messages WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM attendance WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM enrollments WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM classes WHERE id = ?').run(c.id)
+  /* اتاق‌های درون‌حافظه‌ای هم بسته شوند — جلوگیری از نشت حافظه و broadcast به کلاس مرده */
+  wbDrafts.delete(c.id)
+  wbBgRev.delete(c.id)
+  wbClearRev.delete(c.id)
+  mediaRooms.delete(c.id)
+  const set = sseClients.get(c.id)
+  if (set) { for (const r of set) { try { r.end() } catch { /* noop */ } } sseClients.delete(c.id) }
   res.json({ ok: true })
 })
 
@@ -275,8 +287,11 @@ app.delete('/api/classes/:id/board', requireRole('teacher', 'admin'), (req, res)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
   db.prepare('DELETE FROM board_strokes WHERE class_id = ?').run(c.id)
-  broadcast(c.id, { type: 'board-clear', at: now() })
-  res.json({ ok: true })
+  wbDrafts.get(c.id)?.clear()
+  const rev = (wbClearRev.get(c.id) || 0) + 1
+  wbClearRev.set(c.id, rev)
+  broadcast(c.id, { type: 'board-clear', rev, at: now() })
+  res.json({ ok: true, rev })
 })
 
 app.post('/api/classes/:id/board/lock', requireRole('teacher', 'admin'), (req, res) => {
@@ -288,6 +303,10 @@ app.post('/api/classes/:id/board/lock', requireRole('teacher', 'admin'), (req, r
   broadcast(c.id, { type: 'board-lock', locked: !!locked, at: now() })
   res.json({ ok: true, locked: !!locked })
 })
+
+/* نسخه «پاک‌سازی تخته» — کلاینت‌های polling با مقایسه این شماره، پاک شدن را
+   حتی بدون SSE هم تشخیص می‌دهند (باگ: پاک‌کردن تخته فقط برای خود مدرس دیده می‌شد) */
+const wbClearRev = new Map() // classId → شماره پاک‌سازی
 
 /** باز/بسته شدن وایت‌برد توسط مدرس — برای همه کلاس همگام می‌شود (دانش‌آموز هم تخته را می‌بیند) */
 app.post('/api/classes/:id/board/open', requireRole('teacher', 'admin'), (req, res) => {
@@ -309,6 +328,10 @@ app.post('/api/classes/:id/board/draft', requireAuth, (req, res) => {
   if (c.board_locked && !canControl(c, req.user)) return res.status(403).json({ error: 'تخته قفل است' })
   const { color, size, tool, points } = req.body || {}
   if (!Array.isArray(points) || !points.length || points.length > 600) return res.json({ ok: false })
+  /* همان اعتبارسنجی سخت‌گیرانه مسیر ذخیره — draft قبلاً بدون چک بود و هر JSON دلخواهی
+     از کلاینت خراب‌کار مستقیم به مرورگر همه شرکت‌کننده‌ها رله می‌شد */
+  if (points.some((p) => !Array.isArray(p) || p.length !== 2 || !Number.isFinite(p[0]) || !Number.isFinite(p[1])))
+    return res.json({ ok: false })
   const stroke = {
     color: /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a',
     size: Math.min(40, Math.max(1, Number(size) || 4)),
@@ -331,6 +354,8 @@ app.get('/api/classes/:id/board/live', requireAuth, (req, res) => {
   const after = Number(req.query.after) || 0
   const dt = Number(req.query.dt) || 0
   const bgr = req.query.bgr == null || req.query.bgr === '' ? -1 : Number(req.query.bgr)
+  const clr = req.query.clr == null || req.query.clr === '' ? -1 : Number(req.query.clr)
+  const clearRev = wbClearRev.get(c.id) || 0
   const strokes = db.prepare(`SELECT id, user_id AS userId, color, size, tool, points FROM board_strokes
     WHERE class_id = ? AND id > ? ORDER BY id LIMIT 200`).all(c.id, after)
     .map((s) => ({ ...s, points: JSON.parse(s.points) }))
@@ -338,7 +363,7 @@ app.get('/api/classes/:id/board/live', requireAuth, (req, res) => {
   const drafts = []
   if (dmap) for (const [uid, d] of dmap) if (d.ts > dt && uid !== req.user.id) drafts.push({ userId: uid, ...d.stroke })
   const rev = wbBgRev.get(c.id) || 0
-  const out = { serverTime: now(), open: !!c.board_open, locked: !!c.board_locked, bgRev: rev, strokes, drafts }
+  const out = { serverTime: now(), open: !!c.board_open, locked: !!c.board_locked, bgRev: rev, clearRev, strokes, drafts }
   if (bgr !== rev) out.bg = c.board_bg || null
   res.json(out)
 })
@@ -385,7 +410,10 @@ app.post('/api/classes/:id/end', requireRole('teacher', 'admin'), (req, res) => 
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند پایان دهد' })
   const endedAt = now()
   const wasLive = c.status === 'live'
-  db.prepare(`UPDATE classes SET status='ended', ended_at=? WHERE id=? AND status='live'`).run(endedAt, c.id)
+  /* کلاسِ شروع‌نشده هم باید واقعاً «ended» شود — قبلاً UPDATE فقط روی status='live'
+     اجرا می‌شد، ردیف همان 'scheduled' می‌ماند و بعد از رفرش، کلاس زنده/برنامه‌دار دیده می‌شد
+     در حالی که سرور به کلاینت‌ها 'ended' بروداشت (ناسازگاری وضعیت) */
+  db.prepare(`UPDATE classes SET status='ended', ended_at=? WHERE id=? AND status != 'ended'`).run(endedAt, c.id)
   db.prepare('UPDATE attendance SET hand=0 WHERE class_id=?').run(c.id)
   // ثبت جلسه برگزارشده — برای بخش «جلسات قبلی» پنل دانش‌آموز (ضبط + فایل)
   if (wasLive && c.started_at) {
@@ -471,10 +499,16 @@ app.delete('/api/classes/:id/materials/:mid', requireRole('teacher', 'admin'), (
 app.get('/api/classes/:id/state', (req, res) => {
   const c = db.prepare('SELECT id, status, started_at, ended_at, board_open, board_locked FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  /* نام و نقش حاضران فقط برای اعضای کلاس — مهمانِ لاگ‌ن‌شده فقط شمارش می‌بیند
+     (قبلاً نام تک‌تک حاضران کلاس پولی به هر بازدیدکننده‌ای لو می‌رفت) */
+  const u = authUser(req)
+  const member = u ? classAccess(c, u) : false
   res.json({
     id: c.id, status: c.status, startedAt: c.started_at, endedAt: c.ended_at,
     boardOpen: !!c.board_open, boardLocked: !!c.board_locked,
-    participants: liveParticipants(c.id), serverTime: now(),
+    participants: member ? liveParticipants(c.id) : [],
+    participantsCount: liveParticipants(c.id).length,
+    serverTime: now(),
   })
 })
 
@@ -522,10 +556,15 @@ app.post('/api/classes/:id/permit', requireRole('teacher', 'admin'), (req, res) 
 })
 
 /* ---------------- چت زنده کلاس ---------------- */
-app.get('/api/classes/:id/messages', (req, res) => {
+/* خواندن چت کلاس فقط برای اعضای همان کلاس (مدرس/ادمین/ثبت‌نام‌شده) —
+   قبلاً بدون احراز هویت بود و پیام‌های خصوصی کلاس‌های پولی به همه لو می‌رفت */
+app.get('/api/classes/:id/messages', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای دیدن گفتگو باید عضو کلاس باشید' })
   const after = Number(req.query.after) || 0
   const rows = db.prepare(`SELECT id, user_id, name, role, body, created_at FROM messages
-    WHERE class_id = ? AND id > ? ORDER BY id DESC LIMIT 80`).all(req.params.id, after)
+    WHERE class_id = ? AND id > ? ORDER BY id DESC LIMIT 80`).all(c.id, after)
   res.json({ messages: rows.reverse(), serverTime: now() })
 })
 
@@ -564,10 +603,14 @@ function broadcast(classId, event) {
   for (const r of set) { try { r.write(payload) } catch { set.delete(r) } }
 }
 
-/** اتصال SSE — توکن از کوئری چون EventSource هدر نمی‌فرستد */
+/** اتصال SSE — توکن از کوئری چون EventSource هدر نمی‌فرستد؛
+ *  بدون احراز هویت، رویدادهای خصوصی کلاس (چت/تخته/اجازه‌ها) به هر کسی لو می‌رفت */
 app.get('/api/classes/:id/events', (req, res) => {
-  const c = db.prepare('SELECT id FROM classes WHERE id = ?').get(req.params.id)
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).end()
+  const u = authUser({ headers: { authorization: req.query.token ? `Bearer ${req.query.token}` : '' } })
+  if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
+  if (!classAccess(c, u)) return res.status(403).json({ error: 'فقط اعضای کلاس' })
 
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
   res.flushHeaders()
