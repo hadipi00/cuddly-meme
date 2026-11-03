@@ -174,12 +174,19 @@ app.post('/api/classes', requireRole('teacher', 'admin'), (req, res) => {
   const startNorm = validStart(start)
   if (!startNorm) return res.status(400).json({ error: 'ساعت کلاس معتبر نیست — قالب HH:MM' })
   const dayNorm = Math.min(6, Math.max(0, Number(day) || 0))
+  /* ادمین می‌تواند کلاس را به نام یک مدرس واقعی بسازد (teacherId) — مدرس فقط برای خودش */
+  let ownerId = req.user.id
+  if (req.user.role === 'admin' && req.body?.teacherId) {
+    const t = db.prepare("SELECT id FROM users WHERE id = ? AND role = 'teacher'").get(String(req.body.teacherId))
+    if (!t) return res.status(404).json({ error: 'مدرس موردنظر پیدا نشد' })
+    ownerId = t.id
+  }
   const id = 'c' + Date.now().toString(36)
   const room = 'room-' + id
   db.prepare(`INSERT INTO classes (id, title, desc, icon, color, teacher_id, day, start, dur, cap, price, base_enrolled, room, status, created_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,'scheduled',?)`)
     .run(id, String(title).trim().slice(0, 150), String(desc || '').slice(0, 2000), icon || 'video', color || 'grad-0',
-      req.user.id, dayNorm, startNorm, Math.min(600, Math.max(15, Number(dur) || 90)),
+      ownerId, dayNorm, startNorm, Math.min(600, Math.max(15, Number(dur) || 90)),
       Math.min(10_000, Math.max(1, Number(cap) || 30)), Math.min(100_000_000, Math.max(0, Number(price) || 0)), room, now())
   const c = db.prepare(SELECT_CLASSES + ' WHERE c.id = ?').get(id)
   res.json({ class: classWithMeta(c, req.user) })

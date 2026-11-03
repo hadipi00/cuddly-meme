@@ -141,9 +141,9 @@ const productOut = (r) => ({
  color: r.color, badge: r.badge ?? null,
 })
 const teacherOut = (r) => ({
- id: r.id, name: r.name, role: r.role, bio: r.bio, skills: j(r.skills, []),
- rating: r.rating, students: r.students, classesCount: r.classes_count,
- color: r.color, joined: r.joined, status: r.status,
+ id: r.id, userId: r.user_id || null, name: r.name, role: r.role, bio: r.bio,
+ skills: j(r.skills, []), rating: r.rating, students: r.students,
+ classesCount: r.classes_count, color: r.color, joined: r.joined, status: r.status,
 })
 const blogOut = (r) => ({
  id: r.id, title: r.title, cat: r.cat, date: r.date, dateISO: r.date_iso,
@@ -562,5 +562,92 @@ export function registerContentRoutes(app) {
    id: t.code, subject: t.subject, date: new Date(t.created_at).toLocaleDateString('fa-IR'),
    status: t.status === 'open' ? 'open' : t.status, replies: 0, priority: t.priority,
   })) })
+ })
+
+ /* ================================================================
+    پنل مدیریت — مودریشن نظرات، همه تیکت‌ها، کاربران واقعی
+    (قبلاً پنل ادمین فقط داده موک ثابت نشان می‌داد و هیچ نظری قابل
+    تأیید نبود — نظری که تأیید نشود هیچ‌وقت در سایت دیده نمی‌شود)
+    ================================================================ */
+ const requireAdminC = (req, res, next) => {
+  const u = authUser(req)
+  if (!u || u.role !== 'admin') return res.status(403).json({ error: 'فقط مدیر' })
+  req.user = u
+  next()
+ }
+
+ /* همه نظرات برای مودریشن — جدیدترین اول، فیلتر وضعیت */
+ app.get('/api/admin/reviews', requireAdminC, (req, res) => {
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null
+  const rows = db.prepare(`SELECT r.id, r.kind, r.target_id AS targetId, r.user_name AS user, r.rating, r.text, r.status, r.created_at AS createdAt,
+      CASE r.kind WHEN 'course' THEN (SELECT title FROM courses WHERE id = CAST(r.target_id AS INTEGER)) ELSE (SELECT name FROM products WHERE id = r.target_id) END AS targetTitle
+    FROM reviews r ${status ? 'WHERE r.status = ?' : ''} ORDER BY r.id DESC LIMIT 200`)
+   .all(...(status ? [status] : []))
+  res.json({ reviews: rows.map((r) => ({ ...r, date: new Date(r.createdAt).toLocaleDateString('fa-IR') })) })
+ })
+
+ /* تأیید/رد نظر — فقط ادمین */
+ app.post('/api/admin/reviews/:id', requireAdminC, (req, res) => {
+  const id = Number(req.params.id) || 0
+  const st = req.body?.status
+  if (!['approved', 'rejected', 'pending'].includes(st)) return res.status(400).json({ error: 'وضعیت نامعتبر است' })
+  const info = db.prepare('UPDATE reviews SET status = ? WHERE id = ?').run(st, id)
+  if (!info.changes) return res.status(404).json({ error: 'نظر پیدا نشد' })
+  res.json({ ok: true, status: st })
+ })
+
+ /* همه تیکت‌ها برای پنل پشتیبانی ادمین */
+ app.get('/api/admin/tickets', requireAdminC, (req, res) => {
+  const rows = db.prepare(`SELECT t.code, t.subject, t.body, t.priority, t.status, t.created_at AS createdAt, u.name AS user
+    FROM tickets t LEFT JOIN users u ON u.id = t.user_id ORDER BY t.id DESC LIMIT 200`).all()
+  res.json({ tickets: rows.map((t) => ({
+   id: t.code, user: t.user || '—', subject: t.subject, msg: t.body,
+   priority: t.priority, status: t.status, date: new Date(t.createdAt).toLocaleDateString('fa-IR'),
+  })) })
+ })
+
+ /* تغییر وضعیت تیکت (باز → پاسخ‌داده → بسته) — ادمین */
+ app.post('/api/admin/tickets/:code', requireAdminC, (req, res) => {
+  const st = String(req.body?.status || '')
+  if (!['open', 'answered', 'closed'].includes(st)) return res.status(400).json({ error: 'وضعیت نامعتبر است' })
+  const info = db.prepare('UPDATE tickets SET status = ? WHERE code = ?').run(st, String(req.params.code || ''))
+  if (!info.changes) return res.status(404).json({ error: 'تیکت پیدا نشد' })
+  res.json({ ok: true, status: st })
+ })
+
+ /* کاربران واقعی سیستم — قبلاً پنل «مدیریت کاربران» فقط ردیف‌های موک ثابت نشان می‌داد */
+ app.get('/api/admin/users', requireAdminC, (req, res) => {
+  const q = String(req.query.q || '').trim()
+  const rows = db.prepare(`SELECT u.id, u.name, u.email, u.role, u.title, u.created_at AS createdAt,
+     (SELECT COUNT(*) FROM enrollments e WHERE e.user_id = u.id) AS enrollCount,
+     (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.status != 'refunded') AS ordersCount,
+     (SELECT COALESCE(SUM(o.amount), 0) FROM orders o WHERE o.user_id = u.id AND o.status = 'paid') AS spent
+   FROM users u ${q ? 'WHERE u.name LIKE ? OR u.email LIKE ?' : ''}
+   ORDER BY u.created_at DESC LIMIT 300`)
+   .all(...(q ? [`%${q}%`, `%${q}%`] : []))
+  res.json({ users: rows.map((r) => ({
+   id: r.id, name: r.name, email: r.email, role: r.role, title: r.title,
+   courses: r.role === 'teacher'
+    ? db.prepare('SELECT COUNT(*) AS n FROM classes WHERE teacher_id = ?').get(r.id).n
+    : r.enrollCount,
+   teacherStudents: r.role === 'teacher'
+    ? db.prepare('SELECT COUNT(DISTINCT e.user_id) AS n FROM enrollments e JOIN classes c ON c.id = e.class_id WHERE c.teacher_id = ?').get(r.id).n
+    : 0,
+   orders: r.ordersCount, spent: r.spent || 0,
+   joined: new Date(r.createdAt).toLocaleDateString('fa-IR'),
+  })) })
+ })
+
+ /* تغییر نقش کاربر (فقط ادمین؛ ادمین نمی‌تواند نقش خودش را کم کند تا قفل بیرون نشود) */
+ app.post('/api/admin/users/:id/role', requireAdminC, (req, res) => {
+  const role = String(req.body?.role || '')
+  if (!['student', 'teacher', 'admin'].includes(role)) return res.status(400).json({ error: 'نقش نامعتبر است' })
+  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(String(req.params.id || ''))
+  if (!target) return res.status(404).json({ error: 'کاربر پیدا نشد' })
+  if (target.id === req.user.id && role !== 'admin') return res.status(400).json({ error: 'نمی‌توانید نقش خودتان را کاهش دهید' })
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, target.id)
+  const ROLE_LABELS = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
+  db.prepare('UPDATE users SET title = ? WHERE id = ?').run(ROLE_LABELS[role], target.id)
+  res.json({ ok: true, role })
  })
 }

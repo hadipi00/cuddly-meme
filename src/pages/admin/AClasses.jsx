@@ -1,32 +1,64 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { DataIcon } from '../../utils/icons'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
-import { liveClasses, teachers } from '../../data/mock'
+import { liveClasses as fallbackClasses, teachers as fallbackTeachers } from '../../data/mock'
+import { content, useCatalog } from '../../services/content'
 import { useApp } from '../../store/AppContext'
 import { DAYS, SLOTS, faNum } from '../../utils/format'
+import { req } from '../../services/http'
 
 /**
- * مدیریت کلاس‌های زنده:
- * هر جلسه‌ای که اینجا ثبت شود، بلافاصله در جدول هفتگی دانشجوها ظاهر می‌شود.
+ * مدیریت کلاس‌های زنده (ادمین) — داده واقعی از /api/classes؛
+ * ساخت کلاس با POST واقعی و حذف با DELETE (قبلاً فقط در localStorage ذخیره می‌شد
+ * و هیچ کلاسی که اینجا ساخته می‌شد واقعاً وجود نمی‌آورد)
  */
 export default function AClasses() {
- const { customClasses, addClass, removeClass, toast } = useApp()
+ const { toast } = useApp()
  const [modal, setModal] = useState(null)
+ const [rows, setRows] = useState(fallbackClasses.map((l) => ({ ...l, source: 'سامانه' })))
+ const teachers = useCatalog(content.teachers, fallbackTeachers)
 
- const rows = [
- ...liveClasses.map((l) => ({ ...l, source: 'سامانه', statusLabel: l.status === 'full' ? 'تکمیل ظرفیت' : l.status === 'filling' ? 'در حال ثبت‌نام' : 'باز' })),
- ...customClasses.map((c) => ({ ...c, teacher: 'تعریف مدیریت', enrolled: 18, cap: 30, source: 'مدیریت', statusLabel: 'باز' })),
- ]
+ const load = () => {
+ req('/classes').then((r) => {
+ if (r.classes?.length) setRows(r.classes.map((c) => ({
+ id: c.id, title: c.title, teacher: c.teacherName, day: c.day, start: c.start,
+ dur: c.dur, enrolled: c.enrolled, cap: c.cap, price: c.price, status: c.status,
+ icon: c.icon, color: c.color, source: 'سامانه',
+ statusLabel: c.enrolled >= c.cap ? 'تکمیل ظرفیت' : (c.cap - c.enrolled <= 5 ? 'در حال ثبت‌نام' : 'باز'),
+ })))
+ }).catch(() => {})
+ }
+ useEffect(() => { load() }, [])
 
- const save = (d) => {
- addClass({
- title: d.title, day: Number(d.day), slot: Number(d.slot), start: SLOTS[Number(d.slot)],
- dur: Number(d.dur) || 90, teacher: d.teacher, color: 'cb-violet', room: 'room-adm',
- })
+ const save = async (d) => {
+ if (modal && modal !== 'new') return
+ /* مدرس انتخابی باید userId واقعی داشته باشد تا کلاس به حساب او تعلق بگیرد */
+ const t = teachers.find((x) => x.name === d.teacher)
+ if (!t?.userId) { toast('برای این مدرس حساب واقعی نیست — از فهرست مدرسان سامانه انتخاب کنید', 'error'); return }
+ try {
+ await req('/classes', { method: 'POST', body: {
+ title: d.title, desc: '', day: Number(d.day), start: SLOTS[Number(d.slot)] || '18:00',
+ dur: Number(d.dur) || 90, cap: Number(d.cap) || 30, price: 0, teacherId: t.userId,
+ } })
  setModal(null)
- toast('جلسه زنده ثبت شد و در جدول هفتگی دانشجوها قرار گرفت ')
+ toast('کلاس واقعاً ساخته شد و در جدول هفتگی دانشجوها قرار گرفت')
+ load()
+ } catch (e) {
+ if (!e.serverDown) toast(e.message || 'ساخت کلاس ناموفق بود', 'error')
+ else toast('سرور در دسترس نیست', 'error')
+ }
+ }
+
+ const remove = async (r) => {
+ try {
+ await req(`/classes/${r.id}`, { method: 'DELETE' })
+ toast('کلاس حذف شد', 'info')
+ load()
+ } catch (e) {
+ if (!e.serverDown) toast(e.message || 'حذف ناموفق بود', 'error')
+ }
  }
 
  return (
@@ -42,8 +74,8 @@ export default function AClasses() {
  <div className="stat-cards" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 22 }}>
  <div className="card stat-card"><b className="sc-val">{faNum(rows.length)}</b><span className="sc-label">جلسات فعال</span></div>
  <div className="card stat-card"><b className="sc-val">{faNum(rows.reduce((a, r) => a + (r.enrolled || 0), 0))}</b><span className="sc-label">مجموع ثبت‌نام‌ها</span></div>
- <div className="card stat-card"><b className="sc-val">{faNum(2)}</b><span className="sc-label">جلسه تکمیل ظرفیت</span></div>
- <div className="card stat-card"><b className="sc-val">{faNum(3)}</b><span className="sc-label">کلاس رایگان</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(rows.filter((r) => r.statusLabel === 'تکمیل ظرفیت').length)}</b><span className="sc-label">جلسه تکمیل ظرفیت</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(rows.filter((r) => !r.price).length)}</b><span className="sc-label">کلاس رایگان</span></div>
  </div>
 
  <div className="card pad">
@@ -71,11 +103,9 @@ export default function AClasses() {
  ]}
  actions={(r) => (
  <>
- {r.source === 'مدیریت' && (
- <button className="icon-btn" title="حذف جلسه" onClick={() => { removeClass(r.id); toast('جلسه حذف و از جدول هفتگی دانشجوها پاک شد', 'info') }}>
+ <button className="icon-btn" title="حذف کلاس" onClick={() => remove(r)}>
  <Icon name="trash" />
  </button>
- )}
  <button className="icon-btn" title="یادآوری به دانشجوها" onClick={() => toast('پیامک یادآوری به همه ثبت‌نامی‌ها ارسال شد')}>
  <Icon name="send" />
  </button>

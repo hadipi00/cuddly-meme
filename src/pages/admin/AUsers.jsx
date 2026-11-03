@@ -1,23 +1,49 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
 import { Avatar } from '../../components/ui'
-import { students, teachers } from '../../data/mock'
+import { students as fallbackStudents, teachers as fallbackTeachers } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
+import { req } from '../../services/http'
 import { faNum, toman } from '../../utils/format'
 
-const stBadge = { active: ['فعال', 'b-green'], inactive: ['غیرفعال', 'b-gray'], vip: ['ویژه ', 'b-violet'], banned: ['مسدود', 'b-red'] }
+const ROLE_BADGE = { student: ['دانش‌آموز', 'b-sky'], teacher: ['مدرس', 'b-violet'], admin: ['مدیر', 'b-red'] }
+
+/** کاربران واقعی سیستم از بک‌اند — قبلاً این صفحه فقط ردیف‌های موک ثابت نشان می‌داد؛
+    کاربرانی که واقعاً ثبت‌نام می‌کردند هیچ‌جا دیده نمی‌شدند */
+function useRealUsers() {
+ const [users, setUsers] = useState(null)
+ const reload = () => req('/admin/users').then((r) => { if (r.users) setUsers(r.users) }).catch(() => {})
+ useEffect(() => { reload() }, [])
+ return [users, reload]
+}
 
 export default function AUsers({ kind }) {
  const { toast } = useApp()
  const [modal, setModal] = useState(null)
- const [list, setList] = useState(kind === 'teacher' ? teachers : students)
+ const [all, reload] = useRealUsers()
+ const list = all
+  ? all.filter((u) => (kind === 'teacher' ? u.role === 'teacher' : u.role === 'student'))
+  : (kind === 'teacher' ? fallbackTeachers.map((t) => ({ ...t, joined: t.joined })) : fallbackStudents)
+ const offline = !all
+
+ /** ارتقا/تنزل نقش واقعی کاربر — روی سرور ثبت می‌شود */
+ const changeRole = async (u, role, msg) => {
+  try {
+   await req(`/admin/users/${u.id}/role`, { method: 'POST', body: { role } })
+   toast(msg)
+   reload()
+  } catch (e) {
+   if (!e.serverDown) toast(e.message || 'تغییر نقش ناموفق بود', 'error')
+   else toast('سرور در دسترس نیست', 'error')
+  }
+ }
 
  const add = (data) => {
- setList([{ id: Date.now(), joined: '1404/09/13', courses: 0, spent: 0, status: 'active', ...data }, ...list])
- setModal(null)
- toast(kind === 'teacher' ? 'اکانت مدرس ساخته شد و مشخصات ورود برایش پیامک شد ' : 'دانشجوی جدید ثبت شد')
+  /* ساخت اکانت واقعی هنوز در این فاز نیست — در فازهای بعدی با /api/admin/users POST اضافه می‌شود */
+  setModal(null)
+  toast('ساخت اکانت واقعی به‌زودی از همین فرم فعال می‌شود — فعلاً ثبت‌نام کاربران از صفحه ثبت‌نام سایت انجام می‌شود', 'info')
  }
 
  if (kind === 'teacher') {
@@ -26,36 +52,35 @@ export default function AUsers({ kind }) {
  <div className="between wrap mb24">
  <div>
  <h2 style={{ fontSize: 17 }}>مدیریت مدرسان</h2>
- <span className="muted small">اکانت مدرسان فقط از همین‌جا ساخته می‌شود — مدرس‌ها خودشان ثبت‌نام نمی‌کنند</span>
+ <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'اکانت‌های واقعی مدرسان سامانه — ارتقا دانش‌آموز به مدرس از پنل دانشجوها'}</span>
  </div>
  <button className="btn btn-primary" onClick={() => setModal('new')}><Icon name="plus" size={16} /> ساخت اکانت مدرس</button>
  </div>
 
  <div className="stat-cards" style={{ gridTemplateColumns: 'repeat(3,1fr)', marginBottom: 22 }}>
- <div className="card stat-card"><b className="sc-val">{faNum(list.length)}</b><span className="sc-label">مدرس فعال</span></div>
- <div className="card stat-card"><b className="sc-val">{faNum(list.reduce((a, t) => a + t.students, 0).toLocaleString('fa-IR'))}</b><span className="sc-label">مجموع دانشجوهای مدرسان</span></div>
- <div className="card stat-card"><b className="sc-val">۴.۸</b><span className="sc-label">میانگین امتیاز مدرسان</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.length)}</b><span className="sc-label">مدرس سامانه</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.reduce((a, t) => a + (Number(t.teacherStudents) || 0), 0).toLocaleString('fa-IR'))}</b><span className="sc-label">مجموع دانشجوهای ثبت‌نام‌شده</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.reduce((a, t) => a + (Number(t.courses) || 0), 0))}</b><span className="sc-label">مجموع کلاس‌های فعال</span></div>
  </div>
 
  <div className="card pad">
  <DataTable
  columns={[
  { key: 'name', label: 'مدرس', render: (r) => (
- <div className="cell-user"><Avatar name={r.name} size={34} color={r.color || 'grad-0'} /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }}>{r.role}</span></div></div>
+ <div className="cell-user"><Avatar name={r.name} size={34} color="grad-0" /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }}>{r.title || 'مدرس'}</span></div></div>
  ) },
+ { key: 'email', label: 'ایمیل', render: (r) => <span dir="ltr">{r.email}</span> },
  { key: 'joined', label: 'عضویت' },
- { key: 'students', label: 'دانشجو', render: (r) => faNum(Number(r.students || 0).toLocaleString('fa-IR')) },
- { key: 'classesCount', label: 'کلاس‌ها', render: (r) => faNum(r.classesCount || 0) },
- { key: 'rating', label: 'امتیاز', render: (r) => <span className="badge b-amber"><Icon name="star" size={12} filled /> {faNum(r.rating)}</span> },
- { key: 'status', label: 'وضعیت', render: (r) => <span className="status-dot green"><i />فعال</span> },
+ { key: 'teacherStudents', label: 'دانشجو', render: (r) => faNum(r.teacherStudents || 0) },
+ { key: 'courses', label: 'کلاس‌ها', render: (r) => faNum(r.courses || 0) },
+ { key: 'spent', label: 'درآمد تولیدی', render: (r) => toman(r.spent || 0) },
  ]}
  rows={list}
- searchKeys={['name', 'role']}
+ searchKeys={['name', 'email', 'title']}
  actions={(r) => (
  <>
- <button className="icon-btn" title="ویرایش" onClick={() => setModal(r)}><Icon name="edit" /></button>
- <button className="icon-btn" title="بازنشانی رمز" onClick={() => toast(`رمز جدید برای ${r.name} پیامک شد`)}><Icon name="refresh" /></button>
- <button className="icon-btn" title="غیرفعال‌سازی" onClick={() => toast(`حساب ${r.name} غیرفعال شد`, 'info')}><Icon name="x" /></button>
+ <button className="icon-btn" title="تبدیل به دانش‌آموز" onClick={() => changeRole(r, 'student', `${r.name} به دانش‌آموز تغییر نقش یافت`)}><Icon name="user" /></button>
+ <button className="icon-btn" title="بازنشانی رمز" onClick={() => toast(`بازنشانی رمز ${r.name} — قابلیت ایمیل به‌زودی`, 'info')}><Icon name="refresh" /></button>
  </>
  )}
  />
@@ -67,7 +92,7 @@ export default function AUsers({ kind }) {
  onClose={() => setModal(null)}
  onSubmit={add}
  submitLabel={modal === 'new' ? 'ساخت اکانت و ارسال مشخصات' : 'ذخیره'}
- initial={modal && modal !== 'new' ? { name: modal.name, role: modal.role, phone: '', email: '', commission: '۷۰' } : { commission: '۷۰' }}
+ initial={modal && modal !== 'new' ? { name: modal.name, role: modal.title, phone: '', email: modal.email, commission: '۷۰' } : { commission: '۷۰' }}
  fields={[
  { key: 'name', label: 'نام و نام خانوادگی', full: true, placeholder: 'مثلاً علی رضایی' },
  { key: 'role', label: 'عنوان تخصصی', full: true, placeholder: 'مثلاً مدرس هوش مصنوعی' },
@@ -89,16 +114,16 @@ export default function AUsers({ kind }) {
  <div className="between wrap mb24">
  <div>
  <h2 style={{ fontSize: 17 }}>مدیریت دانشجوها</h2>
- <span className="muted small">مشاهده، ویرایش و مدیریت دسترسی دانشجوها</span>
+ <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'کاربران واقعی ثبت‌نام‌شده — می‌توانید نقششان را به مدرس ارتقا دهید'}</span>
  </div>
  <button className="btn btn-primary" onClick={() => setModal('new')}><Icon name="plus" size={16} /> افزودن دانشجو</button>
  </div>
 
  <div className="stat-cards" style={{ marginBottom: 22 }}>
- <div className="card stat-card"><b className="sc-val">{faNum(list.length + 11990)}</b><span className="sc-label">کل دانشجوها</span></div>
- <div className="card stat-card"><b className="sc-val">{faNum(list.filter((s) => s.status === 'active').length + 8210)}</b><span className="sc-label">فعال این ماه</span></div>
- <div className="card stat-card"><b className="sc-val">{faNum(list.filter((s) => s.status === 'vip').length + 143)}</b><span className="sc-label">مشتریان ویژه </span></div>
- <div className="card stat-card"><b className="sc-val">{toman(list.reduce((a, s) => a + s.spent, 0) + 184000000)}</b><span className="sc-label">مجموع خرید دانشجوها</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.length)}</b><span className="sc-label">دانش‌آموز ثبت‌نام‌شده</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.reduce((a, s) => a + (Number(s.courses) || 0), 0))}</b><span className="sc-label">مجموع ثبت‌نام در کلاس‌ها</span></div>
+ <div className="card stat-card"><b className="sc-val">{faNum(list.reduce((a, s) => a + (Number(s.orders) || 0), 0))}</b><span className="sc-label">مجموع سفارش‌ها</span></div>
+ <div className="card stat-card"><b className="sc-val">{toman(list.reduce((a, s) => a + (Number(s.spent) || 0), 0))}</b><span className="sc-label">مجموع خرید پرداخت‌شده</span></div>
  </div>
 
  <div className="card pad">
@@ -107,26 +132,21 @@ export default function AUsers({ kind }) {
  { key: 'name', label: 'دانشجو', render: (r) => (
  <div className="cell-user"><Avatar name={r.name} size={34} color="grad-2" /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }} dir="ltr">{r.email}</span></div></div>
  ) },
- { key: 'phone', label: 'موبایل' },
  { key: 'joined', label: 'عضویت' },
- { key: 'courses', label: 'دوره‌ها', render: (r) => faNum(r.courses) },
- { key: 'spent', label: 'مجموع خرید', render: (r) => toman(r.spent) },
- { key: 'status', label: 'وضعیت', render: (r) => {
- const [label, cls] = stBadge[r.status] || stBadge.active
+ { key: 'courses', label: 'کلاس‌ها', render: (r) => faNum(r.courses || 0) },
+ { key: 'orders', label: 'سفارش‌ها', render: (r) => faNum(r.orders || 0) },
+ { key: 'spent', label: 'مجموع خرید', render: (r) => toman(r.spent || 0) },
+ { key: 'role', label: 'نقش', render: (r) => {
+ const [label, cls] = ROLE_BADGE[r.role] || ROLE_BADGE.student
  return <span className={`badge ${cls}`}>{label}</span>
  } },
  ]}
  rows={list}
- searchKeys={['name', 'email', 'phone']}
- filters={[{ key: 'status', label: 'وضعیت', options: ['فعال', 'غیرفعال', 'ویژه', 'مسدود'], match: (r, v) => (stBadge[r.status]?.[0] || 'فعال') === v }]}
+ searchKeys={['name', 'email']}
  actions={(r) => (
  <>
- <button className="icon-btn" title="پروفایل" onClick={() => toast(`پروفایل ${r.name} — نسخه دمو`, 'info')}><Icon name="eye" /></button>
+ <button className="icon-btn" title="ارتقا به مدرس" onClick={() => changeRole(r, 'teacher', `${r.name} مدرس شد — در «مدیریت مدرسان» می‌بینید`)}><Icon name="gradcap" /></button>
  <button className="icon-btn" title="ویرایش" onClick={() => setModal(r)}><Icon name="edit" /></button>
- <button className="icon-btn" title={r.status === 'banned' ? 'رفع مسدودی' : 'مسدودسازی'} onClick={() => {
- setList((l) => l.map((s) => (s.id === r.id ? { ...s, status: s.status === 'banned' ? 'active' : 'banned' } : s)))
- toast(r.status === 'banned' ? 'مسدودیت برداشته شد' : 'کاربر مسدود شد', 'info')
- }}><Icon name="shield" /></button>
  </>
  )}
  />
@@ -137,10 +157,9 @@ export default function AUsers({ kind }) {
  title={modal === 'new' ? 'افزودن دانشجوی جدید' : `ویرایش ${modal?.name}`}
  onClose={() => setModal(null)}
  onSubmit={add}
- initial={modal && modal !== 'new' ? { name: modal.name, phone: modal.phone, email: modal.email } : {}}
+ initial={modal && modal !== 'new' ? { name: modal.name, email: modal.email } : {}}
  fields={[
  { key: 'name', label: 'نام و نام خانوادگی', full: true },
- { key: 'phone', label: 'موبایل' },
  { key: 'email', label: 'ایمیل' },
  { key: 'pass', label: 'رمز اولیه', required: false },
  ]}
