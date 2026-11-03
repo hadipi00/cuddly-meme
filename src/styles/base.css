@@ -422,8 +422,9 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 .cart-total b { font-size: 19px; color: var(--teal); }
 
 /* ---------- modal ---------- */
+/* [فیکس F36-b] مودال و توست باید بالای شبه‌فول‌اسکرین کلاس (z-index 1400) دیده شوند */
 .modal-overlay {
- position: fixed; inset: 0; z-index: 400; background: var(--scrim); backdrop-filter: blur(5px);
+ position: fixed; inset: 0; z-index: 2000; background: var(--scrim); backdrop-filter: blur(5px);
  display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.25s ease;
 }
 .modal {
@@ -438,7 +439,7 @@ h1, h2, h3, h4 { font-weight: 800; line-height: 1.4; }
 @keyframes slideUp { from { opacity: 0; transform: translateY(24px); } }
 
 /* ---------- toasts ---------- */
-.toasts { position: fixed; bottom: 24px; inset-inline-start: 24px; z-index: 500; display: flex; flex-direction: column; gap: 10px; }
+.toasts { position: fixed; bottom: 24px; inset-inline-start: 24px; z-index: 2100; display: flex; flex-direction: column; gap: 10px; }
 .toast {
  display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line);
  border-radius: 12px; padding: 12px 18px; font-size: 13.5px; font-weight: 600; box-shadow: var(--shadow-lg);

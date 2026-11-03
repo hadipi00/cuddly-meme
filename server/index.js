@@ -35,6 +35,13 @@ const PORT = process.env.PORT || 4000
 const now = () => Date.now()
 const b64 = (buf) => Buffer.from(buf).toString('base64')
 
+/* ---------------- نگهبان کرش [فیکس F36-a] ----------------
+ * قبلاً هر استثنای async (مثل خطای شبکه در verify زرین‌پال) unhandled rejection
+ * می‌شد و Node کل پروسه را می‌کشت → «بک‌اند وسط کلاس خاموش می‌شد».
+ * حالا خطا لاگ و پروسه زنده نگه داشته می‌شود؛ درخواست جاری هم ۵۰۰ می‌گیرد */
+process.on('uncaughtException', (err) => console.error('[crash-guard] uncaughtException:', err?.stack || err))
+process.on('unhandledRejection', (err) => console.error('[crash-guard] unhandledRejection:', err?.stack || err))
+
 /* ---------------- هدرهای امنیتی پایه ---------------- */
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -794,8 +801,11 @@ app.get('/api/classes/:id/events', (req, res) => {
    • این روش از همان مسیر HTTP چت عبور می‌کند؛ اگر چت کار کند، صدا و
      تصویر هم صددرصد کار می‌کند (برخلاف WebRTC که پشت NAT گیر می‌کند).
    ================================================================ */
-const MEDIA_CHUNK_TTL = 9_000 // نگهداری تکه‌های اخیر برای تازه‌واردها
-const mediaRooms = new Map()  // classId → { teacher: Feed|null, students: Map<uid, Feed>, lastActivity }
+const MEDIA_CHUNK_TTL = 12_000 // نگهداری تکه‌های اخیر برای تازه‌واردها [فیکس F36: ۹→۱۲ ثانیه — شبکه‌های ناپایدار]
+const mediaRooms = new Map()  // classId → { teacher: Feed|null, screen: Feed|null, students: Map<uid, Feed>, lastActivity }
+/* [فیکس F36-c] فید مستقل اشتراک صفحه — قبلاً تصویر صفحه جای دوربین را در «همان
+ * یک فید» می‌گرفت و هر بار رکوردر از نو ساخته می‌شد (سشن تازه → ری‌بیلد گیرنده‌ها،
+ * تاخیر و شکستگی). حالا دوربین و صفحه دو استریم جدا هستند و هم‌زمان ارسال می‌شوند */
 
 /** آیا این تکه واقعاً «هدرِ» استریم است؟
  *  webm → بایت‌های جادویی EBML (0x1A45DFA3) • mp4 → باکس ftyp در آفست ۴
@@ -809,7 +819,7 @@ const looksLikeHeader = (buf, fmt) => {
 
 function mediaRoom(classId) {
   let r = mediaRooms.get(classId)
-  if (!r) { r = { teacher: null, students: new Map(), lastActivity: now() }; mediaRooms.set(classId, r) }
+  if (!r) { r = { teacher: null, screen: null, students: new Map(), lastActivity: now() }; mediaRooms.set(classId, r) }
   r.lastActivity = now()
   return r
 }
@@ -841,7 +851,7 @@ function feedPush(feed, buf, isInit, meta, fmt, cd) {
   while (feed.chunks.length && t - feed.chunks[0].ts > MEDIA_CHUNK_TTL) feed.chunks.shift()
 }
 
-function feedAlive(f) { return f && f.init && f.updatedAt && now() - f.updatedAt < 6_000 }
+function feedAlive(f) { return f && f.init && f.updatedAt && now() - f.updatedAt < 9_000 } // [فیکس F36: ۶→۹ ثانیه — با لرزش شبکه فید نمی‌میرد]
 
 app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'application/octet-stream', limit: '4mb' }), (req, res) => {
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
@@ -858,6 +868,14 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
        می‌خورد تا فرستنده رکوردر را از نو بسازد (باگ «صدا/تصویر برای همیشه می‌میرد») */
     if (req.query.init === '1' && !looksLikeHeader(req.body, fmt)) {
       return res.status(400).json({ error: 'تکه init بدون هدر است — جلسه تازه لازم است', badInit: true })
+    }
+    /* [فیکس F36-c] اشتراک صفحه → فید مستقل room.screen (دوربین موازی ادامه دارد) */
+    if (req.query.screen === '1') {
+      const scrMeta = { mic: meta.mic, cam: false, screen: true }
+      if (!room.screen) room.screen = { sess: 0, seq: 0, init: null, chunks: [], meta: scrMeta, updatedAt: 0, fmt, cd, uid: req.user.id }
+      room.screen.uid = req.user.id
+      feedPush(room.screen, req.body, req.query.init === '1', scrMeta, fmt, cd)
+      return res.json({ ok: true })
     }
     /* [فیکس F5] قفل فرستندهٔ مدرس — دو تبِ هم‌زمانِ همان مدرس قبلاً هر دو با k=teacher
        آپلود می‌کردند و feedPush سشن را مدام جابه‌جا می‌کرد → گیرنده‌ها init/rebuild
@@ -890,7 +908,7 @@ app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
   let cur = {}
   try { cur = JSON.parse(req.query.cur || '{}') || {} } catch { cur = {} }
   const room = mediaRooms.get(c.id)
-  const out = { serverTime: now(), teacher: null, students: [] }
+  const out = { serverTime: now(), teacher: null, teacherScreen: null, students: [] }
 
   const shapeFeed = (c0, f) => {
     if (!feedAlive(f)) return null
@@ -907,6 +925,8 @@ app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
   if (room) {
     const t = shapeFeed(cur.t, room.teacher)
     if (t) out.teacher = t
+    const ts = shapeFeed(cur.ts, room.screen)
+    if (ts) out.teacherScreen = ts
     for (const [uid, f] of room.students) {
       if (!feedAlive(f)) { room.students.delete(uid); continue }
       if (uid === req.user.id) continue // استریم خودم را نمی‌خواهم
@@ -917,13 +937,15 @@ app.get('/api/classes/:id/media/feeds', requireAuth, (req, res) => {
   res.json(out)
 })
 
-/** قطع پخش خودم (خروج از کلاس / خاموشی کامل) */
+/** قطع پخش خودم (خروج از کلاس / خاموشی کامل) — [فیکس F36-c] با ?k=screen فقط فید صفحه قطع می‌شود */
 app.post('/api/classes/:id/media/stop', requireAuth, (req, res) => {
   const room = mediaRooms.get(req.params.id)
   if (!room) return res.json({ ok: true })
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
-  if (c && canControl(c, req.user)) room.teacher = null
-  else room.students.delete(req.user.id)
+  if (c && canControl(c, req.user)) {
+    if (req.query.k === 'screen') room.screen = null
+    else { room.teacher = null; room.screen = null }
+  } else room.students.delete(req.user.id)
   res.json({ ok: true })
 })
 
@@ -931,9 +953,10 @@ app.post('/api/classes/:id/media/stop', requireAuth, (req, res) => {
 setInterval(() => {
   const t = now()
   for (const [cid, room] of mediaRooms) {
-    for (const [uid, f] of room.students) if (t - (f.updatedAt || 0) > 10_000) room.students.delete(uid)
-    if (room.teacher && t - (room.teacher.updatedAt || 0) > 10_000) room.teacher = null
-    if (!room.teacher && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
+    for (const [uid, f] of room.students) if (t - (f.updatedAt || 0) > 12_000) room.students.delete(uid)
+    if (room.teacher && t - (room.teacher.updatedAt || 0) > 12_000) room.teacher = null
+    if (room.screen && t - (room.screen.updatedAt || 0) > 12_000) room.screen = null
+    if (!room.teacher && !room.screen && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
   }
   /* [فیکس B23] پاک‌سازی دوره‌ای وایت‌بردها — قبلاً wbDrafts/wbBgRev/wbClearRev فقط
      در حذف کلاس پاک می‌شدند و برای هر کلاسی که یک‌بار draft/پس‌زمینه داشته باشد

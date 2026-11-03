@@ -350,18 +350,21 @@
  background: rgba(45, 212, 191, 0.13); color: var(--teal); border: 1px solid rgba(45, 212, 191, 0.3); flex-shrink: 0;
 }
 
-/* ---------- تمام‌صفحه کلاس ---------- */
-.live-stage:fullscreen { border-radius: 0; border: none; background: #020617; }
-.live-stage:fullscreen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
-.live-stage:fullscreen .live-side { display: none; }
-.live-stage:fullscreen .chat-body { max-height: none; }
-.live-stage:-webkit-full-screen { border-radius: 0; border: none; background: #020617; }
-.live-stage:-webkit-full-screen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
-.live-stage.pseudo-fs { position: fixed; inset: 0; z-index: 1400; border-radius: 0; border: none; background: #020617; }
-.live-stage.pseudo-fs .live-view { flex: 1; min-height: 0; aspect-ratio: auto; }
-.live-stage.pseudo-fs .live-side { display: none; }
+/* ---------- تمام‌صفحه کلاس [فیکس F36-b] — کل اتاق: صحنه + چت + کنترل‌ها ---------- */
+.live-grid:fullscreen { background: #020617; padding: 12px; border-radius: 0; }
+.live-grid:-webkit-full-screen { background: #020617; padding: 12px; border-radius: 0; }
+.live-grid:fullscreen .live-stage, .live-grid:-webkit-full-screen .live-stage { border-color: rgba(148, 163, 184, 0.22); }
+.live-grid:fullscreen .live-view, .live-grid:-webkit-full-screen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+.live-grid:fullscreen .chat-body, .live-grid:-webkit-full-screen .chat-body { max-height: none; flex: 1; }
+.live-grid:fullscreen .part-list, .live-grid:-webkit-full-screen .part-list { max-height: none; flex: 1; }
+/* شبه‌فول‌اسکرین — وقتی مرورگر (قاب iframe بدون allow / iOS Safari روی div) اجازه
+   Fullscreen API نمی‌دهد؛ قبلاً این کلاس در CSS بود ولی هیچ‌وقت از JS ست نمی‌شد */
+.live-grid.pseudo-fs { position: fixed; inset: 0; z-index: 1400; background: #020617; padding: 12px; border-radius: 0; overflow: auto; }
+.live-grid.pseudo-fs .live-stage { border-color: rgba(148, 163, 184, 0.22); }
+.live-grid.pseudo-fs .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+.live-grid.pseudo-fs .chat-body { max-height: none; flex: 1; }
+.live-grid.pseudo-fs .part-list { max-height: none; flex: 1; }
 body.fs-lock { overflow: hidden; }
-.live-grid.fs-grid { grid-template-columns: 1fr; }
 .live-view.board { background: linear-gradient(160deg, var(--live-a), var(--live-b)); }
 
 /* ---------- رله رسانه: نوار درخواست صحبت + دکمه صدا ---------- */
@@ -532,7 +535,7 @@ body.fs-lock { overflow: hidden; }
  /* ---------- اتاق کلاس زنده ---------- */
  .live-grid { gap: 12px; }
  .live-view { aspect-ratio: 4 / 3; } /* تصویر بلندتر برای صفحه باریک */
- .live-stage:fullscreen .live-view, .live-stage:-webkit-full-screen .live-view, .live-stage.pseudo-fs .live-view { aspect-ratio: auto; }
+ .live-grid:fullscreen .live-view, .live-grid:-webkit-full-screen .live-view, .live-grid.pseudo-fs .live-view { aspect-ratio: auto; }
  .live-label { font-size: 10.5px; padding: 4px 10px; top: 10px; inset-inline-start: 10px; }
  .live-timer { font-size: 11.5px; padding: 4px 10px; top: 10px; inset-inline-end: 10px; }
  .live-controls { gap: 7px; padding: 12px 6px 20px; }

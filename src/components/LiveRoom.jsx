@@ -9,14 +9,21 @@ import { faNum } from '../utils/format'
 import { req, getToken } from '../services/http'
 
 /**
- * اتاق کلاس زنده — نسخه رله رسانه (بدون WebRTC)
+ * اتاق کلاس زنده — رله رسانه با «دو کانال مستقل» (بدون WebRTC)
  * ---------------------------------------------------------------------
  * چرا رله؟ WebRTC حتی با TURN رایگان پشت NAT اپراتور موبایل گیر می‌کند و
- * «بی‌صدا» شکست می‌خورد. اینجا صدا/تصویر با MediaRecorder به تکه‌های ۱
+ * «بی‌صدا» شکست می‌خورد. اینجا صدا/تصویر با MediaRecorder به تکه‌های ۰٫۵
  * ثانیه‌ای webm شکسته می‌شود و از همان مسیر HTTP چت عبور می‌کند:
- *   • ارسال:  POST /media/up  (binary)
- *   • دریافت: GET  /media/feeds?cur=…  (polling با کرسر — ۸۰۰ms)
- * نتیجه: اگر چت کار کند، صدا و تصویر هم صددرصد می‌رسد (تاخیر ~۱.۵ ثانیه).
+ *   • ارسال:  POST /media/up  (binary) — دو کانال: دوربین + اشتراک صفحه
+ *   • دریافت: GET  /media/feeds?cur=…  (polling با کرسر — ۴۵۰ms)
+ *
+ * [بازسازی F36] چه چیزهایی عوض شد:
+ *   • اشتراک صفحه فید مستقل دارد (k=teacher&screen=1) — دوربین موازی ادامه
+ *     دارد؛ دانش‌آموز هم‌زمان تخته/صفحه را بزرگ و مدرس را در نوار پایین می‌بیند
+ *   • بیت‌ریت تطبیقی: اینترنت ضعیف → کیفیت پله‌پله پایین می‌آید تا تاخیر
+ *     زنده رشد نکند (قبلاً صف آپلود عقب می‌ماند و تصویر چندثانیه‌ای عقب می‌افتاد)
+ *   • تمام‌صفحه واقعی کل اتاق (صحنه + چت + کنترل‌ها) + fallback شبه‌فول‌اسکرین
+ *     با کلاس pseudo-fs — قبلاً آن کلاس هرگز ست نمی‌شد و فول‌اسکرین عملاً کار نمی‌کرد
  *
  * قواعد مهم:
  *   • صدا/تصویر مدرس → همه • صدا/تصویر دانش‌آموز → فقط با اجازه مدرس
@@ -553,12 +560,20 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const facingRef = useRef('user')
  const devicesRef = useRef([])
 
- /* ---------- رله رسانه — فرستنده ---------- */
- const outRef = useRef(null) // { rec, kind, stopping }
- const pendingInitRef = useRef(true)
- const upChainRef = useRef(Promise.resolve())
- /* آمار زنده ارسال — برای نوار وضعیت (دانش‌آموز بودن بدون صدا/تصویر باید قابل فهم باشد) */
- const outStatsRef = useRef({ n: 0, bytes: 0, lastOkAt: 0, lastErrAt: 0, errs: 0, lastRebuildAt: 0, recent: [] })
+ /* ---------- رله رسانه — فرستنده (دو کانال مستقل: دوربین + صفحه) ---------- */
+ /* [فیکس F36-c] کانال‌ها: cam = دوربین+میکروفون، scr = اشتراک صفحه (+صدای تب).
+  * هر کانال رکوردر، زنجیره آپلود، init و آمار خودش را دارد؛ روشن/خاموشی یکی
+  * هیچ تاثیری روی دیگری ندارد (قبلاً صفحه جای دوربین را می‌گرفت و رکوردر
+  * مدام از نو ساخته می‌شد → وقفه و شکستگی برای گیرنده‌ها) */
+ const mkCh = (screen) => ({
+   screen, rec: null, stopping: false, init: true, chain: Promise.resolve(),
+   fmt: 'webm', cd: '', micOn: true, brIdx: 0, lat: [], good: 0, lastBrAt: 0, lastRebuildAt: 0,
+   stats: { n: 0, bytes: 0, lastOkAt: 0, lastErrAt: 0, errs: 0, recent: [] },
+ })
+ const camChRef = useRef(mkCh(false))
+ const scrChRef = useRef(mkCh(true))
+ /* آمار زنده ارسال کانال دوربین — برای نوار وضعیت */
+ const outStatsRef = camChRef // سازگاری نام قدیمی
 
  /* ---------- رله رسانه — گیرنده ---------- */
  const feedPlayersRef = useRef(new Map()) // key 't' | uid → FeedPlayer
@@ -574,7 +589,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* تعویض دوربین + تمام‌صفحه */
  const [fsActive, setFsActive] = useState(false)
  const [pseudoFs, setPseudoFs] = useState(false)
- const stageRef = useRef(null)
+ const roomRef = useRef(null)
  const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
  /* دوربین/میکروفون/اشتراک صفحه فقط در «بافت امن» (HTTPS یا localhost) کار می‌کند —
   * رایج‌ترین علت واقعی «هیچی برای دانش‌آموز نمی‌آید» همین است؛ پس صریح اعلام می‌شود */
@@ -734,8 +749,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  /* پاک‌سازی نهایی هنگام بستن کلاس — رله و رسانه‌ها قطع و سرور مطلع می‌شود */
  useEffect(() => () => {
-   const o = outRef.current
-   if (o) { o.stopping = true; try { if (o.rec.state !== 'inactive') o.rec.stop() } catch { /* noop */ } }
+   stopChannel(camChRef.current)
+   stopChannel(scrChRef.current)
    try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    screenTrackRef.current?.stop()
@@ -743,16 +758,22 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [])
 
- /* ---------- فرستنده رله — تکه‌های webm/mp4 به سرور ----------
-  * آپلودها زنجیره‌ای‌اند (ترتیب تکه‌ها حیاتی است) و هر تکه ۳ بار تلاش می‌شود؛
-  * اگر هر سه شکست خورد، سشن با init تازه از سر شروع می‌شود تا گیرنده‌ها سالم بمانند */
- const uploadChunk = async (kind, blob, isInit, fmt, cd) => {
+ /* ---------- فرستنده رله — پله‌های بیت‌ریت تطبیقی [فیکس F36-d] ----------
+  * اگر آپلود تکه‌ها کند باشد (میانگین > ۱٫۱۵ ثانیه)، یک پله کیفیت پایین آمده و
+  * رکوردر با بیت‌ریت کمتر از نو ساخته می‌شود؛ با شبکه سریع‌تر بعد از ~۱۵ تکهٔ
+  * سریع، یک پله بالا می‌رود. سقف تغییر: هر ۹ ثانیه یک بار (ضد نوسان) */
+ const BR_STEPS = [1_100_000, 800_000, 560_000, 400_000, 280_000]
+ const SCREEN_BR_STEPS = [900_000, 650_000, 450_000, 300_000, 220_000]
+
+ const uploadChunk = async (blob, isInit, fmt, cd, ch) => {
    if (!classId) return false
-   const q = `?k=${kind}&init=${isInit ? 1 : 0}&mic=${micRef.current ? 1 : 0}&cam=${camRef.current ? 1 : 0}&screen=${screenRef.current ? 1 : 0}&fmt=${fmt || 'webm'}&cd=${encodeURIComponent(cd || '')}`
+   const k = isTeacher ? 'teacher' : 'student'
+   const q = `?k=${k}&init=${isInit ? 1 : 0}&mic=${ch.micOn ? 1 : 0}&cam=${camRef.current && !ch.screen ? 1 : 0}&screen=${ch.screen ? 1 : 0}&fmt=${fmt || 'webm'}&cd=${encodeURIComponent(cd || '')}`
    for (let i = 0; i < 3; i++) {
      /* تایم‌اوت ۵ ثانیه — هیچ درخواستی حق ندارد زنجیره‌ی ارسال را برای همیشه گروگان بگیرد */
      const ac = new AbortController()
      const tid = setTimeout(() => ac.abort(), 5000)
+     const t0 = Date.now()
      try {
        const res = await fetch(`/api/classes/${classId}/media/up${q}`, {
          method: 'POST',
@@ -761,94 +782,150 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          signal: ac.signal,
        })
        if (res.ok) {
-         const st = outStatsRef.current
-         const t0 = Date.now()
+         const st = ch.stats
          st.n += 1
          st.bytes += blob.size || 0
-         st.lastOkAt = t0
-         st.recent.push([t0, blob.size || 0])
-         while (st.recent.length && t0 - st.recent[0][0] > 4000) st.recent.shift() // پنجره ۴ ثانیه‌ای
+         st.lastOkAt = Date.now()
+         st.recent.push([st.lastOkAt, blob.size || 0])
+         while (st.recent.length && st.lastOkAt - st.recent[0][0] > 4000) st.recent.shift() // پنجره ۴ ثانیه‌ای
+         ch.lat.push(Date.now() - t0) // زمان رفت‌وبرگشت آپلود — ورودی بیت‌ریت تطبیقی
+         if (ch.lat.length > 4) ch.lat.shift()
          return true
        }
        if (res.status === 403) {
          const d = await res.json().catch(() => ({}))
-         if (d.noPerm && !isTeacher) { revokeMyMedia(); return false } // اجازه لغو شده
+         if (d.noPerm && !isTeacher && !ch.screen) { revokeMyMedia(); return false } // اجازه لغو شده
        }
      } catch { /* شبکه — تلاش دوباره */ }
      finally { clearTimeout(tid) }
-     await new Promise((r) => setTimeout(r, 300))
+     await new Promise((r) => setTimeout(r, 200))
    }
-   const st = outStatsRef.current
+   const st = ch.stats
    st.errs += 1
    st.lastErrAt = Date.now()
    return false
  }
 
- const stopOutgoing = () => {
-   const o = outRef.current
-   if (!o) return
-   outRef.current = null
-   o.stopping = true
-   try { if (o.rec.state !== 'inactive') o.rec.stop() } catch { /* noop */ }
+ /** تنظیم بیت‌ریت بر اساس تاخیر واقعی آپلود */
+ const adaptBitrate = (ch) => {
+   if (!ch.lat.length) return
+   const avg = ch.lat.reduce((a, b) => a + b, 0) / ch.lat.length
+   const t = Date.now()
+   if (t - ch.lastBrAt < 9000) return
+   const steps = ch.screen ? SCREEN_BR_STEPS : BR_STEPS
+   if (avg > 1150 && ch.brIdx < steps.length - 1) {
+     ch.brIdx += 1
+     ch.lastBrAt = t
+     ch.lat = []
+     ch.good = 0
+     restartChannel(ch)
+   } else if (avg < 420 && ch.brIdx > 0) {
+     ch.good += 1
+     if (ch.good >= 15) {
+       ch.brIdx -= 1
+       ch.lastBrAt = t
+       ch.lat = []
+       ch.good = 0
+       restartChannel(ch)
+     }
+   } else if (avg >= 420) ch.good = 0
  }
 
- const startOutgoing = () => {
-   if (!classId || outRef.current) return
-   if (!isTeacher && !canSpeakRef.current) return
-   const recMime = pickRecMime() // { mime, fmt } — سافاری mp4، بقیه webm
-   if (!recMime) return
-   const s = localStreamRef.current
-   const v = screenRef.current && screenTrackRef.current ? screenTrackRef.current : s?.getVideoTracks()[0]
-   const a = s?.getAudioTracks()[0]
-   if (!v && !a) return
-   /* کدک‌های واقعی داخل استریم — گیرنده SourceBuffer را دقیقاً با همین‌ها می‌سازد
-      (وگرنه استریمِ بدون صدا با خطای "misses expected opus track" رد می‌شد) */
-   const cd = recMime.fmt === 'mp4'
-     ? [...(v ? ['avc1.42E01E'] : []), ...(a ? ['mp4a.40.2'] : [])].join(',')
-     : [...(v ? ['vp8'] : []), ...(a ? ['opus'] : [])].join(',')
-   let rec
-   try {
-     rec = new MediaRecorder(new MediaStream([...(v ? [v] : []), ...(a ? [a] : [])]), {
-       mimeType: recMime.mime, videoBitsPerSecond: 1_100_000, audioBitsPerSecond: 48_000,
-     })
-   } catch { return }
-   const o = { rec, kind: isTeacher ? 'teacher' : 'student', fmt: recMime.fmt, cd, stopping: false }
-   outRef.current = o
+ const stopChannel = (ch) => {
+   const rec = ch.rec
+   if (!rec) return
+   ch.rec = null
+   ch.stopping = true
+   try { if (rec.state !== 'inactive') rec.stop() } catch { /* noop */ }
+ }
+
+ const restartChannel = (ch) => {
+   ch.init = true
+   stopChannel(ch)
+   setTimeout(() => { if (!ch.rec) startChannel(ch) }, 250)
+ }
+
+ /** وصل کردن رویدادهای رکوردر به زنجیره آپلود کانال */
+ const wireRecorder = (ch, rec) => {
    rec.ondataavailable = (e) => {
-     if (!e.data?.size || o.stopping || outRef.current !== o) return
-     const isInit = pendingInitRef.current
-     pendingInitRef.current = false
+     if (!e.data?.size || ch.stopping || ch.rec !== rec) return
+     const isInit = ch.init
+     ch.init = false
      const blob = e.data
-     upChainRef.current = upChainRef.current.then(() => uploadChunk(o.kind, blob, isInit, o.fmt, o.cd)).then((ok) => {
-       if (!ok && outRef.current === o && !o.stopping) {
-         /* هرگز تکه‌ی وسط استریم را به‌جای init نمی‌فرستیم — هدر ندارد و دکودر همه
-            گیرنده‌ها را برای همیشه می‌شکند. به‌جایش رکوردر واقعاً از نو ساخته می‌شود
-            تا تکه‌ی بعدی «هدرِ واقعی» داشته باشد (باگ اصلی مرگ دائمی استریم) */
-         const st = outStatsRef.current
-         if (Date.now() - st.lastRebuildAt > 2500) {
-           st.lastRebuildAt = Date.now()
-           stopOutgoing()
-           setTimeout(() => { if (!outRef.current) rebuildOutgoing() }, 250)
+     ch.chain = ch.chain.then(() => uploadChunk(blob, isInit, ch.fmt, ch.cd, ch)).then((ok) => {
+       if (!ok && ch.rec === rec && !ch.stopping) {
+         /* هرگز تکه‌ی وسط استریم را به‌جای init نمی‌فرستیم — رکوردر واقعاً از نو
+            ساخته می‌شود تا تکه‌ی بعدی «هدرِ واقعی» داشته باشد (خود-ترمیمی) */
+         const t = Date.now()
+         if (t - ch.lastRebuildAt > 2500) {
+           ch.lastRebuildAt = t
+           restartChannel(ch)
          }
-         /* در فاصله‌ی backoff رکوردر فعلی ادامه می‌دهد — اگر تکه‌ای با هدر کامل برسد
-            سرور خودش آن را init واقعی می‌شناسد (خود-ترمیمی سمت سرور) */
        }
+       adaptBitrate(ch)
      }).catch(() => {})
    }
    rec.onerror = () => { /* ادامه — تکه بعدی */ }
-   try { rec.start(500) } catch { /* noop */ } // تکه‌های ۰.۵ ثانیه‌ای → تاخیر کم‌تر
  }
 
- /** ساخت/بازسازی استریم خروجی — بعد از هر تغییر ترکیب (شروع رسانه، اشتراک صفحه، تعویض دوربین) */
+ /** ساخت/بازسازی استریم خروجی دوربین+میکروفون — بعد از هر تغییر ترکیب */
  const rebuildOutgoing = () => {
-   pendingInitRef.current = true
-   stopOutgoing()
-   startOutgoing()
+   const ch = camChRef.current
+   ch.init = true
+   stopChannel(ch)
+   startChannel(ch)
+ }
+
+ const startChannel = (ch) => {
+   if (!classId || ch.rec) return
+   const recMime = pickRecMime() // { mime, fmt } — سافاری mp4، بقیه webm
+   if (!recMime) return
+   let tracks, micOn
+   if (ch.screen) {
+     /* کانال اشتراک صفحه — فقط مدرس؛ + صدای تب اگر مرورگر داده باشد */
+     if (!isTeacher) return
+     const v = screenTrackRef.current
+     if (!v) return
+     const sa = screenStreamRef.current?.getAudioTracks?.()[0] || null
+     tracks = [v, ...(sa ? [sa] : [])]
+     micOn = !!sa
+   } else {
+     if (!isTeacher && !canSpeakRef.current) return
+     const s = localStreamRef.current
+     const v = s?.getVideoTracks()[0]
+     const a = s?.getAudioTracks()[0]
+     if (!v && !a) return
+     tracks = [...(v ? [v] : []), ...(a ? [a] : [])]
+     micOn = !!a && micRef.current
+   }
+   const v = ch.screen ? tracks[0] : localStreamRef.current?.getVideoTracks()[0]
+   const hasA = tracks.some((t) => t.kind === 'audio')
+   /* کدک‌های واقعی داخل استریم — گیرنده SourceBuffer را دقیقاً با همین‌ها می‌سازد
+      (وگرنه استریمِ بدون صدا با خطای "misses expected opus track" رد می‌شد) */
+   const cd = recMime.fmt === 'mp4'
+     ? [...(v ? ['avc1.42E01E'] : []), ...(hasA ? ['mp4a.40.2'] : [])].join(',')
+     : [...(v ? ['vp8'] : []), ...(hasA ? ['opus'] : [])].join(',')
+   let rec
+   try {
+     rec = new MediaRecorder(new MediaStream(tracks), {
+       mimeType: recMime.mime,
+       videoBitsPerSecond: (ch.screen ? SCREEN_BR_STEPS : BR_STEPS)[ch.brIdx],
+       audioBitsPerSecond: 48_000,
+     })
+   } catch { return }
+   ch.rec = rec
+   ch.stopping = false
+   ch.fmt = recMime.fmt
+   ch.cd = cd
+   ch.micOn = micOn
+   wireRecorder(ch, rec)
+   try { rec.start(500) } catch { /* noop */ } // تکه‌های ۰٫۵ ثانیه‌ای → تاخیر کم‌تر
  }
 
  /** قطع کامل رسانه خودم — لغو اجازه توسط مدرس یا ۴۰۳ سرور */
  const revokeMyMedia = () => {
-   stopOutgoing()
+   stopChannel(camChRef.current)
+   stopChannel(scrChRef.current)
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    localStreamRef.current = null
    setLocalStream(null)
@@ -856,14 +933,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setCam(false)
  }
 
-  /* ---------- گیرنده رله — polling استریم‌ها (۸۰۰ms) ----------
+  /* ---------- گیرنده رله — polling استریم‌ها (۴۵۰ms) ----------
   * با «کرسر» فقط تکه‌های تازه می‌آیند؛ اگر گیرنده جا مانده باشد سرور init می‌فرستد
   * و پلیر خودش از نو ساخته می‌شود — هیچ حالتی تصویر را برای همیشه نمی‌شکند */
  useEffect(() => {
    if (!classId || !user?.id) return
    let alive = true
    const players = feedPlayersRef.current
-   const cur = { t: null, s: {} }
+   const cur = { t: null, ts: null, s: {} }
    let busy = false
 
    const applyFeed = (key, f) => {
@@ -872,7 +949,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      if (p && (p.fmt !== (f.fmt || 'webm') || (p.cd || '') !== (f.cd || ''))) { try { p.destroy() } catch { /* noop */ } players.delete(key); p = null }
      if (!p) {
        p = createFeedPlayer(f.fmt || 'webm', f.cd || '')
-       p.onNeedReset = () => { if (key === 't') cur.t = null; else delete cur.s[key] } // فقط کرسرِ همین فید صفر شود
+       p.onNeedReset = () => { if (key === 't' || key === 'ts') cur[key] = null; else delete cur.s[key] } // فقط کرسرِ همین فید صفر شود
        players.set(key, p)
      }
      if (f.reset) p.hardReset(f.sess)
@@ -894,11 +971,24 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
           re-render اتفاق بیفتد و RelayVideo پلیر تازه را بگیرد. بدون این، پروپ‌ها
           به «پلیرِ مرده» چسبیده می‌مانند، ویدیو هیچ‌وقت src نمی‌گیرد و با اینکه
           تکه‌ها آپند می‌شوند هیچ تصویر و صدایی پخش نمی‌شود (باگ اصلی گزارش کاربر) */
-       if (!isTeacher && r.teacher) {
-         const lastSeq = applyFeed('t', r.teacher)
-         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('t')?.pid }
-         cur.t = { s: r.teacher.sess, q: lastSeq ?? (cur.t?.q || 0) }
-       } else if (cur.t) cur.t = null
+       /* [فیکس F36-e] فیدِ خودِ مدرس هرگز پخش نمی‌شود ولی قبلاً کرسرش هم جلو نمی‌رفت →
+         سرور در هر poll (هر ۴۵۰ms) init + ۶ تکهٔ آخر را base64 برای خود مدرس
+         می‌فرستاد (~۰٫۸ مگابایت/ثانیه هدررفت پهنای باند که عامل بزرگی در «کندی» بود).
+         حالا فقط کرسر جلو می‌رود و پاسخ به چند صد بایت می‌رسد */
+      if (isTeacher) {
+        if (r.teacher) cur.t = { s: r.teacher.sess, q: r.teacher.seq }
+        if (r.teacherScreen) cur.ts = { s: r.teacherScreen.sess, q: r.teacherScreen.seq }
+      } else if (r.teacher) {
+        const lastSeq = applyFeed('t', r.teacher)
+        next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('t')?.pid }
+        cur.t = { s: r.teacher.sess, q: lastSeq ?? (cur.t?.q || 0) }
+      } else if (cur.t) cur.t = null // فید مدرس قطع شد — کرسر صفر تا فید بعدی از سر init شود
+       /* [فیکس F36-c] فید مستقل اشتراک صفحه مدرس — موازی با دوربین (کلید 'ts') */
+       if (!isTeacher && r.teacherScreen) {
+         const lastSeq2 = applyFeed('ts', r.teacherScreen)
+         next.ts = { sess: r.teacherScreen.sess, mic: r.teacherScreen.mic, cam: false, screen: true, fmt: r.teacherScreen.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('ts')?.pid }
+         cur.ts = { s: r.teacherScreen.sess, q: lastSeq2 ?? (cur.ts?.q || 0) }
+       } else if (cur.ts) cur.ts = null
        for (const sf of r.students || []) {
          const lastSeq = applyFeed(sf.uid, sf)
          next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2', pv: players.get(sf.uid)?.pid }
@@ -1147,7 +1237,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* پایان کلاس از سمت سرور → قطع رله و رسانه‌ها و ثبت ضبط */
  useEffect(() => {
    if (live?.status !== 'ended') return
-   stopOutgoing()
+   stopChannel(camChRef.current)
+   stopChannel(scrChRef.current)
    try { req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {}) } catch { /* noop */ }
    try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -1397,9 +1488,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    switchingRef.current = false
  }
 
-/* ---------- تمام‌صفحه ---------- */
+/* ---------- تمام‌صفحه [فیکس F36-b] ----------
+ * کل اتاق (صحنه + چت + کنترل‌ها) تمام‌صفحه می‌شود — نه فقط صحنه.
+ * [باگ اصلی] در حالت fallback (قاب iframe بدون allow=fullscreen / iOS) کلاس
+ * pseudo-fs در CSS وجود داشت ولی هرگز به عنصر ست نمی‌شد → کاربر «فول‌اسکرین»
+ * می‌زد و عملاً هیچ اتفاقی نمی‌افتاد. حالا کلاس روی همان live-grid ست می‌شود */
  const toggleFs = async () => {
-   const el = stageRef.current
+   const el = roomRef.current
    if (!el) return
    const doc = document
    const isFs = !!(doc.fullscreenElement || doc.webkitFullscreenElement)
@@ -1412,10 +1507,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    try {
      if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen()
-     else { setPseudoFs(true); doc.body.classList.add('fs-lock') } // iOS Safari
+     else throw new Error('fullscreen-unsupported') // iOS Safari روی div پشتیبانی ندارد
    } catch {
+     /* شبه‌فول‌اسکرین: پوشاندن کل نوار با position:fixed — همه‌جا کار می‌کند */
      setPseudoFs(true)
      doc.body.classList.add('fs-lock')
+     toast('مرورگر اجازه تمام‌صفحه واقعی نداد — حالت تمام‌صفحه داخلی فعال شد (Esc = خروج)', 'info')
    }
  }
  useEffect(() => {
@@ -1428,6 +1525,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      document.body.classList.remove('fs-lock')
    }
  }, [])
+ /* خروج از شبه‌فول‌اسکرین با Esc */
+ useEffect(() => {
+   if (!pseudoFs) return
+   const h = (e) => { if (e.key === 'Escape') { setPseudoFs(false); document.body.classList.remove('fs-lock') } }
+   window.addEventListener('keydown', h)
+   return () => window.removeEventListener('keydown', h)
+ }, [pseudoFs])
 
  const goHttps = () => {
    try {
@@ -1460,14 +1564,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (recording) return
    if (!window.MediaRecorder) { toast('مرورگر شما از ضبط ویدیو پشتیبانی نمی‌کند — از کروم استفاده کنید', 'error'); return }
    const vTrack = screenTrackRef.current || localStreamRef.current?.getVideoTracks()[0] || null
-   const aTrack = localStreamRef.current?.getAudioTracks()[0] || null
+   /* صدای صفحه (وقتی اشتراک صفحه با صدای تب است) + میکروفون — هر دو ضبط می‌شوند [فیکس F36-c] */
+   const aTracks = [
+     ...(screenStreamRef.current?.getAudioTracks?.() || []),
+     ...(localStreamRef.current?.getAudioTracks() || []),
+   ]
+   const aTrack = aTracks[0] || null
    if (!vTrack && !aTrack) { toast('برای ضبط، ابتدا دوربین یا میکروفون را وصل کنید', 'error'); return }
    let mime = ''
    for (const m of ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']) {
      try { if (MediaRecorder.isTypeSupported?.(m)) { mime = m; break } } catch { /* noop */ }
    }
    try {
-     const stream = new MediaStream([...(vTrack ? [vTrack] : []), ...(aTrack ? [aTrack] : [])])
+     const stream = new MediaStream([...(vTrack ? [vTrack] : []), ...aTracks])
      const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 1_500_000 } : undefined)
      recChunksRef.current = []
      rec.ondataavailable = (e) => { if (e.data?.size) recChunksRef.current.push(e.data) }
@@ -1512,40 +1621,59 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    return () => clearInterval(t)
  }, [recording])
 
- /* ---------- اشتراک صفحه (مدرس) ---------- */
+ /* ---------- اشتراک صفحه (مدرس) — فید مستقل [فیکس F36-c] ----------
+  * قبلاً تصویر صفحه جای ترک دوربین را در «همان یک رکوردر» می‌گرفت؛ نتیجه:
+  * هر روشن/خاموشی = رکوردر نو = سشن نو = ری‌بیلد همه گیرنده‌ها + وقفه در صدا.
+  * حالا کانال صفحه (scr) جدا از کانال دوربین (cam) اجرا می‌شود؛ دوربین ادامه
+  * دارد و دانش‌آموز هم‌زمان صفحه را بزرگ و مدرس را در نوار پایین می‌بیند */
  const stopScreenShare = () => {
+   stopChannel(scrChRef.current)
    screenTrackRef.current?.stop()
    screenTrackRef.current = null
    screenStreamRef.current = null
    screenRef.current = false
    setScreen(false)
-   rebuildOutgoing()
+   /* فید صفحه سرور هم بسته شود — تا «اشتراک صفحه» تا ۹ ثانیه معلق نماند */
+   if (classId) req(`/classes/${classId}/media/stop?k=screen`, { method: 'POST' }).catch(() => {})
  }
- const toggleScreenShare = async () => {
-   if (screen) { stopScreenShare(); return }
+ const startScreenShare = async () => {
+   if (!isTeacher) return
    if (!navigator.mediaDevices?.getDisplayMedia) {
      toast(inIframe ? 'اشتراک صفحه داخل قاب پیش‌نمایش ممکن نیست — کلاس را در پنجره جدید باز کنید' : 'مرورگر شما اشتراک صفحه را پشتیبانی نمی‌کند', 'error')
      return
    }
+   const gdm = (audio) => navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 12, max: 15 } }, audio })
+   let s = null
    try {
-     const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15 } }, audio: false })
-     const track = s.getVideoTracks()[0]
-     screenTrackRef.current = track
-     screenStreamRef.current = s
-     track.addEventListener('ended', () => stopScreenShare())
-     screenRef.current = true
-     setScreen(true)
-     setBoard(false)
-     if (isTeacher) {
-       boardLocalTsRef.current = Date.now()
-       req(`/classes/${classId}/board/open`, { method: 'POST', body: { open: false } }).catch(() => {})
+     /* اول با صدای تب تلاش می‌شود (ویدیوی آموزشی صدا داشته باشد)؛ رد شدن کاربر
+        → همان‌جا تمام؛ خطای فنی صدا → بدون صدا دوباره */
+     try { s = await gdm(true) }
+     catch (e1) {
+       if (e1?.name === 'NotAllowedError') throw e1
+       s = await gdm(false)
      }
-     rebuildOutgoing()
    } catch (e) {
      if (e?.name === 'NotAllowedError') toast(inIframe ? 'اشتراک صفحه فقط در پنجره کامل کار می‌کند — کلاس را در پنجره جدید باز کنید' : 'اشتراک صفحه لغو شد', 'info')
      else toast('اشتراک صفحه ممکن نشد', 'error')
+     return
    }
+   const track = s.getVideoTracks()[0]
+   if (!track) { toast('اشتراک صفحه ممکن نشد', 'error'); return }
+   screenTrackRef.current = track
+   screenStreamRef.current = s
+   track.addEventListener('ended', () => stopScreenShare())
+   screenRef.current = true
+   setScreen(true)
+   setBoard(false)
+   if (classId) {
+     boardLocalTsRef.current = Date.now()
+     req(`/classes/${classId}/board/open`, { method: 'POST', body: { open: false } }).catch(() => {})
+   }
+   scrChRef.current.init = true
+   startChannel(scrChRef.current)
+   toast('اشتراک صفحه شروع شد — دانش‌آموزان صفحه شما را تمام‌عرض می‌بینند', 'success')
  }
+ const toggleScreenShare = () => { if (screen) stopScreenShare(); else startScreenShare() }
  const toggleBoard = async () => {
    const next = !board
    setBoard(next)
@@ -1793,11 +1921,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  }
 
  /* ---------- چیدمان صحنه ---------- */
- const tFeed = !isTeacher ? feedInfo.t : null           // استریم مدرس (برای دانش‌آموز)
- const sFeeds = Object.entries(feedInfo).filter(([k]) => k !== 't') // استریم دانش‌آموزانِ دارای اجازه
+ const tsFeed = !isTeacher ? feedInfo.ts : null          // فید اشتراک صفحهٔ مدرس [F36-c]
+ const tFeed = !isTeacher ? feedInfo.t : null           // استریم دوربین/صدای مدرس (برای دانش‌آموز)
+ const sFeeds = Object.entries(feedInfo).filter(([k]) => k !== 't' && k !== 'ts') // استریم دانش‌آموزانِ دارای اجازه
  const watchingBoard = board
- const watchingScreen = isTeacher && screen
- const watchingFeed = !isTeacher && !!tFeed
+ const watchingScreen = isTeacher ? screen : !!tsFeed
+ const watchingFeed = !isTeacher && !watchingScreen && !!tFeed
  const stageBusy = watchingBoard || watchingScreen || watchingFeed
 
  const feedTile = (key, f, big) => (
@@ -1815,7 +1944,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const roleLabel = (r) => (r === 'teacher' ? 'مدرس' : r === 'admin' ? 'مدیر' : '')
 
  /* ---------- نوار وضعیت زندهٔ رسانه (هر ثانیه با تیک بازمحاسبه می‌شود) ---------- */
- const st = outStatsRef.current
+ const st = camChRef.current.stats
  const nowMs = Date.now()
  const outFresh = st.lastOkAt > 0 && nowMs - st.lastOkAt < 3000
  const sendingMedia = isTeacher && !!(localStream || screen)
@@ -1851,7 +1980,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  {isTeacher ? (
  sendingMedia ? (
  outFresh ? (
- <span className="media-chip ok"><i className="dot" /> در حال ارسال {screen ? 'اشتراک صفحه' : 'صدا/تصویر'} به دانش‌آموزان — {faNum(rateKbps)} کیلوبایت/ثانیه • {faNum(st.n)} تکه ✓</span>
+ <span className="media-chip ok"><i className="dot" /> در حال ارسال {screen && localStream ? 'صفحه + دوربین' : screen ? 'اشتراک صفحه' : 'صدا/تصویر'} به دانش‌آموزان — {faNum(rateKbps)} کیلوبایت/ثانیه • {faNum(st.n)} تکه ✓</span>
  ) : (
  <span className="media-chip warn"><i className="dot" /> ارسال با وقفه افتاده — به‌صورت خودکار از سر گرفته می‌شود…</span>
  )
@@ -1859,18 +1988,20 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <span className="media-chip err"><i className="dot" /> ⛔ هیچ صدا و تصویری برای دانش‌آموزان ارسال نمی‌شود — دوربین یا اشتراک صفحه را روشن کنید (تخته و چت مستقل از این است)</span>
  )
  ) : (
- tFeed ? (
- <span className="media-chip ok"><i className="dot" /> پخش زندهٔ مدرس فعال است ✓ {tFeed.screen ? '(اشتراک صفحه)' : '(صدا/تصویر)'} — برای شنیدن صدا یک بار صفحه را لمس/کلیک کنید</span>
+ tsFeed ? (
+ <span className="media-chip ok"><i className="dot" /> اشتراک صفحهٔ مدرس فعال است ✓{tFeed ? ' — دوربین مدرس در نوار پایین' : ''} — برای شنیدن صدا یک بار صفحه را لمس/کلیک کنید</span>
+ ) : tFeed ? (
+ <span className="media-chip ok"><i className="dot" /> پخش زندهٔ مدرس فعال است ✓ (صدا/تصویر) — برای شنیدن صدا یک بار صفحه را لمس/کلیک کنید</span>
  ) : (
  <span className="media-chip warn"><i className="dot" /> در انتظار پخش زندهٔ مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه، همین‌جا نمایش داده می‌شود</span>
  )
  )}
  </div>
 
- <div className={`live-grid ${pseudoFs ? 'fs-grid' : ''}`}>
- <div className="live-stage" ref={stageRef}>
+ <div className={`live-grid ${pseudoFs ? 'pseudo-fs' : ''}`} ref={roomRef}>
+ <div className="live-stage">
  <div className={`live-view ${watchingBoard ? 'board' : watchingScreen || watchingFeed ? 'screen' : 'camera'}`}>
- <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? 'اشتراک صفحه شما' : watchingFeed ? (tFeed.screen ? 'اشتراک صفحه مدرس' : 'ویدیوی زنده مدرس') : 'کلاس زنده'}</span>
+ <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? (isTeacher ? 'اشتراک صفحه شما' : 'اشتراک صفحه مدرس') : watchingFeed ? 'ویدیوی زنده مدرس' : 'کلاس زنده'}</span>
  <span className="live-timer" dir="ltr">{mm}:{ss}</span>
 
  {/* چیپ دست‌های بالا — فقط مدرس؛ کلیک = رفتن به تب حاضران */}
@@ -1932,7 +2063,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      />
    </div>
  ) : watchingScreen ? (
-   <ScreenPreview stream={screenStreamRef.current} />
+   isTeacher
+     ? <ScreenPreview stream={screenStreamRef.current} />
+     : tsFeed && feedTile('ts', tsFeed, true)
  ) : watchingFeed ? (
    feedTile('t', tFeed, true)
  ) : (
@@ -2006,41 +2139,44 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    </button>
  )}
 
- {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته/دیدن استریم مدرس — کاشی خودِ دانش‌آموز همیشه هست */}
- {stageBusy && (localStream || !isTeacher || tFeed || sFeeds.length > 0) && (
+ {/* نوار کاشی‌های تصویری هنگام اشتراک صفحه/تخته/دیدن استریم مدرس — کاشی خودِ دانش‌آموز همیشه هست.
+     هر کاشی فقط وقتی در نوار می‌آید که صحنه خودش آن را نشان نمی‌دهد — دو ویدیو روی یک پلیر
+     نمی‌جنگند (یکی MediaSource را از دیگری می‌دزدد) */}
+ {stageBusy && (localStream || !isTeacher || tFeed || tsFeed || sFeeds.length > 0) && (
    <div className="cam-strip">
      {(localStream || !isTeacher) && (
        <div style={{ width: 128, flexShrink: 0 }}>
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
        </div>
      )}
-     {tFeed && !watchingFeed && feedTile('t', tFeed, false)} /* در نوار فقط وقتی صحنه خودش استریم مدرس را نشان نمی‌دهد — دو ویدیو روی یک پلیر نمی‌جنگند (یکی MediaSource را از دیگری می‌دزدد) */
+     {tFeed && !watchingFeed && feedTile('t', tFeed, false)}
+     {tsFeed && !watchingScreen && feedTile('ts', tsFeed, false)}
      {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}
  </div>
 
  <div className="live-controls">
- <button className={ctl(mic) + (mic ? '' : ' off')} onClick={toggleMic}>
+ <button className={ctl(mic) + (mic ? '' : ' off')} onClick={toggleMic} aria-pressed={!mic}>
  <Icon name="mic" /> <span className="ctl-tip">{mic ? 'قطع میکروفون' : 'وصل میکروفون'}</span>
  </button>
- <button className={ctl(cam) + (cam ? '' : ' off')} onClick={toggleCam}>
+ <button className={ctl(cam) + (cam ? '' : ' off')} onClick={toggleCam} aria-pressed={!cam}>
  <Icon name="camera" /> <span className="ctl-tip">{cam ? 'خاموش کردن دوربین' : 'روشن کردن دوربین'}</span>
  </button>
  <button className={ctl(false)} onClick={switchCam}>
  <Icon name="camFlip" /> <span className="ctl-tip">تعویض دوربین (جلو/عقب)</span>
  </button>
  {isTeacher && (
- <button className={ctl(screen)} onClick={toggleScreenShare}>
+ <button className={ctl(screen)} onClick={toggleScreenShare} aria-pressed={screen}>
  <Icon name="monitor" /> <span className="ctl-tip">{screen ? 'قطع اشتراک صفحه' : 'اشتراک صفحه سیستم'}</span>
  </button>
  )}
  {isTeacher && (
- <button className={ctl(board)} onClick={toggleBoard}>
+ <button className={ctl(board)} onClick={toggleBoard} aria-pressed={board}>
  <Icon name="board" /> <span className="ctl-tip">{board ? 'بستن وایت‌برد' : 'وایت‌برد دیجیتال'}</span>
  </button>
  )}
- <button className={ctl(fsActive || pseudoFs)} onClick={toggleFs}>
+ <button className={ctl(fsActive || pseudoFs)} onClick={toggleFs} aria-pressed={fsActive || pseudoFs}>
  <Icon name={fsActive || pseudoFs ? 'minimize' : 'maximize'} /> <span className="ctl-tip">{fsActive || pseudoFs ? 'خروج از تمام‌صفحه' : 'نمایش تمام‌صفحه'}</span>
  </button>
  {isTeacher ? (
@@ -2138,7 +2274,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <div className="modal-actions">
  <button className="btn btn-primary" onClick={() => {
    setEndedModal(false)
-   stopOutgoing()
+   stopChannel(camChRef.current)
+   stopChannel(scrChRef.current)
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    screenTrackRef.current?.stop()
    req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
