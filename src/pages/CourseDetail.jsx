@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import Seo, { ORIGIN } from '../components/Seo'
 import Icon from '../components/Icon'
@@ -21,6 +21,15 @@ export default function CourseDetail() {
  const testimonials = useCatalog(content.testimonials, fallbackTestimonials)
  const course = courses.find((c) => c.id === Number(id))
  const [openSec, setOpenSec] = useState(0)
+ /* [فیکس F25] نظرات واقعی همین دوره از بک‌اند — قبلاً testimonials بازاریابی سراسری
+    رندر می‌شد و نظر تأییدشدهٔ دانشجو هیچ‌جا ظاهر نمی‌شد */
+ const [bundle, setBundle] = useState(null)
+ useEffect(() => {
+  let alive = true
+  content.courseBundle(id).then((b) => { if (alive) setBundle(b) }).catch(() => {})
+  return () => { alive = false }
+ }, [id])
+ const realReviews = (bundle?.reviews || []).filter((r) => r && (r.text || r.quote))
 
  if (!course) return <div className="container section"><div className="empty"><p>دوره یافت نشد.</p></div></div>
 
@@ -166,7 +175,13 @@ export default function CourseDetail() {
  {/* نظرات */}
  <Reveal className="card pad">
  <h3 className="mb16">نظرات دانشجویان</h3>
- {testimonials.slice(0, 3).map((t) => (
+ {realReviews.length ? realReviews.map((r) => (
+ <div className="testimonial-card" key={r.id} style={{ boxShadow: 'none', background: 'transparent', padding: '14px 0', borderBottom: '1px solid var(--line2)' }}>
+ <RatingStars value={r.rating} />
+ <p className="quote">«{r.text}»</p>
+ <div className="who"><b>{r.user}</b><span>{r.date}</span></div>
+ </div>
+ )) : testimonials.slice(0, 3).map((t) => (
  <div className="testimonial-card" key={t.name} style={{ boxShadow: 'none', background: 'transparent', padding: '14px 0', borderBottom: '1px solid var(--line2)' }}>
  <RatingStars value={t.rating} />
  <p className="quote">«{t.quote}»</p>

@@ -37,13 +37,15 @@ export default function TLiveRoom() {
    return () => stream?.getTracks().forEach((t) => t.stop())
  }, [preparing])
 
- /* کلاس‌های این مدرس از بک‌اند واقعی — در قطعی سرور همان دموی قبلی */
+ /* کلاس‌های این مدرس از بک‌اند واقعی — [فیکس F8] لیست خالیِ «موفق» دیگر با دمو
+    اشتباه گرفته نمی‌شود: پاسخ سرور اومده → همان خالی نمایش داده می‌شود («هنوز
+    کلاسی نساخته‌اید»). دمو فقط وقتی می‌ماند که سرور در دسترس نباشد */
  useEffect(() => {
  let alive = true
  req('/me/teaching').then((r) => {
  if (!alive) return
  setLoaded(true)
- if (!r.classes?.length) return
+ if (!r.classes) return
  setMyClasses(r.classes.map((c) => ({
  id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start,
  dur: c.dur, students: c.enrolled, room: c.room, desc: c.desc, icon: c.icon, color: c.color,
@@ -73,6 +75,12 @@ export default function TLiveRoom() {
  {!loaded && (
  <div className="card pad" style={{ gridColumn: '1 / -1', textAlign: 'center' }}>
  <span className="muted small">در حال دریافت کلاس‌های شما از سرور…</span>
+ </div>
+ )}
+ {loaded && !myClasses.length && (
+ <div className="card pad" style={{ textAlign: 'center', padding: 40 }}>
+ <b>هنوز کلاسی نساخته‌اید</b>
+ <p className="muted small mt8">از بخش «کلاس‌های من» یک کلاس هفتگی بسازید تا اینجا برای برگزاری زنده ظاهر شود.</p>
  </div>
  )}
  {loaded && myClasses.map((c) => {
@@ -106,8 +114,9 @@ export default function TLiveRoom() {
  <button className="btn btn-primary btn-sm" onClick={() => setPreparing(c)}>
  <Icon name="video" size={15} /> آماده‌سازی و شروع
  </button>
- <button className="btn btn-ghost btn-sm" onClick={() => toast('پیامک دعوت به کلاس برای دانشجوها ارسال شد')}>
- <Icon name="send" size={15} /> دعوت دانشجوها
+ {/* [فیکس F3] دکمهٔ قلابی — قبلاً فقط توست موفقیت جعلی می‌زد */}
+ <button className="btn btn-ghost btn-sm" disabled title="این قابلیت به‌زودی فعال می‌شود">
+ <Icon name="send" size={15} /> دعوت دانشجوها (به‌زودی)
  </button>
  </>
  )}

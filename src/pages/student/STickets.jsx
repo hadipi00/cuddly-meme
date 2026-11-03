@@ -21,7 +21,7 @@ export default function STickets() {
   if (!user) return
   let alive = true
   req('/me/tickets').then((r) => {
-   if (alive && Array.isArray(r.tickets) && r.tickets.length) setList(r.tickets)
+   if (alive && Array.isArray(r.tickets)) setList(r.tickets) // [فیکس F21] لیست خالی سرور هم واقعی است
   }).catch(() => {})
   return () => { alive = false }
  }, [user?.id])
@@ -34,6 +34,8 @@ export default function STickets() {
   subject: String(fd.get('subject') || ''),
   body: String(fd.get('body') || ''),
   priority: String(fd.get('priority') || 'متوسط'),
+  /* [فیکس F34] بخشِ انتخابی در payload رفت — قبلاً سلکت name نداشت و سرور هم ذخیره نمی‌کرد */
+  category: String(fd.get('category') || 'سایر'),
  }
  if (payload.body.trim().length < 10) { toast('توضیحات حداقل ۱۰ حرف باشد', 'error'); return }
  setSending(true)
@@ -83,7 +85,7 @@ export default function STickets() {
  <div className="field"><label>موضوع</label><input className="input" name="subject" required placeholder="خلاصه مشکل یا سوال" /></div>
  <div className="field-row">
  <div className="field"><label>بخش</label>
- <select className="select">{['فنی — پخش دوره', 'مالی — پرداخت', 'کلاس زنده', 'مدرس‌مارکت', 'سایر'].map((s) => <option key={s}>{s}</option>)}</select>
+ <select className="select" name="category" defaultValue="فنی — پخش دوره">{['فنی — پخش دوره', 'مالی — پرداخت', 'کلاس زنده', 'مدرس‌مارکت', 'سایر'].map((s) => <option key={s}>{s}</option>)}</select>
  </div>
  <div className="field"><label>اولویت</label>
  <select className="select" name="priority">{['کم', 'متوسط', 'بالا'].map((s) => <option key={s}>{s}</option>)}</select>
@@ -103,16 +105,20 @@ export default function STickets() {
  <div className="feed mb16">
  <div className="feed-item">
  <span className="fd-icon" style={{ background: 'rgba(45,212,191,.12)', color: 'var(--teal)' }}><Icon name="user" size={15} /></span>
- <div><p><b>شما:</b> {detail.subject} — لطفاً راهنمایی کنید.</p><span className="fd-time">{faDate(detail.date)}</span></div>
+ <div><p><b>شما:</b> {detail.subject}{detail.category && detail.category !== 'سایر' ? ` — بخش: ${detail.category}` : ''}</p><span className="fd-time">{faDate(detail.date)}</span></div>
  </div>
+ {/* [فیکس F14] پاسخ واقعی ادمین از سرور — قبلاً برای همهٔ تیکت‌ها یک پاسخ جعلی هاردکد نشان داده می‌شد */}
+ {detail.reply ? (
  <div className="feed-item">
  <span className="fd-icon" style={{ background: 'rgba(56,189,248,.12)', color: 'var(--sky)' }}><Icon name="shield" size={15} /></span>
- <div><p><b>پشتیبانی مدرس‌یار:</b> سلام، وقت بخیر درخواست شما بررسی شد و در حال پیگیری است. حداکثر تا ۲۴ ساعت آینده نتیجه اعلام می‌شود.</p><span className="fd-time">۲ ساعت پیش</span></div>
+ <div><p><b>پشتیبانی مدرس‌یار:</b> {detail.reply}</p><span className="fd-time">{detail.repliedAt ? new Date(detail.repliedAt).toLocaleDateString('fa-IR') : ''}</span></div>
  </div>
+ ) : (
+ <div className="feed-item">
+ <span className="fd-icon" style={{ background: 'rgba(148,163,184,.12)', color: 'var(--muted)' }}><Icon name="clock" size={15} /></span>
+ <div><p className="muted">هنوز پاسخی ثبت نشده — پشتیبانی حداکثر تا ۲۴ ساعت پاسخ می‌دهد.</p></div>
  </div>
- <div className="row g8">
- <input className="input" placeholder="پاسخ جدید…" />
- <button className="btn btn-primary btn-sm" onClick={() => toast('پاسخ شما ارسال شد')}><Icon name="send" size={15} /></button>
+ )}
  </div>
  </>
  )}

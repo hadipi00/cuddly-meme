@@ -22,7 +22,8 @@ export default function AClasses() {
 
  const load = () => {
  req('/classes').then((r) => {
- if (r.classes?.length) setRows(r.classes.map((c) => ({
+ /* [فیکس F21] */
+ if (Array.isArray(r.classes)) setRows(r.classes.map((c) => ({
  id: c.id, title: c.title, teacher: c.teacherName, day: c.day, start: c.start,
  dur: c.dur, enrolled: c.enrolled, cap: c.cap, price: c.price, status: c.status,
  icon: c.icon, color: c.color, source: 'سامانه',
@@ -40,7 +41,9 @@ export default function AClasses() {
  try {
  await req('/classes', { method: 'POST', body: {
  title: d.title, desc: '', day: Number(d.day), start: SLOTS[Number(d.slot)] || '18:00',
- dur: Number(d.dur) || 90, cap: Number(d.cap) || 30, price: 0, teacherId: t.userId,
+ dur: Number(d.dur) || 90, cap: Number(d.cap) || 30,
+ /* [فیکس F32] قیمت از فرم — قبلاً فرم فیلد قیمت نداشت و همیشه price:0 می‌ساخت */
+ price: Math.max(0, Number(d.price) || 0), teacherId: t.userId,
  } })
  setModal(null)
  toast('کلاس واقعاً ساخته شد و در جدول هفتگی دانشجوها قرار گرفت')
@@ -52,12 +55,15 @@ export default function AClasses() {
  }
 
  const remove = async (r) => {
+ /* [فیکس F32] حذف کلاس (که cascade کامل سرور دارد) بدون confirm بود */
+ if (!window.confirm(`کلاس «${r.title}» و همهٔ ثبت‌نامی‌ها/داده‌های وابسته‌اش حذف شود؟ این عمل قابل بازگشت نیست.`)) return
  try {
  await req(`/classes/${r.id}`, { method: 'DELETE' })
  toast('کلاس حذف شد', 'info')
  load()
  } catch (e) {
  if (!e.serverDown) toast(e.message || 'حذف ناموفق بود', 'error')
+ else toast('سرور در دسترس نیست', 'error')
  }
  }
 
@@ -106,10 +112,11 @@ export default function AClasses() {
  <button className="icon-btn" title="حذف کلاس" onClick={() => remove(r)}>
  <Icon name="trash" />
  </button>
- <button className="icon-btn" title="یادآوری به دانشجوها" onClick={() => toast('پیامک یادآوری به همه ثبت‌نامی‌ها ارسال شد')}>
+ {/* [فیکس F32] دکمه‌های قلابی «یادآوری/بازیابی ضبط» — توست موفقیت جعلی نمی‌زنند */}
+ <button className="icon-btn" title="یادآوری پیامکی به دانشجوها — به‌زودی" disabled style={{ opacity: 0.45 }} onClick={() => toast('ارسال یادآوری پیامکی به‌زودی فعال می‌شود', 'info')}>
  <Icon name="send" />
  </button>
- <button className="icon-btn" title="بازیابی ضبط جلسه" onClick={() => toast('فایل ضبط جلسه دانلود شد', 'info')}>
+ <button className="icon-btn" title="بازیابی ضبط جلسه — به‌زودی" disabled style={{ opacity: 0.45 }} onClick={() => toast('ضبط جلسه در این نسخه ارائه نمی‌شود', 'info')}>
  <Icon name="download" />
  </button>
  </>
@@ -130,6 +137,7 @@ export default function AClasses() {
  { key: 'slot', label: 'ساعت شروع', type: 'select', options: SLOTS.map((s, i) => ({ value: String(i), label: s })) },
  { key: 'dur', label: 'مدت (دقیقه)', type: 'number' },
  { key: 'cap', label: 'ظرفیت', type: 'number', required: false },
+ { key: 'price', label: 'قیمت (تومان — خالی = رایگان)', type: 'number', required: false, full: true },
  ]}
  />
  </div>

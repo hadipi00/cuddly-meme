@@ -129,7 +129,8 @@ export default function SDashboard() {
  </div>
  <span className="muted small">آخرین درس: {mc.lastLesson} • {faDate(mc.lastSeen)}</span>
  </div>
- <button className="btn btn-soft btn-sm"><Icon name="play" size={14} /> ادامه</button>
+ {/* [فیکس F34] دکمهٔ تودرتو داخل Link به span تبدیل شد — nesting نامعتبر HTML بود */}
+ <span className="btn btn-soft btn-sm" style={{ pointerEvents: 'none' }}><Icon name="play" size={14} /> ادامه</span>
  </Link>
  )
  })}

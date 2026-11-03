@@ -40,7 +40,7 @@ const TYPE_HELP = {
 }
 
 const newQuestion = (type) => {
-  const base = { type, body: '', image: '', points: 1, topic: '', expl: '' }
+  const base = { _id: ++qidSeq, type, body: '', image: '', points: 1, topic: '', expl: '' }
   if (type === 'mcq') return { ...base, opts: ['', '', '', ''], correct: 0 }
   if (type === 'multi') return { ...base, opts: ['', '', '', ''], correct: [0] }
   if (type === 'tf') return { ...base, opts: ['درست', 'نادرت'], correct: 0 }
@@ -49,6 +49,10 @@ const newQuestion = (type) => {
   if (type === 'order') return { ...base, opts: ['', ''], correct: [0, 1] }
   return base
 }
+/* [فیکس F33] شناسهٔ پایدار برای سوال‌ها — key={i} در لیست درگ‌پذیر بعد از جابه‌جایی
+   ادیتور سوال دیگری را نشان می‌داد */
+let qidSeq = 0
+const withId = (q) => ({ ...q, _id: q._id || ++qidSeq })
 
 const tsToLocal = (ts) => {
   if (!ts) return ''
@@ -70,11 +74,17 @@ function serializeQuestions(list) {
     } else if (q.type === 'tf') out.correct = Number(q.correct) === 0 ? 0 : 1
     else if (q.type === 'blank' || q.type === 'short') out.correct = (q.correct || []).map((c) => String(c || '').trim()).filter(Boolean)
     else if (q.type === 'match') {
-      const left = q.opts.left.map((s) => String(s || '').trim()).filter(Boolean)
-      const right = q.opts.right.map((s) => String(s || '').trim()).filter(Boolean)
-      out.opts = { left, right }
+      /* [فیکس F17] remap اندیس خام‌→فیلترشده برای هر دو ستون — قبلاً یک ردیف خالی
+         قبل از ردیف‌های پر، همهٔ جفت‌های بعدی را شیفت می‌داد و کلید بی‌سروصدا غلط ثبت می‌شد */
+      const lidx = q.opts.left.map((s, j) => [j, String(s || '').trim()]).filter(([, s]) => s)
+      const ridx = q.opts.right.map((s, j) => [j, String(s || '').trim()]).filter(([, s]) => s)
+      const remapR = new Map(ridx.map(([j], n) => [j, n]))
+      out.opts = { left: lidx.map(([, s]) => s), right: ridx.map(([, s]) => s) }
       out.correct = {}
-      left.forEach((_, l) => { const r = Number(q.correct?.[l]); if (r >= 0 && r < right.length) out.correct[l] = r })
+      lidx.forEach(([rawL], l) => {
+        const newR = remapR.get(Number(q.correct?.[rawL]))
+        if (newR !== undefined) out.correct[l] = newR
+      })
     } else if (q.type === 'order') {
       out.opts = q.opts.map((s) => String(s || '').trim()).filter(Boolean)
       out.correct = out.opts.map((_, j) => j)
@@ -121,15 +131,22 @@ export default function TExamBuilder() {
  const [settings, setSettings] = useState({})
  const dirtyRef = useRef(false)
  const hydratedRef = useRef(false)
+ const serverQCountRef = useRef(0)
  const timerRef = useRef(null)
  const dragRef = useRef(null)
  const fileRef = useRef(null)
 
- /* ---------- بارگذاری ---------- */
+ /* ---------- بارگذاری ----------
+    [فیکس F33] فقط یک fetch — قبلاً mount دوبار /exams/:id می‌زد (دومی فقط برای tab)؛
+    refs در تغییر eid ریست می‌شوند تا سوالات آزمون B بی‌دلیل PUT نشوند */
  useEffect(() => {
+   hydratedRef.current = false
+   dirtyRef.current = false
+   serverQCountRef.current = 0
    req(`/exams/${eid}`).then((r) => {
      const e = r.exam
      setExam(e)
+     serverQCountRef.current = (e.questions || []).length
      setSettings({
        title: e.title, desc: e.desc || '', course_id: e.course_id || '', duration_min: e.duration_min,
        open_at: tsToLocal(e.open_at), close_at: tsToLocal(e.close_at),
@@ -138,7 +155,7 @@ export default function TExamBuilder() {
        sec_fullscreen: !!e.sec_fullscreen, sec_fast_submit: e.sec_fast_submit || 45,
        answer_pdf: e.answer_pdf || '',
      })
-     const mapped = e.mode === 'pdf' ? [] : e.questions.map((q) => ({
+     const mapped = e.mode === 'pdf' ? [] : e.questions.map((q) => withId({
        type: q.type, body: q.body, image: q.image, opts: Array.isArray(q.opts) ? (q.opts.length ? q.opts : ['', '']) : (q.type === 'match' ? { left: q.opts?.left?.length ? [...q.opts.left, ''] : ['', ''], right: q.opts?.right?.length ? [...q.opts.right, ''] : ['', ''] } : []),
        correct: q.correct == null ? (q.type === 'mcq' ? 0 : q.type === 'multi' ? [0] : q.type === 'blank' || q.type === 'short' ? [''] : q.type === 'match' ? {} : null) : q.correct,
        points: q.points, topic: q.topic, expl: q.expl,
@@ -146,33 +163,37 @@ export default function TExamBuilder() {
      /* سازنده همیشه با یک فرم آماده باز شود — بدون ذخیره خودکار چیز خالی */
      if (e.mode === 'builder' && !mapped.length) mapped.push(newQuestion('mcq'))
      setQuestions(mapped)
+     setTab(e.mode === 'pdf' ? 'pdf' : 'questions')
    }).catch((e) => toast(e.message || 'آزمون پیدا نشد', 'error'))
    req('/me/teaching').then((r) => setClasses(r.classes || [])).catch(() => {})
-   req(`/exams/${eid}`).then((r) => setTab(r.exam.mode === 'pdf' ? 'pdf' : 'questions')).catch(() => {})
  }, [eid])
 
- /* ---------- ذخیره خودکار سوال‌ها ---------- */
+ /* ---------- ذخیره خودکار سوال‌ها ----------
+    [فیکس F19] بولی موفقیت برمی‌گرداند؛ «خالی کردن همهٔ سوالات» حالا واقعاً
+    روی سرور هم پاک می‌شود (PUT آرایهٔ خالی) — قبلاً هرگز persist نمی‌شد */
  const saveQuestions = async () => {
-   if (!exam || exam.mode !== 'builder') return
+   if (!exam || exam.mode !== 'builder') return true
    setSaveState('saving')
    try {
-     /* سوال‌های کاملاً خالی (فرم placeholder) به سرور نمی‌روند — سرور آن‌ها را با ۴۰۰
-        رد می‌کرد و کل ذخیره (از جمله درون‌ریزی) شکست می‌خورد؛ فرم خالی فقط در UI می‌ماند */
      const sendable = questions.filter((q) => String(q.body || '').trim() || q.image)
-     if (!sendable.length) { dirtyRef.current = false; setSaveState('saved'); return }
+     if (!sendable.length && !serverQCountRef.current) { dirtyRef.current = false; setSaveState('saved'); return true }
      await req(`/exams/${eid}/questions`, { method: 'PUT', body: { questions: serializeQuestions(sendable) } })
+     if (!sendable.length) serverQCountRef.current = 0
+     else serverQCountRef.current = sendable.length
      dirtyRef.current = false
      setSaveState('saved')
+     return true
    } catch (e) {
      setSaveState('dirty')
      toast(e.message || 'ذخیره سوال‌ها ناموفق بود', 'error')
+     return false
    }
  }
  useEffect(() => {
    if (!exam || exam.mode !== 'builder') return
-   /* اولین hydrate و آزمون کاملاً خالی → ذخیره نکن */
+   /* اولین hydrate و آزمون کاملاً خالیِ بدون سوال سرور → ذخیره نکن */
    if (!hydratedRef.current) { hydratedRef.current = true; return }
-   if (!questions.some((q) => String(q.body || '').trim() || q.image)) return
+   if (!questions.some((q) => String(q.body || '').trim() || q.image) && !serverQCountRef.current) return
    dirtyRef.current = true
    setSaveState('dirty')
    clearTimeout(timerRef.current)
@@ -205,12 +226,17 @@ export default function TExamBuilder() {
    const c = [...qs]; const [it] = c.splice(from, 1); c.splice(to, 0, it); return c
  })
 
- /* درگ‌واندراپ لیست */
+ /* درگ‌واندراپ لیست
+    [فیکس F33] بعد از جابه‌جایی، active به اندیس جدید سوالِ درگ‌شده تنظیم می‌شود —
+    قبلاً ادیتور سوال دیگری را نشان می‌داد */
  const onDrop = (to) => {
    const from = dragRef.current
    dragRef.current = null
    if (from == null || from === to) return
    moveQ(from, to)
+   if (active === from) setActive(to)
+   else if (from < active && to >= active) setActive(active - 1)
+   else if (from > active && to <= active) setActive(active + 1)
  }
 
  /* ---------- درون‌ریزی از آزمون دیگر (بانک سوال) ---------- */
@@ -264,9 +290,21 @@ export default function TExamBuilder() {
        pages = [await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file) })]
      }
      const urls = []
-     for (const data of pages) {
-       const r = await req('/exams/upload', { method: 'POST', body: { name: 'page.jpg', data } })
-       urls.push(r.url)
+     try {
+      for (const data of pages) {
+        const r = await req('/exams/upload', { method: 'POST', body: { name: 'page.jpg', data } })
+        urls.push(r.url)
+      }
+     } catch (err) {
+      /* [فیکس F33] صفحات موفقِ قبل از شکست یتیم نمی‌مانند — ثبت می‌شوند */
+      if (urls.length) {
+        setExam((x) => ({ ...x, pdf_pages: [...(x.pdf_pages || []), ...urls] }))
+        await saveMeta({ pdf_pages: [...(exam?.pdf_pages || []), ...urls] })
+        setUploading(false)
+        return toast(`${faNum(urls.length)} صفحه آپلود شد؛ بقیهٔ صفحات ناموفق بود — دوباره تلاش کنید`, 'error')
+      }
+      setUploading(false)
+      return toast(err.message || 'آپلود ناموفق بود', 'error')
      }
      setExam((e) => ({ ...e, pdf_pages: [...(e.pdf_pages || []), ...urls] }))
      await saveMeta({ pdf_pages: [...(exam?.pdf_pages || []), ...urls] })
@@ -289,28 +327,37 @@ export default function TExamBuilder() {
    saveMeta({ answer_key: key })
  }
  const quickKey = (text) => {
-   /* ورود سریع: «1:3 2:1 3:4» یا «۱۲۳۴…» */
+   /* ورود سریع: «1:3 2:1 3:4» یا «۱۲۳۴…»
+      [فیکس F33] سقف گزینه‌ها/سوالات چک می‌شود — قبلاً «1:9» ذخیره و بعداً سرور drop می‌کرد */
+   const maxC = exam.choices_per_q || 4
+   const maxQ = exam.q_count || 400
    const key = {}
    const t = text.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim()
    if (/^[\d:\s]+$/.test(t) && t.includes(':')) {
-     for (const part of t.split(/\s+/)) { const [a, b] = part.split(':').map(Number); if (a >= 1 && b >= 1) key[a] = b - 1 }
+     for (const part of t.split(/\s+/)) {
+       const [a, b] = part.split(':').map(Number)
+       if (a >= 1 && b >= 1 && a <= maxQ && b <= maxC) key[a] = b - 1
+     }
    } else if (/^\d+$/.test(t)) {
-     [...t].forEach((ch, i) => { const v = Number(ch) - 1; if (v >= 0 && v < 6) key[i + 1] = v })
+     ;[...t].forEach((ch, i) => { const v = Number(ch) - 1; if (v >= 0 && v < maxC && i + 1 <= maxQ) key[i + 1] = v })
    } else return toast('قالب نامفهوم است — مثال: 1:3 2:1 یا ۳۱۴۲', 'error')
    setExam((e) => ({ ...e, answer_key: key }))
    saveMeta({ answer_key: key })
    toast('کلید اعمال شد')
  }
 
- /* ---------- انتشار ---------- */
+ /* ---------- انتشار ----------
+    [فیکس F19] نتیجهٔ ذخیره چک می‌شود — اگر PUT سوالات شکست بخورد، انتشار با
+    سووالات قدیمی سرور انجام نمی‌شود */
  const publish = async () => {
    if (exam.mode === 'builder') {
      for (let i = 0; i < questions.length; i++) {
        const err = qValidate(questions[i], i)
        if (err) { setTab('questions'); setActive(i); return toast(err, 'error') }
      }
-     if (!questions.length) return toast('حداقل یک سوال لازم است', 'error')
-     await saveQuestions()
+     if (!questions.filter((q) => String(q.body || '').trim() || q.image).length) return toast('حداقل یک سوال لازم است', 'error')
+     const okSave = await saveQuestions()
+     if (!okSave) { setTab('questions'); return toast('اول ذخیره سوال‌ها را کامل کنید، بعد منتشر کنید', 'error') }
    } else {
      if (!(exam.pdf_pages || []).length) { setTab('pdf'); return toast('برگه سوالات را آپلود کنید', 'error') }
      if (!exam.q_count) { setTab('pdf'); return toast('تعداد سوالات را مشخص کنید', 'error') }
@@ -368,7 +415,13 @@ export default function TExamBuilder() {
        <div className="exm-chips mb16">
         {TYPES.map((t) => (
          <button key={t.id} className={`exm-chip ${cur?.type === t.id ? 'on' : ''}`}
-          onClick={() => { if (cur?.type !== t.id) updQ(active, newQuestion(t.id)) }}>
+          onClick={() => {
+            if (cur?.type === t.id) return
+            /* [فیکس F18] تبدیل نوع، متن/بارم/موضوع/تصویر را حفظ و فقط شکل پاسخ را ریست می‌کند؛
+               با سوالِ دارای متن هم تأیید می‌گیرد — قبلاً کل سوال بی‌سروصدا پریده و روی سرور overwrite می‌شد */
+            if (String(cur?.body || '').trim() && !window.confirm('با تغییر نوع سوال، گزینه‌ها/کلید پاسخ ریست می‌شود (متن حفظ می‌شود). ادامه؟')) return
+            updQ(active, { ...newQuestion(t.id), body: cur?.body || '', image: cur?.image || '', points: cur?.points || 1, topic: cur?.topic || '', expl: cur?.expl || '' })
+          }}>
           {t.icon} {t.label}
          </button>
         ))}
@@ -391,7 +444,7 @@ export default function TExamBuilder() {
         )}
        </div>
        {questions.map((q, i) => (
-        <div key={i} className={`exm-qcard ${dragRef.current === i ? 'dragging' : ''} ${i === active ? 'active' : ''}`} draggable
+        <div key={q._id ?? i} className={`exm-qcard ${dragRef.current === i ? 'dragging' : ''} ${i === active ? 'active' : ''}`} draggable
           onDragStart={() => { dragRef.current = i }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(i)}
           onClick={() => setActive(i)}>
          <div className="row" style={{ alignItems: 'flex-start', gap: 10 }}>
@@ -581,7 +634,7 @@ export default function TExamBuilder() {
             try { const r = await req('/exams/upload', { method: 'POST', body: { name: f.name, data } }); setSettings((s) => ({ ...s, answer_pdf: r.url })); saveMeta({ answer_pdf: r.url }); toast('پاسخنامه تحلیلی آپلود شد') } catch (err) { toast(err.message || 'آپلود ناموفق بود', 'error') }
           }} />
         <button className="btn btn-ghost btn-sm" onClick={() => document.getElementById('anspdf').click()}><Icon name="upload" size={14} />آپلود پاسخنامه</button>
-        {settings.answer_pdf && <a className="btn btn-sm" style={{ background: 'rgba(52,211,153,.14)', color: '#34d399' }} href={settings.answer_pdf} target="_blank" rel="noreferrer" onClick={async (e) => { e.preventDefault(); window.open(await ticketedUrl(settings.answer_pdf), '_blank', 'noopener') }}>مشاهده فایل کنونی ✓</a>}
+        {settings.answer_pdf && <a className="btn btn-sm" style={{ background: 'rgba(52,211,153,.14)', color: '#34d399' }} href={settings.answer_pdf} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); /* [فیکس F33] window.open همگام قبل از await تا popup blocker بلاک نکند */ const w = window.open('', '_blank', 'noopener'); ticketedUrl(settings.answer_pdf).then((u) => { if (w) w.location = u; else window.open(u, '_blank', 'noopener') }).catch(() => w?.close()) }}>مشاهده فایل کنونی ✓</a>}
        </div></div>
      </div>
 

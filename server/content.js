@@ -9,6 +9,9 @@
 // =====================================================================
 import jwt from 'jsonwebtoken'
 import { db, JWT_SECRET } from './db.js'
+/* هسته مشترک پرداخت — قیمت‌گذاری/کد تخفیف/موجودی، مشترک با درگاه زرین‌پال (server/pay.js)
+   تا هر دو جریان خرید دقیقاً یک منطق قیمت داشته باشند */
+import { faToday, faNum, evaluateCoupon, priceCart, reserveStock, uniqueOrderCode } from './checkout-core.js'
 
 const now = () => Date.now()
 
@@ -125,6 +128,12 @@ CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, id);
 
 /* مهاجرت سبک — اطلاعات تماس خریدار (نام/موبایل/آدرس) روی ردیف‌های سفارش */
 try { db.exec('ALTER TABLE orders ADD COLUMN meta TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
+/* [فیکس F14] ستون پاسخ ادمین به تیکت — قبلاً متن پاسخ دور ریخته می‌شد */
+try { db.exec('ALTER TABLE tickets ADD COLUMN reply TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE tickets ADD COLUMN replied_at INTEGER') } catch { /* ستون هست */ }
+/* [فیکس F31] ستون شماره تماس برای پیام‌های فرم تماس — قبلاً required بود ولی
+   سرور ذخیره نمی‌کرد و پشتیبانی هرگز شماره را نمی‌دید */
+try { db.exec('ALTER TABLE contact_messages ADD COLUMN phone TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
 
 /* ---------------- هلپرهای نگاشت به شکل mock فرانت ---------------- */
 const j = (s, fb) => { try { return JSON.parse(s) } catch { return fb } }
@@ -150,17 +159,7 @@ const blogOut = (r) => ({
  read: r.read, icon: r.icon, color: r.color, excerpt: r.excerpt, body: r.body || '',
 })
 
-/* تاریخ شمسی امروز با ارقام ASCII و صفرپُر — «1405/08/12»
-   (قبلاً toLocaleDateString('fa-IR') ارقام فارسی برمی‌گرداند و مقایسه رشته‌ای
-   با تاریخ‌های ASCII جدول همیشه «منقضی» می‌داد؛ صفرپُری هم برای مقایسه
-   رشته‌ای درستِ «1405/8» vs «1405/10» لازم است) */
-const faToday = () => {
- try {
-  const parts = new Intl.DateTimeFormat('en-US-u-ca-persian', { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
-  const g = (t) => parts.find((x) => x.type === t)?.value || ''
-  return `${g('year')}/${g('month')}/${g('day')}`
- } catch { return '' }
-}
+/* faToday → server/checkout-core.js (مشترک با هسته پرداخت) */
 
 /* ---------------- Seed (فقط بار اول — تک‌منبع حقیقت همان mock است) ---------------- */
 function seed() {
@@ -342,6 +341,9 @@ export function registerContentRoutes(app) {
  app.post('/api/reviews', (req, res) => {
   const u = authUser(req)
   if (!u) return res.status(401).json({ error: 'برای ثبت نظر وارد حساب شوید' })
+  /* [فیکس B14] سقف نرخ ثبت نظر — قبلاً برای هر کاربر لاگین‌شده بی‌محدودیت بود (اسپم صف مودریشن) */
+  const rl = rateLimitSoft(`reviews|${u.id}`, 5, 10 * 60_000)
+  if (rl) return res.status(429).json({ error: 'تعداد نظرهای اخیر زیاد است — کمی بعد تلاش کنید' })
   const { kind, targetId, rating, text } = req.body || {}
   if (kind !== 'course' && kind !== 'product') return res.status(400).json({ error: 'نوع نظر نامعتبر است' })
   const okTarget = kind === 'course'
@@ -369,40 +371,29 @@ export function registerContentRoutes(app) {
     و سفارش را در جدول orders ثبت می‌کند (دیده‌شدن در «سفارش‌های من» و پنل).
     ================================================================ */
 
- /* روش‌های ارسال — منبع حقیقت سرور (قبلاً فقط در فرانت تعریف شده بود) */
- const SHIP_METHODS = {
-  prepaid:  { label: 'پست پیش‌کرایه', cost: 49_000, freeOver: 1_000_000 },
-  postpaid: { label: 'پس‌کرایه',      cost: 69_000, freeOver: null },
-  express:  { label: 'پیک فوری تهران', cost: 89_000, freeOver: null },
- }
-
- const faNum = (n) => String(n).replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[d])
- const money = (n) => faNum(Number(n || 0).toLocaleString('en-US')) + ' تومان'
-
- /** اعتبارسنجی کد تخفیف سمت سرور → { discount, label } یا null */
- const evaluateCoupon = (code, subtotal) => {
-  const c = db.prepare('SELECT * FROM coupons WHERE code = ?').get(String(code || '').trim().toUpperCase())
-  if (!c) return { error: 'کد تخفیف نامعتبر است' }
-  if (c.status !== 'active') return { error: 'این کد تخفیف فعال نیست' }
-  if (c.expires && c.expires !== '—') {
-   /* انقضای شمسی «1404/10/01» — مقایسه رشته‌ای تاریخ شمسی معتبر است (قالب یکسان) */
-   if (c.expires < faToday()) return { error: 'این کد تخفیف منقضی شده است' }
-  }
-  const discount = c.kind === 'percent'
-   ? Math.round((subtotal || 0) * Math.min(100, c.value) / 100)
-   : Math.min(c.value, subtotal || 0)
-  return {
-   discount: Math.max(0, discount),
-   label: c.kind === 'percent' ? `${faNum(c.value)}٪` : money(c.value),
-  }
- }
+ /* روش‌های ارسال / کد تخفیف / قیمت‌گذاری سبد → server/checkout-core.js
+    (مشترک با درگاه زرین‌پال تا هر دو جریان یک منطق قیمت داشته باشند) */
 
  app.post('/api/coupons/check', (req, res) => {
+  /* [فیکس B14] سقف نرخ چک کد تخفیف — قبلاً عمومی و بی‌محدودیت بود (بروت‌فورس کدها ممکن بود) */
+  const ip = req.ip || req.socket?.remoteAddress || 'x'
+  if (rateLimitSoft(`coupon|${ip}`, 20, 60_000)) return res.status(429).json({ error: 'تلاش‌های زیاد — چند لحظه بعد تلاش کنید' })
   const subtotal = Math.max(0, Number(req.body?.subtotal) || 0)
   const r = evaluateCoupon(req.body?.code, subtotal)
   if (r.error) return res.status(400).json({ error: r.error })
   res.json({ ok: true, discount: r.discount, label: r.label })
  })
+
+ /* سقف نرخ سبک محلی — الگوی rateLimit در index.js (این فایل قبل از آن ثبت نمی‌شود) */
+ const rlBuckets = new Map()
+ function rateLimitSoft(key, max, windowMs) {
+  const t = now()
+  const arr = (rlBuckets.get(key) || []).filter((x) => t - x < windowMs)
+  if (arr.length >= max) return true
+  arr.push(t); rlBuckets.set(key, arr)
+  if (rlBuckets.size > 4000) for (const [k, v] of rlBuckets) if (!v.length || t - v[v.length - 1] > windowMs) rlBuckets.delete(k)
+  return false
+ }
 
  const requireAuthC = (req, res, next) => {
   const u = authUser(req)
@@ -411,96 +402,46 @@ export function registerContentRoutes(app) {
   next()
  }
 
+ /* ثبت مستقیم سفارش (بدون درگاه — سبد رایگان یا حالت آزمایشی).
+    برای پرداخت واقعی زرین‌پال: POST /api/pay/zarinpal/start (server/pay.js) */
  app.post('/api/checkout', requireAuthC, (req, res) => {
-  const itemsIn = req.body?.items
-  if (!Array.isArray(itemsIn) || itemsIn.length < 1 || itemsIn.length > 50)
-   return res.status(400).json({ error: 'سبد خرید نامعتبر است' })
+  /* ۱) قیمت/تخفیف/ارسال/اطلاعات تماس — همه از هسته مشترک (منبع حقیقت DB) */
+  const p = priceCart(req.user, req.body)
+  if (p.error) return res.status(p.status || 400).json({ error: p.error })
+  const { lines: finalLines, subtotal, discount, ship, shipCost, total, meta, couponCode } = p
 
-  /* ۱) قیمت واقعی هر قلم از DB — قیمتِ ادعایی کلاینت هرگز ملاک نیست */
-  const lines = []
-  for (const it of itemsIn) {
-   const qty = Math.min(20, Math.max(1, Math.round(Number(it?.qty) || 1)))
-   const kind = it?.kind === 'course' ? 'course' : 'market'
-   if (kind === 'course') {
-    const c = db.prepare('SELECT id, title, price FROM courses WHERE id = ?').get(Number(it?.id) || 0)
-    if (!c) return res.status(400).json({ error: 'یکی از دوره‌های سبد دیگر موجود نیست' })
-    lines.push({ kind: 'course', id: String(c.id), title: c.title, price: c.price, qty })
-   } else {
-    const p = db.prepare('SELECT id, name, price, stock FROM products WHERE id = ?').get(String(it?.id || ''))
-    if (!p) return res.status(400).json({ error: 'یکی از محصولات سبد دیگر موجود نیست' })
-    if (p.stock < qty) return res.status(400).json({ error: `موجودی «${p.name}» کافی نیست (${faNum(p.stock)} عدد)` })
-    lines.push({ kind: 'market', id: p.id, title: p.name, price: p.price, qty, stock: p.stock })
-   }
-  }
-
-  const subtotal = lines.reduce((a, l) => a + l.price * l.qty, 0)
-  const marketSub = lines.filter((l) => l.kind === 'market').reduce((a, l) => a + l.price * l.qty, 0)
-  const hasMarket = marketSub > 0
-
-  /* ۲) تخفیف از جدول coupons — نه از رشته‌های هاردکد فرانت */
-  let discount = 0
-  const couponCode = String(req.body?.coupon || '').trim()
-  if (couponCode) {
-   const r = evaluateCoupon(couponCode, subtotal)
-   if (r.error) return res.status(400).json({ error: r.error })
-   discount = r.discount
-  }
-
-  /* ۳) هزینه ارسال — فقط برای کالای فیزیکی، با سقف رایگان خود روش */
-  const ship = SHIP_METHODS[String(req.body?.shipKey || 'prepaid')] || SHIP_METHODS.prepaid
-  const shipCost = !hasMarket ? 0 : (ship.freeOver && marketSub >= ship.freeOver ? 0 : ship.cost)
-  const total = Math.max(0, subtotal - discount) + shipCost
-
-  /* ۳) اطلاعات تماس خریدار (برای ارسال/فاکتور) — سقف‌دار و پاک‌شده */
-  const contact = req.body?.contact || {}
-  const meta = JSON.stringify({
-   name: String(contact.name || req.user.name || '').trim().slice(0, 80),
-   phone: String(contact.phone || '').trim().slice(0, 20),
-   email: String(contact.email || '').trim().slice(0, 120),
-   address: String(contact.address || '').trim().slice(0, 300),
-  })
-
-  /* ۴) کاهش سقف تخفیف به‌صورت متناسب روی هر قلم (مجموع دقیق حفظ می‌شود) */
-  const factor = subtotal > 0 ? (subtotal - discount) / subtotal : 1
-  let allocated = 0
-  const finalLines = lines.map((l, i) => {
-   if (i === lines.length - 1) {
-    const lineFinal = Math.max(0, subtotal - discount) - allocated
-    return { ...l, final: lineFinal }
-   }
-   const lineFinal = Math.round(l.price * l.qty * factor)
-   allocated += lineFinal
-   return { ...l, final: lineFinal }
-  })
-
-  /* ۵) کاهش موجودی و افزایش فروش کالاهای فیزیکی — قبل از ثبت سفارش تا
+  /* ۲) کاهش موجودی و افزایش فروش کالاهای فیزیکی — قبل از ثبت سفارش تا
         اگر موجودی وسط کار تمام شد، هیچ ردیف سفارش یتیم ثبت نشود (اتمیک‌بودن منطقی) */
-  const updStock = db.prepare('UPDATE products SET stock = stock - ?, sold = sold + ? WHERE id = ? AND stock >= ?')
-  for (const l of finalLines) {
-   if (l.kind === 'market' && updStock.run(l.qty, l.qty, l.id, l.qty).changes === 0)
-    return res.status(409).json({ error: `موجودی «${l.title}» همین الان تمام شد — سبد را به‌روز کنید` })
-  }
+  const stockErr = reserveStock(finalLines)
+  if (stockErr) return res.status(409).json({ error: stockErr })
 
-  /* ۶) کد سفارش یکتا + ثبت در orders (یک ردیف برای هر قلم + ردیف ارسال) */
-  let code
-  for (let tries = 0; tries < 10; tries++) {
-   const candidate = 'ORD-' + Math.floor(100000 + Math.random() * 900000)
-   if (!db.prepare('SELECT 1 AS x FROM orders WHERE code = ?').get(candidate)) { code = candidate; break }
-  }
+  /* ۳) کد سفارش یکتا + ثبت در orders (یک ردیف برای هر قلم + ردیف ارسال)
+        [فیکس B4] سبدِ رایگان (total===0) مستقیم 'paid' ثبت می‌شود — قبلاً 'pending'
+        می‌ماند و هیچ مسیری آن را paid نمی‌کرد: در «سفارش‌های من» برای همیشه
+        «در انتظار پرداخت» و موجودی رزروشده هرگز آزاد نمی‌شد */
+  const code = uniqueOrderCode()
   if (!code) return res.status(500).json({ error: 'خطا در تولید کد سفارش — دوباره تلاش کنید' })
+  const finalStatus = total === 0 ? 'paid' : 'pending'
 
-  const insOrder = db.prepare(`INSERT INTO orders (code, user_id, kind, item_id, title, amount, status, gateway, meta, created_at)
-   VALUES (?,?,?,?,?,?,'pending','test',?,?)`)
-  for (const l of finalLines) {
-   insOrder.run(code, req.user.id, l.kind, l.id, `${l.title} × ${faNum(l.qty)}`, l.final, meta, now())
+  const insOrder = db.prepare(`INSERT INTO orders (code, user_id, kind, item_id, title, amount, status, gateway, meta, created_at, qty)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+  try {
+   db.exec('BEGIN')
+   for (const l of finalLines) {
+    insOrder.run(code, req.user.id, l.kind, l.id, `${l.title}${l.qty > 1 ? ` × ${faNum(l.qty)}` : ''}`, l.final, finalStatus, 'test', meta, now(), l.qty || 1)
+   }
+   if (shipCost > 0) {
+    insOrder.run(code, req.user.id, 'shipping', 'ship', `هزینه ارسال (${ship.label})`, shipCost, finalStatus, 'test', meta, now(), 1)
+   }
+   if (couponCode) db.prepare('UPDATE coupons SET used = used + 1 WHERE code = ?').run(couponCode.toUpperCase())
+   db.exec('COMMIT')
+  } catch (e) {
+   try { db.exec('ROLLBACK') } catch { }
+   console.error('[checkout] insert failed:', e.message)
+   return res.status(500).json({ error: 'خطا در ثبت سفارش — دوباره تلاش کنید' })
   }
-  if (shipCost > 0) {
-   insOrder.run(code, req.user.id, 'shipping', 'ship', `هزینه ارسال (${ship.label})`, shipCost, meta, now())
-  }
 
-  if (couponCode) db.prepare('UPDATE coupons SET used = used + 1 WHERE code = ?').run(couponCode.toUpperCase())
-
-  res.json({ ok: true, code, subtotal, discount, shipCost, total, shipLabel: ship.label, items: finalLines.length })
+  res.json({ ok: true, code, subtotal, discount, shipCost, total, shipLabel: ship.label, items: finalLines.length, status: finalStatus })
  })
 
  /* ---------------- فرم تماس — قبلاً کاملاً جعلی بود (api.submitContact فقط delay+ok) ---------------- */
@@ -518,13 +459,20 @@ export function registerContentRoutes(app) {
   const email = String(req.body?.email || '').trim().slice(0, 120)
   const subject = String(req.body?.subject || '').trim().slice(0, 120)
   const body = String(req.body?.body || req.body?.message || req.body?.msg || '').trim().slice(0, 2000)
+  /* [فیکس F31] شماره تماس نرمال‌سازی و ذخیره می‌شود (ارقام فارسی هم پذیرفته) */
+  const fa2en = (s) => s.replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+  const phoneRaw = fa2en(String(req.body?.phone || '').trim())
+  const phone = phoneRaw.replace(/[^+\d]/g, '').slice(0, 16)
   if (!name) return res.status(400).json({ error: 'نام را وارد کنید' })
   /* ایمیل اختیاری است (فرم تماس شماره تماس هم دارد) — ولی اگر داده شود باید معتبر باشد */
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
   if (body.length < 10) return res.status(400).json({ error: 'متن پیام حداقل ۱۰ حرف باشد' })
+  if (phone && !/^(\+?98|0)?9\d{9}$/.test(phone.replace(/^\+98/, '0').replace(/^98/, '0'))) {
+   return res.status(400).json({ error: 'شماره تماس معتبر نیست' })
+  }
 
-  db.prepare('INSERT INTO contact_messages (name, email, subject, body, created_at) VALUES (?,?,?,?,?)')
-   .run(name, email || '—', subject, body, now())
+  db.prepare('INSERT INTO contact_messages (name, email, subject, body, phone, created_at) VALUES (?,?,?,?,?,?)')
+   .run(name, email || '—', subject, body, phone || '—', now())
   res.json({ ok: true })
  })
 
@@ -532,15 +480,40 @@ export function registerContentRoutes(app) {
  app.get('/api/contact', (req, res) => {
   const u = authUser(req)
   if (!u || u.role !== 'admin') return res.status(403).json({ error: 'فقط مدیر' })
-  const rows = db.prepare('SELECT id, name, email, subject, body, created_at AS createdAt FROM contact_messages ORDER BY id DESC LIMIT 200').all()
+  const rows = db.prepare('SELECT id, name, email, phone, subject, body, created_at AS createdAt FROM contact_messages ORDER BY id DESC LIMIT 200').all()
   res.json({ messages: rows })
  })
 
- /* ---------------- تیکت پشتیبانی واقعی — قبلاً submitTicket فقط id تصادفی برمی‌گرداند ---------------- */
+ /* [فیکس F31] خبرنامه واقعی — قبلاً Footer فقط توست موفقیت می‌زد و هیچ endpointای نبود.
+    ایمیل‌ها به‌صورت پیام تماس با موضوع «عضویت در خبرنامه» ثبت می‌شوند تا پشتیبانی ببیند. */
+ const newsBuckets = new Map()
+ app.post('/api/newsletter', (req, res) => {
+  const ip = req.ip || '؟'
+  const t = now()
+  const arr = (newsBuckets.get(ip) || []).filter((x) => t - x < 60_000)
+  if (arr.length >= 5) return res.status(429).json({ error: 'تلاش‌های زیاد — چند دقیقه بعد تلاش کنید' })
+  arr.push(t)
+  newsBuckets.set(ip, arr)
+
+  const email = String(req.body?.email || '').trim().toLowerCase().slice(0, 120)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر وارد کنید' })
+  const dup = db.prepare("SELECT id FROM contact_messages WHERE email = ? AND subject = 'عضویت در خبرنامه'").get(email)
+  if (dup) return res.json({ ok: true, message: 'این ایمیل قبلاً در خبرنامه ثبت شده است' })
+  db.prepare("INSERT INTO contact_messages (name, email, subject, body, created_at) VALUES (?,?,?,?,?)")
+   .run('مشترک خبرنامه', email, 'عضویت در خبرنامه', 'درخواست عضویت در خبرنامه مدرس‌یار', now())
+  res.json({ ok: true, message: 'عضویت شما در خبرنامه ثبت شد' })
+ })
+
+ /* [فیکس F31/F34] ستون بخش (دستهٔ تیکت) — قبلاً سلکت «بخش» در فرم نبود در payload
+   و سرور هم ذخیره نمی‌کرد؛ پشتیبانی هرگز دستهٔ تیکت را نمی‌دید */
+try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'') } catch { /* ستون هست */ }
+
+/* ---------------- تیکت پشتیبانی واقعی — قبلاً submitTicket فقط id تصادفی برمی‌گرداند ---------------- */
  app.post('/api/tickets', requireAuthC, (req, res) => {
   const subject = String(req.body?.subject || '').trim().slice(0, 120)
   const body = String(req.body?.body || '').trim().slice(0, 2000)
   const priority = ['بالا', 'متوسط', 'کم'].includes(req.body?.priority) ? req.body.priority : 'متوسط'
+  const category = String(req.body?.category || 'سایر').slice(0, 40)
   if (subject.length < 3) return res.status(400).json({ error: 'موضوع تیکت حداقل ۳ حرف باشد' })
   if (body.length < 10) return res.status(400).json({ error: 'متن تیکت حداقل ۱۰ حرف باشد' })
 
@@ -551,16 +524,19 @@ export function registerContentRoutes(app) {
   }
   if (!code) return res.status(500).json({ error: 'خطا در تولید کد تیکت — دوباره تلاش کنید' })
 
-  db.prepare('INSERT INTO tickets (code, user_id, subject, body, priority, status, created_at) VALUES (?,?,?,?,?,?,?)')
-   .run(code, req.user.id, subject, body, priority, 'open', now())
+  db.prepare('INSERT INTO tickets (code, user_id, subject, body, priority, category, status, created_at) VALUES (?,?,?,?,?,?,?,?)')
+   .run(code, req.user.id, subject, body, priority, category, 'open', now())
   res.json({ ok: true, ticket: { id: code, subject, date: faToday(), status: 'open', replies: 0 } })
  })
 
  app.get('/api/me/tickets', requireAuthC, (req, res) => {
-  const rows = db.prepare('SELECT code, subject, body, status, priority, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.user.id)
+  const rows = db.prepare('SELECT code, subject, body, status, priority, category, reply, replied_at, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.user.id)
   res.json({ tickets: rows.map((t) => ({
    id: t.code, subject: t.subject, date: new Date(t.created_at).toLocaleDateString('fa-IR'),
-   status: t.status === 'open' ? 'open' : t.status, replies: 0, priority: t.priority,
+   status: t.status === 'open' ? 'open' : t.status, replies: t.reply ? 1 : 0, priority: t.priority,
+   category: t.category || 'سایر',
+   /* [فیکس F14] پاسخ واقعی ادمین برگردانده می‌شود — قبلاً تاریخچه جعلی هاردکد بود */
+   reply: t.reply || '', repliedAt: t.replied_at || null,
   })) })
  })
 
@@ -598,21 +574,56 @@ export function registerContentRoutes(app) {
 
  /* همه تیکت‌ها برای پنل پشتیبانی ادمین */
  app.get('/api/admin/tickets', requireAdminC, (req, res) => {
-  const rows = db.prepare(`SELECT t.code, t.subject, t.body, t.priority, t.status, t.created_at AS createdAt, u.name AS user
+  const rows = db.prepare(`SELECT t.code, t.subject, t.body, t.priority, t.status, t.reply, t.replied_at AS repliedAt, t.created_at AS createdAt, u.name AS user
     FROM tickets t LEFT JOIN users u ON u.id = t.user_id ORDER BY t.id DESC LIMIT 200`).all()
   res.json({ tickets: rows.map((t) => ({
    id: t.code, user: t.user || '—', subject: t.subject, msg: t.body,
    priority: t.priority, status: t.status, date: new Date(t.createdAt).toLocaleDateString('fa-IR'),
+   reply: t.reply || '', repliedAt: t.repliedAt || null,
   })) })
  })
 
- /* تغییر وضعیت تیکت (باز → پاسخ‌داده → بسته) — ادمین */
+ /* تغییر وضعیت تیکت (باز → پاسخ‌داده → بسته) + ثبت متن پاسخ واقعی — ادمین
+    [فیکس F14] قبلاً فقط status عوض می‌شد و متن پاسخ دور ریخته می‌شد */
  app.post('/api/admin/tickets/:code', requireAdminC, (req, res) => {
   const st = String(req.body?.status || '')
   if (!['open', 'answered', 'closed'].includes(st)) return res.status(400).json({ error: 'وضعیت نامعتبر است' })
-  const info = db.prepare('UPDATE tickets SET status = ? WHERE code = ?').run(st, String(req.params.code || ''))
-  if (!info.changes) return res.status(404).json({ error: 'تیکت پیدا نشد' })
+  const reply = String(req.body?.reply ?? '').trim().slice(0, 2000)
+  const code = String(req.params.code || '')
+  const t = db.prepare('SELECT code, user_id FROM tickets WHERE code = ?').get(code)
+  if (!t) return res.status(404).json({ error: 'تیکت پیدا نشد' })
+  if (st === 'answered' && !reply) return res.status(400).json({ error: 'متن پاسخ خالی است' })
+  if (reply) db.prepare('UPDATE tickets SET status = ?, reply = ?, replied_at = ? WHERE code = ?').run(st, reply, now(), code)
+  else db.prepare('UPDATE tickets SET status = ? WHERE code = ?').run(st, code)
   res.json({ ok: true, status: st })
+ })
+
+ /* ================================================================
+    [فیکس F15] کوپن‌ساز ادمین واقعی — قبلاً AFinance فقط به state محلی
+    اضافه می‌کرد و کدِ ساخته‌شده در پرداخت «نامعتبر» می‌خورد
+    ================================================================ */
+ app.get('/api/admin/coupons', requireAdminC, (req, res) => {
+  const rows = db.prepare('SELECT code, kind, value, status, expires, used FROM coupons ORDER BY rowid DESC LIMIT 200').all()
+  res.json({ coupons: rows })
+ })
+ app.post('/api/admin/coupons', requireAdminC, (req, res) => {
+  const code = String(req.body?.code || '').trim().toUpperCase()
+  const kind = req.body?.kind === 'amount' ? 'amount' : 'percent'
+  const value = Math.max(0, Math.min(100_000_000, Math.round(Number(req.body?.value) || 0)))
+  if (!/^[A-Z0-9-]{3,24}$/.test(code)) return res.status(400).json({ error: 'کد باید ۳ تا ۲۴ حرف انگلیسی/عدد باشد' })
+  if (kind === 'percent' && (value < 1 || value > 90)) return res.status(400).json({ error: 'درصد تخفیف باید بین ۱ تا ۹۰ باشد' })
+  if (kind === 'amount' && value < 1000) return res.status(400).json({ error: 'مبلغ تخفیف حداقل ۱۰۰۰ تومان است' })
+  const status = req.body?.status === 'inactive' ? 'inactive' : 'active'
+  const expires = String(req.body?.expires || '').slice(0, 10)
+  db.prepare(`INSERT INTO coupons (code, kind, value, status, expires, used) VALUES (?,?,?,?,?,0)
+    ON CONFLICT(code) DO UPDATE SET kind=excluded.kind, value=excluded.value, status=excluded.status, expires=excluded.expires`)
+   .run(code, kind, value, status, expires)
+  res.json({ ok: true, coupon: { code, kind, value, status, expires } })
+ })
+ app.delete('/api/admin/coupons/:code', requireAdminC, (req, res) => {
+  const info = db.prepare('DELETE FROM coupons WHERE code = ?').run(String(req.params.code || '').toUpperCase())
+  if (!info.changes) return res.status(404).json({ error: 'کد تخفیف پیدا نشد' })
+  res.json({ ok: true })
  })
 
  /* کاربران واقعی سیستم — قبلاً پنل «مدیریت کاربران» فقط ردیف‌های موک ثابت نشان می‌داد */
@@ -622,9 +633,9 @@ export function registerContentRoutes(app) {
      (SELECT COUNT(*) FROM enrollments e WHERE e.user_id = u.id) AS enrollCount,
      (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.status != 'refunded') AS ordersCount,
      (SELECT COALESCE(SUM(o.amount), 0) FROM orders o WHERE o.user_id = u.id AND o.status = 'paid') AS spent
-   FROM users u ${q ? 'WHERE u.name LIKE ? OR u.email LIKE ?' : ''}
+   FROM users u ${q ? "WHERE u.name LIKE ? ESCAPE '\\' OR u.email LIKE ? ESCAPE '\\'" : ''}
    ORDER BY u.created_at DESC LIMIT 300`)
-   .all(...(q ? [`%${q}%`, `%${q}%`] : []))
+   .all(...(q ? [`%${q.replace(/[\\%_]/g, '\\$&')}%`, `%${q.replace(/[\\%_]/g, '\\$&')}%`] : []))
   res.json({ users: rows.map((r) => ({
    id: r.id, name: r.name, email: r.email, role: r.role, title: r.title,
    courses: r.role === 'teacher'

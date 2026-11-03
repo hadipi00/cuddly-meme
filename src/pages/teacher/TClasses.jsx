@@ -64,6 +64,8 @@ export default function TClasses() {
  }
 
  const remove = async (row) => {
+ /* [فیکس F33] حذف کلاس cascade دارد — confirm اضافه شد */
+ if (!window.confirm(`کلاس «${row.title}» و همهٔ ثبت‌نامی‌هایش از سرور حذف شود؟ این عمل قابل بازگشت نیست.`)) return
  try {
  await req(`/classes/${row.id}`, { method: 'DELETE' })
  toast('کلاس از سرور حذف شد', 'info')
@@ -105,14 +107,19 @@ export default function TClasses() {
  filters={[{ key: 'day', label: 'روز', options: DAYS, match: (r, v) => DAYS[r.day] === v }]}
  onAdd={() => setModal('new')}
  addLabel="کلاس جدید"
- actions={(row) => (
+ actions={(row) => {
+ /* [فیکس F33] ردیف‌های دمو (بدون سرور) دکمهٔ ویرایش/حذف فعال ندارند —
+    قبلاً PATCH/DELETE روی id قلابی مثل tc1 خطای ۴۰۴ می‌داد */
+ const isMock = row.source === 'سامانه'
+ return (
  <>
- <button className="icon-btn" title="مدیریت کلاس — ضبط‌ها و فایل‌ها" onClick={() => nav(`/panel/teacher/classes/${row.id}`)}><Icon name="settings" /></button>
- <button className="icon-btn" title="ویرایش" onClick={() => setModal(row)}><Icon name="edit" /></button>
- <button className="icon-btn" title="حذف" onClick={() => remove(row)}><Icon name="trash" /></button>
+ <button className="icon-btn" title="مدیریت کلاس — ضبط‌ها و فایل‌ها" onClick={() => nav(`/panel/teacher/classes/${row.id}`)} disabled={isMock} style={isMock ? { opacity: 0.45 } : undefined}><Icon name="settings" /></button>
+ <button className="icon-btn" title={isMock ? 'در حالت دمو قابل ویرایش نیست' : 'ویرایش'} onClick={() => !isMock && setModal(row)} disabled={isMock} style={isMock ? { opacity: 0.45 } : undefined}><Icon name="edit" /></button>
+ <button className="icon-btn" title={isMock ? 'در حالت دمو قابل حذف نیست' : 'حذف'} onClick={() => !isMock && remove(row)} disabled={isMock} style={isMock ? { opacity: 0.45 } : undefined}><Icon name="trash" /></button>
  <button className="icon-btn" title="شروع کلاس زنده" onClick={() => nav('/panel/teacher/live')}><Icon name="video" /></button>
  </>
- )}
+ )
+}}
  />
  </div>
 

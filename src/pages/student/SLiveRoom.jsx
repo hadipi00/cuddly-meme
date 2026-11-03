@@ -41,13 +41,23 @@ export default function SLiveRoom() {
    return () => { alive = false }
  }, [classId])
 
- /* خرید / ثبت‌نام کلاس */
+ /* خرید / ثبت‌نام کلاس — [فیکس F1] کلاس پولی حتماً با مسیر درگاه (gateway:'zarinpal')
+    قبلاً بدون بدنه صدا زده می‌شد و در بک‌اند مسیر «سفارش آزمایشی paid» فعال می‌شد
+    یعنی ثبت‌نام رایگان در کلاس پولی. حالا مثل LiveClasses.jsx درگاه باز می‌شود */
  const buy = async () => {
    if (!user) { nav('/auth'); return }
    if (buying) return
    setBuying(true)
    try {
-     const r = await req(`/classes/${classId}/purchase`, { method: 'POST' })
+     const r = cls?.price
+       ? await req(`/classes/${classId}/purchase`, { method: 'POST', body: { gateway: 'zarinpal' } })
+       : await req(`/classes/${classId}/purchase`, { method: 'POST' })
+     if (r.pending && r.redirectUrl) {
+       /* مسیر درگاه (mock یا زرین‌پال واقعی) — خروج از صفحه و رفتن به درگاه */
+       toast('در حال انتقال به درگاه پرداخت…')
+       window.location.href = r.redirectUrl
+       return
+     }
      setCls((c) => ({ ...c, iAmIn: true, enrolled: r.enrolled || c.enrolled }))
      if (r.order) toast(`پرداخت با موفقیت انجام شد — کد سفارش ${r.order.code}`)
      else toast('ثبت‌نام شما در کلاس انجام شد')
@@ -132,7 +142,9 @@ export default function SLiveRoom() {
        </div>
        <h2 style={{ fontSize: 18 }}>جلسه «{cls.title}» به پایان رسید</h2>
        <p className="muted small mt8">
-         مدت برگزاری: {fmtDuration(now - session.startedAt)} — ضبط جلسه و فایل‌ها در بخش «کلاس‌های من → جلسات برگزارشده» منتشر می‌شود.
+         {/* [فیکس F2] مدت واقعی از endedAt−startedAt سرور — قبلاً now−startedAt بود و
+            اگر startedAt معتبر نبود «چند ثانیه» نمایش داده می‌شد */}
+        مدت برگزاری: {session?.endedAt && session?.startedAt ? fmtDuration(session.endedAt - session.startedAt) : '—'} — ضبط جلسه و فایل‌ها در بخش «کلاس‌های من → جلسات برگزارشده» منتشر می‌شود.
        </p>
        <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
          <Link to="/panel/student/schedule" className="btn btn-ghost">برنامه هفتگی</Link>
@@ -182,9 +194,10 @@ export default function SLiveRoom() {
      <p className="muted small">تا شروع این جلسه — به محض شروع توسط مدرس، دکمه ورود فعال می‌شود.</p>
 
      <div className="row g8 mt24" style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
-       <button className="btn btn-ghost" onClick={() => { toast('یادآوری ۱۵ دقیقه قبل از شروع کلاس برای شما فعال شد') }}>
-         <BellRing size={16} /> یادآوری بگذار
-       </button>
+      {/* [فیکس F3] دکمهٔ قلابی — قبلاً فقط توست موفقیت می‌زد بدون هیچ یادآوری واقعی */}
+      <button className="btn btn-ghost" disabled title="این قابلیت به‌زودی فعال می‌شود">
+        <BellRing size={16} /> یادآوری بگذار (به‌زودی)
+      </button>
        <Link to="/panel/student/schedule" className="btn btn-primary">برنامه هفتگی من</Link>
      </div>
    </div>

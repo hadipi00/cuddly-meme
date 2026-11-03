@@ -38,7 +38,7 @@ export default function Home() {
  useEffect(() => {
   let alive = true
   req('/classes').then((r) => {
-   if (!alive || !r.classes?.length) return
+   if (!alive || !Array.isArray(r.classes)) return // [فیکس F21]
    setServerLives(r.classes.map((c) => ({
     id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
     teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,

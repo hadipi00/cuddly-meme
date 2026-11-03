@@ -18,9 +18,12 @@ import { db, JWT_SECRET, publicUser, classRow } from './db.js'
 import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
+import { registerPayRoutes, startZarinPayment, PAYMENT_MODE, reqOrigin } from './pay.js'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import crypto from 'node:crypto'
+const { timingSafeEqual } = crypto
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -65,8 +68,9 @@ const validStart = (s) => {
 }
 
 /* ---------------- هلپرهای احراز هویت ---------------- */
-/* توکن ۱۰ ساله — سشن برای همیشه ماندگار است و با هر /auth/me هم تمدید می‌شود */
-const TOKEN_TTL = '3650d'
+/* [فیکس B12] توکن ۱۰ ساله → ۷ روز؛ سشن با هر /auth/me تمدید می‌شود (اسلایدینگ).
+   کاربر فعال هرگز به دیوار انقضا نمی‌خورد ولی توکنِ مسروقه حداکثر ۷ روز اعتبار دارد */
+const TOKEN_TTL = '7d'
 const signToken = (u) => jwt.sign({ uid: u.id, role: u.role }, JWT_SECRET, { expiresIn: TOKEN_TTL })
 
 function authUser(req) {
@@ -108,7 +112,8 @@ app.post('/api/auth/register', rateLimit(5, 60_000), (req, res) => {
   const id = 'u-' + randomId()
   const colors = ['grad-0', 'grad-1', 'grad-2', 'grad-3', 'grad-4', 'grad-5']
   db.prepare('INSERT INTO users (id, name, email, password_hash, role, color, title, created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(id, String(name).trim(), String(email).toLowerCase(), bcrypt.hashSync(String(password), 8),
+    /* [فیکس B18] bcrypt cost از ۸ به ۱۰ — استاندارد OWASP؛ سخت‌افزار امروزی cost ۸ را سریع هش می‌کند */
+    .run(id, String(name).trim(), String(email).toLowerCase(), bcrypt.hashSync(String(password), 10),
       'student', colors[Math.floor(Math.random() * colors.length)], 'دانش‌آموز', now())
 
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id)
@@ -173,7 +178,10 @@ app.post('/api/classes', requireRole('teacher', 'admin'), (req, res) => {
   /* ساعت با ارقام فارسی هم پذیرفته و استاندارد می‌شود؛ روز حتماً ۰..۶ */
   const startNorm = validStart(start)
   if (!startNorm) return res.status(400).json({ error: 'ساعت کلاس معتبر نیست — قالب HH:MM' })
-  const dayNorm = Math.min(6, Math.max(0, Number(day) || 0))
+  /* [فیکس B19] day نامعتبر (مثل ۹۹ یا -۱) به‌جای clamp بی‌صدای شنبه، ۴۰۰ برمی‌گردد */
+  const dayNum = Number(day)
+  if (!Number.isInteger(dayNum) || dayNum < 0 || dayNum > 6) return res.status(400).json({ error: 'روز هفته باید بین ۰ (شنبه) تا ۶ (جمعه) باشد' })
+  const dayNorm = dayNum
   /* ادمین می‌تواند کلاس را به نام یک مدرس واقعی بسازد (teacherId) — مدرس فقط برای خودش */
   let ownerId = req.user.id
   if (req.user.role === 'admin' && req.body?.teacherId) {
@@ -256,10 +264,18 @@ app.post('/api/classes/:id/enroll', requireAuth, (req, res) => {
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (c.status === 'ended') return res.status(400).json({ error: 'این کلاس برگزار شده است' })
   if (c.price > 0) return res.status(402).json({ error: 'این کلاس پولی است — ابتدا خرید/ثبت‌نام انجام دهید', needPurchase: true })
-  const cnt = db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE class_id = ?').get(c.id).n + c.base_enrolled
-  if (cnt >= c.cap) return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
-  db.prepare('INSERT OR IGNORE INTO enrollments (class_id, user_id, created_at) VALUES (?,?,?)').run(c.id, req.user.id, now())
-  res.json({ ok: true, enrolled: cnt + 1 })
+  /* [فیکس B9] چک+INSERT اتمیک: ظرفیت داخل همان INSERT شرطی سنجیده می‌شود تا
+     دو درخواست هم‌زمان هر دو از چک رد شوند و هر دو ثبت‌نام کنند (race) */
+  const ins = db.prepare(`INSERT INTO enrollments (class_id, user_id, created_at)
+    SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM enrollments WHERE class_id = ? AND user_id = ?)
+      AND (SELECT COUNT(*) FROM enrollments WHERE class_id = ?) + ? < ?`)
+    .run(c.id, req.user.id, now(), c.id, req.user.id, c.id, c.base_enrolled, c.cap)
+  if (ins.changes === 0) {
+    const already = db.prepare('SELECT 1 AS x FROM enrollments WHERE class_id = ? AND user_id = ?').get(c.id, req.user.id)
+    if (already) return res.json({ ok: true, enrolled: enrolledCount(c.id) })
+    return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
+  }
+  res.json({ ok: true, enrolled: enrolledCount(c.id) })
 })
 
 app.delete('/api/classes/:id/enroll', requireAuth, (req, res) => {
@@ -276,7 +292,7 @@ const isEnrolled = (classId, userId) =>
 const classAccess = (c, u) => u && (u.role === 'admin' || c.teacher_id === u.id || isEnrolled(c.id, u.id))
 
 /* ---------------- خرید / ثبت‌نام کلاس (گیت ورود به اتاق) ---------------- */
-app.post('/api/classes/:id/purchase', requireAuth, (req, res) => {
+app.post('/api/classes/:id/purchase', requireAuth, async (req, res) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (c.status === 'ended') return res.status(400).json({ error: 'این کلاس برگزار شده است' })
@@ -284,17 +300,36 @@ app.post('/api/classes/:id/purchase', requireAuth, (req, res) => {
   const cnt = db.prepare('SELECT COUNT(*) AS n FROM enrollments WHERE class_id = ?').get(c.id).n + c.base_enrolled
   if (cnt >= c.cap) return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
 
-  let order = null
-  if (c.price > 0) {
-    // درگاه واقعی (زرین‌پال) در مرحله بعد — فعلاً ثبت پرداخت آزمایشی برای تست کامل جریان خرید
-    const code = 'MY-' + Date.now().toString(36).toUpperCase()
-    const info = db.prepare(`INSERT INTO orders (code, user_id, kind, item_id, title, amount, status, gateway, created_at)
-      VALUES (?,?,?,?,?,?,'paid','test',?)`)
-      .run(code, req.user.id, 'class', c.id, c.title, c.price, now())
-    order = db.prepare('SELECT code, amount, status, gateway, created_at FROM orders WHERE id = ?').get(info.lastInsertRowid)
+  /* پرداخت واقعی با زرین‌پال — ثبت‌نام نهایی فقط بعد از تأیید callback انجام
+     می‌شود (fulfill در server/pay.js)؛ تا قبل از آن ظرفیت هم رزرو نمی‌ماند */
+  if (c.price > 0 && req.body?.gateway === 'zarinpal') {
+    if (PAYMENT_MODE !== 'mock' && !process.env.PUBLIC_BASE_URL)
+      return res.status(500).json({ error: 'PUBLIC_BASE_URL تنظیم نشده — درگاه نمی‌تواند به سایت برگردد' })
+    const r = await startZarinPayment({
+      user: req.user,
+      lines: [{ kind: 'class', id: c.id, title: c.title, price: c.price, qty: 1, final: c.price }],
+      total: c.price,
+      description: `ثبت‌نام کلاس «${c.title}»`,
+      meta: JSON.stringify({ name: req.user.name, phone: '', email: '' }),
+      origin: reqOrigin(req),
+    })
+    if (r.error) return res.status(502).json({ error: r.error })
+    return res.json({ ok: true, pending: true, code: r.code, total: c.price, redirectUrl: r.redirectUrl, mode: PAYMENT_MODE })
   }
-  db.prepare('INSERT OR IGNORE INTO enrollments (class_id, user_id, created_at) VALUES (?,?,?)').run(c.id, req.user.id, now())
-  res.json({ ok: true, already: false, order, enrolled: cnt + 1, price: c.price })
+
+  /* [فیکس B1] کلاس پولی فقط از مسیر درگاه قابل خرید است — بدون gateway (یا با
+     هر مقدار دیگر) ثبت‌نام ممنوع؛ قبلاً اینجا سفارش 'paid' آزمایشی ساخته می‌شد
+     و کلاینت بدون هیچ پرداختی ثبت‌نام می‌شد = دور زدن کامل پرداخت */
+  if (c.price > 0)
+    return res.status(400).json({ error: 'این کلاس پولی است — پرداخت با درگاه الزامی است', needPurchase: true, gateway: PAYMENT_MODE })
+
+  /* [فیکس B9] ثبت‌نام اتمیک با چک ظرفیت داخل INSERT شرطی (کلاس رایگان) */
+  const ins = db.prepare(`INSERT INTO enrollments (class_id, user_id, created_at)
+    SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM enrollments WHERE class_id = ? AND user_id = ?)
+      AND (SELECT COUNT(*) FROM enrollments WHERE class_id = ?) + ? < ?`)
+    .run(c.id, req.user.id, now(), c.id, req.user.id, c.id, c.base_enrolled, c.cap)
+  if (ins.changes === 0 && !isEnrolled(c.id, req.user.id)) return res.status(400).json({ error: 'ظرفیت کلاس تکمیل است' })
+  res.json({ ok: true, already: false, enrolled: enrolledCount(c.id), price: c.price })
 })
 
 /** لیست خریدهای کاربر (برای «دوره‌های من» / سفارش‌ها) */
@@ -333,6 +368,13 @@ app.post('/api/classes/:id/board', requireAuth, (req, res) => {
   if (!Array.isArray(points) || points.length < 2 || points.length > 800) return res.status(400).json({ error: 'نقاط نامعتبر است' })
   if (points.some((p) => !Array.isArray(p) || p.length !== 2 || !Number.isFinite(p[0]) || !Number.isFinite(p[1])))
     return res.status(400).json({ error: 'نقاط نامعتبر است' })
+  /* [فیکس B15] سقف نرخ رسم: هر کاربر حداکثر ۴۰ استروک ذخیره‌شده در ۱۰ ثانیه —
+     قبلاً هر عضو کلاس می‌توانست بدون محدودیت، جدول board_strokes را منفجر کند */
+  const blKey = `board|${c.id}|${req.user.id}`
+  const t = now()
+  const arr = (rateBuckets.get(blKey) || []).filter((x) => t - x < 10_000)
+  if (arr.length >= 40) return res.status(429).json({ error: 'سرعت رسم خیلی زیاد است' })
+  arr.push(t); rateBuckets.set(blKey, arr)
   const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(String(color || '')) ? String(color) : '#0f172a'
   const safeSize = Math.min(40, Math.max(1, Number(size) || 4))
   const safeTool = tool === 'erase' ? 'erase' : 'pen'
@@ -566,17 +608,21 @@ app.get('/api/classes/:id/state', (req, res) => {
      (قبلاً نام تک‌تک حاضران کلاس پولی به هر بازدیدکننده‌ای لو می‌رفت) */
   const u = authUser(req)
   const member = u ? classAccess(c, u) : false
+  /* [فیکس B13] liveParticipants یک بار صدا زده می‌شود — قبلاً دو کوئری JOIN کامل
+     با هر poll هر حاضر (هر ۲.۵ ثانیه به‌ازای هر کاربر اتاق) اجرا می‌شد */
+  const parts = member ? liveParticipants(c.id) : []
   res.json({
     id: c.id, status: c.status, startedAt: c.started_at, endedAt: c.ended_at,
     boardOpen: !!c.board_open, boardLocked: !!c.board_locked,
-    participants: member ? liveParticipants(c.id) : [],
-    participantsCount: liveParticipants(c.id).length,
+    participants: parts,
+    participantsCount: parts.length,
     serverTime: now(),
   })
 })
 
-/** نمای کلی برای poller فرانت — همه کلاس‌های live/ended اخیر */
-app.get('/api/live/overview', (req, res) => {
+/** نمای کلی برای poller فرانت — همه کلاس‌های live/ended اخیر
+ *  [فیکس B20] قبلاً کاملاً عمومی بود؛ حالا فقط کاربر لاگین‌شده */
+app.get('/api/live/overview', requireAuth, (req, res) => {
   const rows = db.prepare(`SELECT id, status, started_at, ended_at FROM classes
     WHERE status != 'scheduled' OR (started_at IS NOT NULL AND started_at > ?)
     ORDER BY COALESCE(started_at, 0) DESC LIMIT 50`).all(now() - 7 * 86400_000)
@@ -659,6 +705,26 @@ app.get('/api/me/teaching', requireRole('teacher', 'admin'), (req, res) => {
 /* ---------------- SSE — رویدادهای لحظه‌ای (چت/تخته/وضعیت) ---------------- */
 const sseClients = new Map() // classId → Set(res)
 
+/* [فیکس B8] تیکت کوتاه‌عمر (۲ دقیقه) مخصوص SSE — به‌جای توکن ده‌ساله در query string.
+   EventSource هدر نمی‌فرستد؛ توکن کامل JWT در URL در access-log/پروکسی/history باقی
+   می‌ماند. تیکت فقط برای همین کار، بایند به کاربر (فرمت exp.uid.sig)، بعد از ۲ دقیقه بی‌ارزش است */
+const SSE_TICKET_SECRET = randomId() + randomId() + randomId()
+const sseTicketSign = (exp, uid) => crypto.createHmac('sha256', SSE_TICKET_SECRET).update(`${exp}.${uid}`).digest('hex')
+app.get('/api/sse-ticket', requireAuth, (req, res) => {
+  const exp = now() + 2 * 60_000
+  res.json({ st: `${exp}.${req.user.id}.${sseTicketSign(exp, req.user.id)}`, exp })
+})
+const sseTicketUser = (st) => {
+  const parts = String(st || '').split('.')
+  if (parts.length !== 3) return null
+  const [exp, uid, sig] = parts
+  if (!/^[0-9]+$/.test(exp) || Number(exp) < now()) return null
+  if (!/^[a-z0-9-]{1,40}$/i.test(uid)) return null
+  const want = sseTicketSign(exp, uid)
+  if (sig.length !== want.length) return null
+  try { return timingSafeEqual(Buffer.from(sig), Buffer.from(want)) ? uid : null } catch { return null }
+}
+
 function broadcast(classId, event) {
   const set = sseClients.get(classId)
   if (!set) return
@@ -666,12 +732,19 @@ function broadcast(classId, event) {
   for (const r of set) { try { r.write(payload) } catch { set.delete(r) } }
 }
 
-/** اتصال SSE — توکن از کوئری چون EventSource هدر نمی‌فرستد؛
+/** اتصال SSE — [فیکس B8] ترجیحاً با تیکت کوتاه‌عمر (?st=exp.uid.sig)؛
+ *  توکن کامل فقط به‌عنوان fallback می‌ماند تا کلاینت‌های قدیمی نشکنند.
  *  بدون احراز هویت، رویدادهای خصوصی کلاس (چت/تخته/اجازه‌ها) به هر کسی لو می‌رفت */
 app.get('/api/classes/:id/events', (req, res) => {
   const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
   if (!c) return res.status(404).end()
-  const u = authUser({ headers: { authorization: req.query.token ? `Bearer ${req.query.token}` : '' } })
+  let u = null
+  if (req.query.st) {
+    const uid = sseTicketUser(req.query.st)
+    if (uid) u = db.prepare('SELECT * FROM users WHERE id = ?').get(uid)
+  }
+  if (!u && req.query.token)
+    u = authUser({ headers: { authorization: `Bearer ${req.query.token}` } })
   if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
   if (!classAccess(c, u)) return res.status(403).json({ error: 'فقط اعضای کلاس' })
 
@@ -764,7 +837,13 @@ app.post('/api/classes/:id/media/up', requireAuth, express.raw({ type: 'applicat
     if (req.query.init === '1' && !looksLikeHeader(req.body, fmt)) {
       return res.status(400).json({ error: 'تکه init بدون هدر است — جلسه تازه لازم است', badInit: true })
     }
-    if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, fmt, cd }
+    /* [فیکس F5] قفل فرستندهٔ مدرس — دو تبِ هم‌زمانِ همان مدرس قبلاً هر دو با k=teacher
+       آپلود می‌کردند و feedPush سشن را مدام جابه‌جا می‌کرد → گیرنده‌ها init/rebuild
+       بی‌پایان می‌دیدند. اگر فرستندهٔ زندهٔ دیگری هست (کاربر متفاوت)، ۴۰۹ */
+    if (room.teacher && feedAlive(room.teacher) && room.teacher.uid && room.teacher.uid !== req.user.id)
+      return res.status(409).json({ error: 'کلاس در تب دیگری برقرار است — آن تب را ببندید', otherSender: true })
+    if (!room.teacher) room.teacher = { sess: 0, seq: 0, init: null, chunks: [], meta, updatedAt: 0, fmt, cd, uid: req.user.id }
+    room.teacher.uid = req.user.id
     feedPush(room.teacher, req.body, req.query.init === '1', meta, fmt, cd)
     return res.json({ ok: true })
   }
@@ -834,7 +913,12 @@ setInterval(() => {
     if (room.teacher && t - (room.teacher.updatedAt || 0) > 10_000) room.teacher = null
     if (!room.teacher && !room.students.size && t - room.lastActivity > 30_000) mediaRooms.delete(cid)
   }
-}, 10_000).unref()
+  /* [فیکس B23] پاک‌سازی دوره‌ای وایت‌بردها — قبلاً wbDrafts/wbBgRev/wbClearRev فقط
+     در حذف کلاس پاک می‌شدند و برای هر کلاسی که یک‌بار draft/پس‌زمینه داشته باشد
+     ردیف Map برای همیشه می‌ماند */
+  for (const [cid, dm] of wbDrafts) if (!dm.size) wbDrafts.delete(cid)
+  for (const cid of wbBgRev.keys()) if (!db.prepare('SELECT 1 AS x FROM classes WHERE id = ?').get(cid)) { wbBgRev.delete(cid); wbClearRev.delete(cid) }
+}, 60_000).unref()
 
 /* =====================================================================
    ابزار ویرایش متون سایت (شبیه المنتور) — جستجوی متن در همه صفحات
@@ -901,8 +985,19 @@ registerExamRoutes(app)
 /* ---------------- محتوای عمومی (کاتالوگ/مارکت/بلاگ/اساتید/نظرات/تماس/تیکت/چک‌اوت) ---------------- */
 registerContentRoutes(app)
 
+/* ---------------- درگاه پرداخت زرین‌پال + پیامک ملی پیامک (server/pay.js) ---------------- */
+registerPayRoutes(app)
+
 /* ---------------- سلام سرور ---------------- */
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))
+
+/* [فیکس F27] دریافت خطاهای crash فرانت‌اند (ErrorBoundary) — قبلاً خطاهای
+   production کاملاً بی‌ردپا بودند. لاگ در کنسول سرور کافی است (بدون PII) */
+app.post('/api/client-errors', express.json({ limit: '16kb' }), (req, res) => {
+  const { message, stack, path } = req.body || {}
+  console.error(`[client-error] ${path || '?'} :: ${String(message || '').slice(0, 300)}\n${String(stack || '').slice(0, 1200)}`)
+  res.json({ ok: true })
+})
 
 /* ---------------- سرو فرانت در production ---------------- */
 const distDir = join(__dirname, '..', 'dist')
@@ -914,7 +1009,8 @@ if (existsSync(distDir)) {
   app.get('/sitemap.xml', (req, res) => {
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     const today = new Date().toISOString().slice(0, 10)
-    const ORIGIN = 'https://modaresyar.ir'
+    /* [فیکس B24] دامنه از env — قبلاً هاردکد بود و در dev/staging به دامنهٔ production اشاره می‌کرد */
+    const ORIGIN = (process.env.PUBLIC_BASE_URL || 'https://modaresyar.ir').replace(/\/+$/, '')
     const urls = [
       { loc: '/', p: '1.0' }, { loc: '/courses', p: '0.9' }, { loc: '/live', p: '0.8' },
       { loc: '/teachers', p: '0.8' }, { loc: '/market', p: '0.9' }, { loc: '/blog', p: '0.7' },

@@ -15,25 +15,53 @@ export default function ASupport() {
  const [revList, setRevList] = useState(fallbackReviews)
  const [contactList, setContactList] = useState([])
  const [detail, setDetail] = useState(null)
+ const [replyText, setReplyText] = useState('')
+ const [sending, setSending] = useState(false)
 
  /* داده واقعی از بک‌اند — قبلاً تیکت/نظر فقط موک ثابت بود و هیچ تیکتی
     که کاربر واقعی ثبت می‌کرد اینجا دیده نمی‌شد */
  useEffect(() => {
   let alive = true
-  req('/admin/tickets').then((r) => { if (alive && r.tickets?.length) setList(r.tickets) }).catch(() => {})
+  req('/admin/tickets').then((r) => { if (alive && Array.isArray(r.tickets)) setList(r.tickets) }).catch(() => {})
   req('/admin/reviews').then((r) => { if (alive && r.reviews) setRevList(r.reviews) }).catch(() => {})
   req('/contact').then((r) => { if (alive && r.messages) setContactList(r.messages) }).catch(() => {})
   return () => { alive = false }
  }, [])
 
- /** بستن/پاسخ تیکت — روی سرور ثبت می‌شود (قبلاً فقط state محلی بود) */
- const setTicketStatus = async (t, status) => {
-  setList((l) => l.map((x) => (x.id === t.id ? { ...x, status } : x)))
-  try { await req(`/admin/tickets/${t.id}`, { method: 'POST', body: { status } }) }
-  catch (e) { if (!e.serverDown) toast(e.message || 'ثبت وضعیت ناموفق بود', 'error') }
+ /** بستن/پاسخ تیکت — روی سرور ثبت می‌شود (قبلاً فقط state محلی بود)
+  *  [فیکس F14] متن پاسخ هم ارسال و ذخیره می‌شود — قبلاً input نه value داشت
+  *  نه name/ref و متن هرگز خوانده نمی‌شد؛ دانشجو هرگز پاسخ را نمی‌دید */
+ const setTicketStatus = async (t, status, reply = '') => {
+  /* [فیکس F32] rollback optimistic — قبلاً شکست سرور state را ناسازگار می‌گذاشت */
+  const prev = list
+  setList((l) => l.map((x) => (x.id === t.id ? { ...x, status, reply: reply || x.reply } : x)))
+  try { await req(`/admin/tickets/${t.id}`, { method: 'POST', body: { status, reply } }) }
+  catch (e) {
+   setList(prev)
+   if (!e.serverDown) toast(e.message || 'ثبت وضعیت ناموفق بود', 'error')
+   else toast('سرور در دسترس نیست — وضعیت تغییر نکرد', 'error')
+  }
  }
 
  const close = (t) => { setTicketStatus(t, 'closed'); setDetail(null); toast('تیکت بسته شد') }
+
+ /** ارسال پاسخ ادمین — متن input خوانده و با تغییر status به سرور می‌رود */
+ const sendReply = async () => {
+  const text = replyText.trim()
+  if (!text) { toast('متن پاسخ را بنویسید', 'error'); return }
+  if (sending) return
+  setSending(true)
+  try {
+   await req(`/admin/tickets/${detail.id}`, { method: 'POST', body: { status: 'answered', reply: text } })
+   setList((l) => l.map((x) => (x.id === detail.id ? { ...x, status: 'answered', reply: text } : x)))
+   toast('پاسخ ارسال شد')
+   setDetail(null)
+   setReplyText('')
+  } catch (e) {
+   if (!e.serverDown) toast(e.message || 'ارسال پاسخ ناموفق بود', 'error')
+  }
+  setSending(false)
+ }
 
  /** تأیید/رد نظر — روی سرور؛ نظر تأییدشده فوراً در سایت عمومی ظاهر می‌شود */
  const moderate = async (r, status) => {
@@ -158,16 +186,20 @@ export default function ASupport() {
  <div className="card pad mb16" style={{ background: 'rgba(7,13,24,.5)' }}>
  <p className="muted small" style={{ lineHeight: 2 }}>{detail.msg}</p>
  </div>
+ {/* [فیکس F14] تاریخچه از دادهٔ واقعی — پاسخ هاردکد «دیشب» حذف شد */}
+ {detail.reply ? (
  <div className="feed mb16">
  <div className="feed-item">
  <span className="fd-icon" style={{ background: 'rgba(56,189,248,.12)', color: 'var(--sky)' }}><Icon name="shield" size={15} /></span>
- <div><p><b>پشتیبانی:</b> سلام وقت بخیر مشکل به تیم فنی ارجاع شد.</p><span className="fd-time">دیشب</span></div>
+ <div><p><b>پشتیبانی:</b> {detail.reply}</p><span className="fd-time">{detail.repliedAt ? new Date(detail.repliedAt).toLocaleDateString('fa-IR') : ''}</span></div>
  </div>
  </div>
+ ) : null}
  <div className="row g8">
- <input className="input" placeholder="پاسخ شما…" />
- <button className="btn btn-primary btn-sm" onClick={() => { setTicketStatus(detail, 'answered'); setDetail(null); toast('پاسخ ارسال شد') }}>
- <Icon name="send" size={15} /> ارسال
+ <input className="input" placeholder="پاسخ شما…" value={replyText} onChange={(e) => setReplyText(e.target.value)}
+   onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) sendReply() }} disabled={sending} />
+ <button className="btn btn-primary btn-sm" onClick={sendReply} disabled={sending || !replyText.trim()}>
+ <Icon name="send" size={15} /> {sending ? 'در حال ارسال…' : 'ارسال'}
  </button>
  </div>
  </>

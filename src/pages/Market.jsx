@@ -75,6 +75,9 @@ export default function Market() {
   const offOnly = params.get('off') === '1'
   const page = Math.max(1, Number(params.get('page') || 1))
 
+  /* [فیکس F29] هر حرفِ جستجو یک entry تاریخچه می‌ساخت (۸ حرف = ۸ بار back).
+     ورودی‌های تایپی (q و max روی range) با replace:true اعمال می‌شوند؛
+     فیلترهای کلیکی و صفحه‌بندی همان replace:false را دارند. */
   const patch = (obj, resetPage = true) => {
     const next = new URLSearchParams(params)
     Object.entries(obj).forEach(([k, v]) => {
@@ -83,7 +86,7 @@ export default function Market() {
       if (isDef) next.delete(k)
       else next.set(k, String(v))
     })
-    setParams(next, { replace: false })
+    setParams(next, { replace: 'q' in obj || 'max' in obj })
   }
 
   /* ---------- فیلتر و مرتب‌سازی ---------- */
@@ -125,8 +128,11 @@ export default function Market() {
 
   const resetAll = () => setParams(new URLSearchParams(), { replace: false })
 
-  /* ---------- بلوک فیلترها (مشترک دسکتاپ و موبایل) ---------- */
-  const FilterBlock = () => (
+  /* ---------- بلوک فیلترها (مشترک دسکتاپ و موبایل) ----------
+     [فیکس F29] به‌جای کامپوننتِ تعریف‌شده داخل رندر (که هر keystroke کل
+     سایدبار radio/range را از نو mount می‌کرد)، تابع سادهٔ JSX که inline
+     رندر می‌شود — identity المنت‌ها حفظ و state ورودی‌ها نمی‌پرد. */
+  const filterBlock = (
     <>
       <div className="mk-fgroup">
         <b className="mk-ftitle">دسته‌بندی</b>
@@ -349,7 +355,7 @@ export default function Market() {
               <b className="row g8"><SlidersHorizontal size={16} /> فیلترها</b>
               {activeCount > 0 && <Badge variant="discount">{faNum(activeCount)}</Badge>}
             </div>
-            <FilterBlock />
+            {filterBlock}
             {/* بنر کوچک کد تخفیف */}
             <div className="mk-coupon-hint">
               <Tag size={15} />
@@ -472,7 +478,7 @@ export default function Market() {
             <DialogTitle className="row g8"><SlidersHorizontal size={17} /> فیلتر محصولات</DialogTitle>
             <DialogDescription>نتایج را بر اساس دسته، قیمت و موجودی محدود کنید.</DialogDescription>
           </DialogHeader>
-          <FilterBlock />
+          {filterBlock}
           <Button className="w-full" onClick={() => setFilterOpen(false)}>مشاهده {faNum(list.length)} نتیجه</Button>
         </DialogContent>
       </Dialog>

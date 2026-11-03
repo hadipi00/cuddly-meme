@@ -18,6 +18,8 @@ export default function TExams() {
  const nav = useNavigate()
  const [rows, setRows] = useState([])
  const [loaded, setLoaded] = useState(false)
+ const [failed, setFailed] = useState(false)
+ const [creating, setCreating] = useState(false)
  const [modal, setModal] = useState(null)
  const [form, setForm] = useState({ title: '', mode: 'builder', duration_min: 30 })
 
@@ -25,17 +27,21 @@ export default function TExams() {
    req('/exams').then((r) => {
      setRows(r.exams || [])
      setLoaded(true)
-   }).catch(() => setLoaded(true))
+     setFailed(false)
+   }).catch(() => { setLoaded(true); setFailed(true) })
  }
  useEffect(load, [])
 
  const create = async () => {
    if (!form.title.trim()) return toast('عنوان آزمون را وارد کنید', 'error')
+   /* [فیکس F33] گارد در-flight — دابل‌کلیک = دو آزمون */
+   if (creating) return
+   setCreating(true)
    try {
      const r = await req('/exams', { method: 'POST', body: form })
      toast('آزمون ساخته شد — حالا سوال‌ها را اضافه کنید')
      nav(`/panel/teacher/exams/${r.id}`)
-   } catch (e) { toast(e.message || 'ساخت ناموفق بود', 'error') }
+   } catch (e) { toast(e.message || 'ساخت ناموفق بود', 'error'); setCreating(false) }
  }
 
  const publish = async (row) => {
@@ -76,7 +82,14 @@ export default function TExams() {
    </div>
 
    {!loaded && <div className="card pad muted">در حال بارگذاری…</div>}
-   {loaded && !rows.length && (
+   {loaded && failed && !rows.length && (
+    <div className="card pad" style={{ textAlign: 'center', padding: 48 }}>
+     <h3>خطا در ارتباط با سرور</h3>
+     <p className="muted small">لیست آزمون‌ها دریافت نشد — دوباره تلاش کنید.</p>
+     <button className="btn btn-primary mt16" onClick={load}>تلاش مجدد</button>
+    </div>
+   )}
+   {loaded && !failed && !rows.length && (
     <div className="card pad" style={{ textAlign: 'center', padding: 48 }}>
      <Icon name="check" size={40} style={{ opacity: .3 }} />
      <h3 style={{ marginTop: 12 }}>هنوز آزمونی نساخته‌اید</h3>
@@ -139,7 +152,7 @@ export default function TExams() {
        </div>
       </div>
       <div className="modal-actions">
-       <button type="submit" className="btn btn-primary">ساخت و ادامه</button>
+       <button type="submit" className="btn btn-primary" disabled={creating}>{creating ? 'در حال ساخت…' : 'ساخت و ادامه'}</button>
        <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>انصراف</button>
       </div>
      </form>

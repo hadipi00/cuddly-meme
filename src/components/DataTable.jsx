@@ -85,20 +85,37 @@ export default function DataTable({
  </div>
  )}
 
- {pages > 1 && (
+ {pages > 1 && (() => {
+ /* [فیکس F30] پنجره‌بندی ±۲ — قبلاً همهٔ دکمه‌های صفحه رندر می‌شد
+    (۳۰۰ کاربر / ۸ در صفحه = ~۳۸ دکمه و سرریز موبایل) */
+ const WIN = 2
+ const lo = Math.max(1, cur - WIN)
+ const hi = Math.min(pages, cur + WIN)
+ const nums = []
+ if (lo > 1) nums.push(1)
+ if (lo > 2) nums.push('…')
+ for (let i = lo; i <= hi; i++) nums.push(i)
+ if (hi < pages - 1) nums.push('…')
+ if (hi < pages) nums.push(pages)
+ return (
  <div className="pagination">
  <span>صفحه {faNum(cur)} از {faNum(pages)}</span>
  <div className="pages">
  <button disabled={cur === 1} onClick={() => setPage(cur - 1)}><Icon name="chevronRight" size={14} /></button>
- {Array.from({ length: pages }, (_, i) => (
- <button key={i} className={cur === i + 1 ? 'on' : ''} onClick={() => setPage(i + 1)}>
- {faNum(i + 1)}
+ {nums.map((n, i) =>
+ n === '…' ? (
+ <span key={`e${i}`} className="muted" style={{ padding: '0 2px' }}>…</span>
+ ) : (
+ <button key={n} className={cur === n ? 'on' : ''} onClick={() => setPage(n)}>
+ {faNum(n)}
  </button>
- ))}
+ )
+ )}
  <button disabled={cur === pages} onClick={() => setPage(cur + 1)}><Icon name="chevronLeft" size={14} /></button>
  </div>
  </div>
- )}
+ )
+ })()}
  </div>
  )
 }

@@ -12,8 +12,14 @@ export default function AReports() {
 
  const topCourses = [...courses].sort((a, b) => b.students - a.students).slice(0, 5)
  const topTeachers = [...teachers].sort((a, b) => b.students - a.students).slice(0, 5)
- const topProducts = [...products].sort((a, b) => b.rating - a.rating).slice(0, 5)
+ /* [فیکس F32] «پرفروش‌ها» با sold مرتب می‌شود نه rating */
+ const topProducts = [...products].sort((a, b) => (b.sold || 0) - (a.sold || 0)).slice(0, 5)
  const avgStudy = Math.round(studyLogs.reduce((a, d) => a + d.minutes, 0) / studyLogs.length)
+
+ /* [فیکس F32] انتخاب بازهٔ ۳/۶/۱۲ ماه واقعاً دادهٔ چارت را برش می‌زند —
+    قبلاً فقط زیرنویس عوض می‌شد و داده ثابت بود */
+ const months = period === '۳ ماه اخیر' ? 3 : period === '۶ ماه اخیر' ? 6 : 12
+ const series = salesSeries.slice(-months)
 
  const exportBtn = (label) => (
  <button className="btn btn-ghost btn-sm" onClick={() => toast(`خروجی ${label} آماده شد (دمو)`)}>
@@ -39,7 +45,7 @@ export default function AReports() {
  <div><h3>روند فروش دوره‌ها (میلیون)</h3><div className="chart-sub">{period}</div></div>
  {exportBtn('فروش')}
  </div>
- <LineChart data={salesSeries} color="#2dd4bf" color2="#38bdf8" />
+ <LineChart data={series} color="#2dd4bf" color2="#38bdf8" />
  </div>
  <div className="card chart-card">
  <h3>سهم دسته‌بندی‌ها</h3>

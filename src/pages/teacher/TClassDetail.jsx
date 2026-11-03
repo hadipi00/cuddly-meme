@@ -31,6 +31,7 @@ export default function TClassDetail() {
  const [savingRec, setSavingRec] = useState(null)
  const [mat, setMat] = useState({ title: '', url: '', sessionId: '' })
  const [savingMat, setSavingMat] = useState(false)
+ const [removingMat, setRemovingMat] = useState(false)
 
  const load = () => {
  req(`/classes/${classId}/detail`).then((r) => {
@@ -91,13 +92,19 @@ export default function TClassDetail() {
  }
 
  const removeMaterial = async (m) => {
+ /* [فیکس F33] حذف فایل بدون confirm + گارد در-flight (دابل‌کلیک = توست خطای دوم) */
+ if (removingMat) return
+ if (!window.confirm(`فایل «${m.name || m.title || 'بدون نام'}» برای همیشه حذف شود؟`)) return
+ setRemovingMat(true)
  try {
  await req(`/classes/${classId}/materials/${m.id}`, { method: 'DELETE' })
  toast('فایل حذف شد', 'info')
  load()
  } catch (e) {
  if (!e.serverDown) toast(e.message || 'حذف ناموفق بود', 'error')
+ else toast('سرور در دسترس نیست', 'error')
  }
+ setRemovingMat(false)
  }
 
  return (

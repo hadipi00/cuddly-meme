@@ -57,6 +57,9 @@ export default function TExamDetail() {
    } catch (e) { toast(e.message || 'خطا', 'error') }
  }
  const reset = async (a) => {
+   /* [فیکس F33] ریست برای تلاشِ زنده (in_progress) مجاز نیست — حذفش جلسهٔ دانش‌آموز
+      را می‌شکند (autosave بعدی ۴۰۹ می‌گیرد) */
+   if (a.status === 'in_progress') return toast('این تلاش در جریان است — ابتدا منتظر اتمام یا ارسال بمانید', 'error')
    if (!window.confirm(`تلاش «${a.student_name}» پاک شود تا دوباره آزمون بدهد؟`)) return
    try { await req(`/exams/${eid}/attempts/${a.student_id}`, { method: 'DELETE' }); toast('تلاش بازشد — دانش‌آموز می‌تواند دوباره شرکت کند', 'info'); load() }
    catch (e) { toast(e.message || 'خطا', 'error') }
@@ -155,7 +158,7 @@ export default function TExamDetail() {
              <button className="btn btn-danger btn-sm" onClick={() => review(a, 'invalid')}>رد</button>
             </>}
             <button className="btn btn-ghost btn-sm" onClick={() => setSecView(a)}><Icon name="shield" size={13} />گزارش</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => reset(a)} title="بازکردن تلاش"><Icon name="refresh" size={13} /></button>
+            {a.status !== 'in_progress' && <button className="btn btn-ghost btn-sm" onClick={() => reset(a)} title="بازکردن تلاش"><Icon name="refresh" size={13} /></button>}
            </div>
           </td>
          </tr>

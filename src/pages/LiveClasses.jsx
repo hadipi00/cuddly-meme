@@ -5,7 +5,8 @@ import Icon from '../components/Icon'
 import SmartImg from '../components/SmartImg'
 import { Reveal, RatingStars, Avatar } from '../components/ui'
 import { Modal } from '../components/Modal'
-import { liveClasses, teachers } from '../data/mock'
+import { liveClasses, teachers as fallbackTeachers } from '../data/mock'
+import { content, useCatalog } from '../services/content'
 import { useApp } from '../store/AppContext'
 import { DAYS, faNum, toman } from '../utils/format'
 import { DataIcon } from '../utils/icons'
@@ -19,6 +20,9 @@ export default function LiveClasses() {
  const nav = useNavigate()
  const now = useNow(1000)
  const tIdx = todayIdx()
+ /* [فیکس F35] پروفایل واقعی مدرسان از /api/teachers — قبلاً جستجوی مدرس فقط در
+    موک بود و کلاس‌های مدرسان واقعی «مدرس رسمی آکادمی» بدون نام/امتیاز درست رندر می‌شدند */
+ const teachers = useCatalog(content.teachers, fallbackTeachers)
  const [day, setDay] = useState('همه')
  const [detail, setDetail] = useState(null)
  const [baseList, setBaseList] = useState(liveClasses) // fallback: دمو
@@ -28,7 +32,8 @@ export default function LiveClasses() {
  useEffect(() => {
  let alive = true
  req('/classes').then((r) => {
- if (!alive || !r.classes?.length) return
+ /* [فیکس F21] آرایهٔ خالیِ «موفق» هم اعمال می‌شود — قبلاً لیست خالی سرور با دمو اشتباه گرفته می‌شد */
+ if (!alive || !Array.isArray(r.classes)) return
  setBaseList(r.classes.map((c) => ({
  id: c.id, title: c.title, desc: c.desc, icon: c.icon, color: c.color,
  teacher: c.teacherName, teacherId: c.teacherId, day: c.day, start: c.start,
@@ -50,13 +55,20 @@ export default function LiveClasses() {
  const list = day === 'همه' ? enriched : enriched.filter((l) => dayLabel(l.day) === day)
  const todayList = enriched.filter((l) => l.day === tIdx)
 
- /* خرید / ثبت‌نام واقعی کلاس — فقط خریداران وارد اتاق می‌شوند */
+ /* خرید / ثبت‌نام واقعی کلاس — فقط خریداران وارد اتاق می‌شوند.
+    کلاس پولی → درگاه زرین‌پال (بازگشت با callback سرور + تأیید) و
+    ثبت‌نام نهایی فقط بعد از تأیید پرداخت انجام می‌شود */
  const register = async (l) => {
  if (!user) { setDetail(null); nav('/auth'); return }
  if (buying) return
  setBuying(true)
  try {
- const r = await req(`/classes/${l.id}/purchase`, { method: 'POST' })
+ const r = await req(`/classes/${l.id}/purchase`, { method: 'POST', body: { gateway: 'zarinpal' } })
+ if (r.redirectUrl) {
+  toast('در حال انتقال به درگاه پرداخت…')
+  window.location.assign(r.redirectUrl)
+  return
+ }
  setBaseList((list) => list.map((x) => (x.id === l.id ? { ...x, iAmIn: true, enrolled: r.enrolled || x.enrolled } : x)))
  setDetail((d) => (d?.id === l.id ? { ...d, iAmIn: true, enrolled: r.enrolled || d.enrolled } : d))
  if (r.order) toast(`پرداخت موفق — کد سفارش ${r.order.code} • کلاس به برنامه شما اضافه شد`)

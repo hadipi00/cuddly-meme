@@ -76,14 +76,16 @@ CREATE TABLE IF NOT EXISTS orders (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   code       TEXT NOT NULL,
   user_id    TEXT NOT NULL REFERENCES users(id),
-  kind       TEXT NOT NULL DEFAULT 'class',   -- class | course | product
+  kind       TEXT NOT NULL DEFAULT 'class',   -- class | course | market | shipping
   item_id    TEXT NOT NULL,
   title      TEXT NOT NULL,
   amount     INTEGER NOT NULL DEFAULT 0,      -- تومان
   status     TEXT NOT NULL DEFAULT 'paid',    -- paid | pending | refunded
-  gateway    TEXT NOT NULL DEFAULT 'test',    -- test | zarinpal (مرحله بعد)
-  created_at INTEGER NOT NULL
+  gateway    TEXT NOT NULL DEFAULT 'test',    -- test | zarinpal
+  created_at INTEGER NOT NULL,
+  qty        INTEGER NOT NULL DEFAULT 1       -- تعداد هر قلم (برای برگشت موجودی در انصراف پرداخت)
 );
+CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(code);
 CREATE TABLE IF NOT EXISTS board_strokes (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   class_id   TEXT NOT NULL REFERENCES classes(id),
@@ -166,9 +168,14 @@ try {
 }
 export { JWT_SECRET }
 
-/* ---------------- داده‌های اولیه (فقط بار اول) ---------------- */
+/* ---------------- داده‌های اولیه (فقط بار اول) ----------------
+   [فیکس B26] با DISABLE_SEED=1 در env، داده‌های دمو (با رمز عمومی) ساخته نمی‌شوند —
+   برای deploy واقعی؛ در حالت عادی دمو باقی می‌ماند */
+const SEED_DISABLED = process.env.DISABLE_SEED === '1'
 const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n
-if (userCount === 0) {
+if (userCount === 0 && SEED_DISABLED) {
+  console.log('[db] seeding disabled via DISABLE_SEED=1 — production mode: no demo accounts')
+} else if (userCount === 0) {
   console.log('[db] seeding initial data…')
   const now = Date.now()
   const hash = bcrypt.hashSync('12345678', 8)

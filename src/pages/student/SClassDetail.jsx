@@ -35,13 +35,18 @@ export default function SClassDetail() {
  const [video, setVideo] = useState(null) // { title, url }
 
  const load = () => {
+ let alive = true
  req(`/classes/${classId}/detail`).then((r) => {
+ if (!alive) return
  setData(r)
  setState('ok')
  }).catch((e) => {
- if (e.serverDown) { setState('missing'); return }
+ if (!alive) return
+ /* [فیکس F34] قطعی سرور با «کلاس پیدا نشد» اشتباه گرفته نمی‌شود */
+ if (e.serverDown) { setState('offline'); return }
  setState(e.status === 403 ? 'forbidden' : 'missing')
  })
+ return () => { alive = false }
  }
  useEffect(load, [classId])
 
@@ -58,6 +63,16 @@ export default function SClassDetail() {
  <h3>این کلاس برای شما باز نیست</h3>
  <p className="muted small mt8">برای دیدن جزئیات، ضبط جلسات و فایل‌ها باید در کلاس ثبت‌نام (خرید) کنید.</p>
  <Link to={`/panel/student/live/${classId}`} className="btn btn-primary btn-sm mt16">مشاهده و خرید کلاس</Link>
+ </div>
+ )
+ }
+
+ if (state === 'offline') {
+ return (
+ <div className="card pad" style={{ textAlign: 'center', padding: 50 }}>
+ <h3>سرور در دسترس نیست</h3>
+ <p className="muted small mt8">اتصال برقرار نشد — بعد از چند لحظه دوباره تلاش کنید.</p>
+ <button className="btn btn-primary btn-sm mt16" onClick={load}>تلاش مجدد</button>
  </div>
  )
  }

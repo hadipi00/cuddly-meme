@@ -33,9 +33,28 @@ export default function Auth() {
 
  useEffect(() => { document.title = 'ورود و ثبت‌نام | مدرس‌یار' }, [])
 
+ /* [فیکس F31] «مرا به خاطر بسپار» واقعی شد — ایمیل برای پر کردن خودکار ورود بعدی
+     در localStorage ذخیره می‌شود (رمز هرگز ذخیره نمی‌شود) */
+ const [remember, setRemember] = useState(false)
+ useEffect(() => {
+  const saved = localStorage.getItem('my_remember_email')
+  if (saved) { setEmail(saved); setRemember(true) }
+ }, [])
+
  const submit = async (e) => {
  e.preventDefault()
  if (busy) return
+ /* [فیکس F31] بررسی فرمت ایمیل/موبایل سمت کلاینت — فیلد هم ایمیل می‌پذیرد
+     هم موبایل، پس type=email خالی نمی‌گذاریم و الگو را دستی چک می‌کنیم */
+ const id = email.trim()
+ const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)
+ const isPhone = /^09\d{9}$/.test(id)
+ if (!isEmail && !isPhone) {
+  setError('ایمیل معتبر یا شماره موبایل ۱۱رقمی (۰۹…) وارد کنید')
+  return
+ }
+ if (mode === 'login' && remember) localStorage.setItem('my_remember_email', id)
+ else localStorage.removeItem('my_remember_email')
  setBusy(true); setError('')
  try {
  const r = mode === 'login'
@@ -111,9 +130,10 @@ export default function Auth() {
  {mode === 'login' && (
  <div className="between small mb16">
  <label className="row g8 small" style={{ cursor: 'pointer' }}>
- <input type="checkbox" defaultChecked /> مرا به خاطر بسپار
+ <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> مرا به خاطر بسپار
  </label>
- <a href="#" className="text-teal" onClick={(e) => e.preventDefault()}>فراموشی رمز؟</a>
+ {/* [فیکس F31] لینک مردهٔ «فراموشی رمز؟» به صفحهٔ تماس واقعی وصل شد */}
+ <Link to="/contact" className="text-teal">فراموشی رمز؟</Link>
  </div>
  )}
  <button className="btn btn-primary btn-block btn-lg" disabled={busy}>

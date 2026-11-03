@@ -1,11 +1,31 @@
 import { Link } from 'react-router-dom'
+import { useState } from 'react'
 import Icon from './Icon'
 import { Brand } from './ui'
 import { site } from '../config/site'
 import { useApp } from '../store/AppContext'
+import { req } from '../services/http'
 
 export default function Footer() {
  const { toast } = useApp()
+ /* [فیکس F31] خبرنامه به endpoint واقعی /api/newsletter وصل شد — قبلاً فقط
+    توست موفقیت جعلی می‌زد و هیچ ثبت‌نشده‌ای در سرور رخ نمی‌داد */
+ const [nlEmail, setNlEmail] = useState('')
+ const [nlBusy, setNlBusy] = useState(false)
+
+ const subscribe = async () => {
+  if (nlBusy) return
+  setNlBusy(true)
+  try {
+   const r = await req('/newsletter', { method: 'POST', body: { email: nlEmail } })
+   toast(r.message || 'عضویت شما در خبرنامه ثبت شد')
+   setNlEmail('')
+  } catch (err) {
+   toast(err.message || 'ثبت خبرنامه ناموفق بود — بعداً تلاش کنید', 'error')
+  } finally {
+   setNlBusy(false)
+  }
+ }
  return (
  <footer className="footer">
  <div className="container">
@@ -43,8 +63,8 @@ export default function Footer() {
  <h4>خبرنامه مدرس‌یار</h4>
  <p className="about-txt">جدیدترین دوره‌ها و کدهای تخفیف را دریافت کنید.</p>
  <div className="newsletter">
- <input className="input" placeholder="ایمیل شما…" />
- <button className="btn btn-primary btn-sm" onClick={() => toast('عضویت شما در خبرنامه ثبت شد')}>عضویت</button>
+ <input className="input" placeholder="ایمیل شما…" type="email" dir="ltr" value={nlEmail} onChange={(e) => setNlEmail(e.target.value)} />
+ <button className="btn btn-primary btn-sm" onClick={subscribe} disabled={nlBusy}>{nlBusy ? '…' : 'عضویت'}</button>
  </div>
  </div>
  </div>

@@ -20,8 +20,11 @@ export default function SmartImg({
   loading = 'lazy',
   ...rest
 }) {
-  const [failed, setFailed] = useState(false)
-  if (!src || failed) return fallback
+  /* [فیکس F28] به‌جای بولین، «src خراب‌شده» را نگه می‌داریم تا با تغییر src
+     state به‌صورت طبیعی ریست شود — قبلاً failed هرگز پاک نمی‌شد و تصویر
+     سالم بعدی هم fallback می‌ماند (دو محصول پشت‌سرهم در مارکت). */
+  const [failedFor, setFailedFor] = useState(null)
+  if (!src || failedFor === src) return fallback
   return (
     <img
       src={src}
@@ -31,7 +34,7 @@ export default function SmartImg({
       loading={loading}
       decoding="async"
       className={`smart-img ${className}`}
-      onError={() => setFailed(true)}
+      onError={() => setFailedFor(src)}
       {...rest}
     />
   )

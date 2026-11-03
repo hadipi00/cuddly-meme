@@ -13,7 +13,9 @@ import { useEffect } from 'react'
    نکته: بعد از اتصال دامنه اصلی، فقط کافی است ORIGIN را عوض کنید.
    ============================================================ */
 
-export const ORIGIN = 'https://modaresyar.ir'
+/* [فیکس F32/B24] دامنه از env خوانده می‌شود (Vite: VITE_PUBLIC_BASE_URL) —
+   قبلاً هاردکد بود و canonical/og:url در dev/staging به دامنهٔ production اشاره می‌کرد */
+export const ORIGIN = (import.meta.env?.VITE_PUBLIC_BASE_URL || 'https://modaresyar.ir').replace(/\/+$/, '')
 export const SITE_NAME = 'مدرس‌یار'
 export const DEFAULT_DESC =
   'خرید کلاس‌های آنلاین، دوره‌های ضبط‌شده و لوازم‌التحریر از مدرس‌مارکت — با مدرس‌یار یاد بگیر، پیشرفت کن.'
@@ -70,6 +72,11 @@ export function storeJsonLd() {
   }
 }
 
+/* [فیکس F22] رجیستری mount بودن Seo — وقتی یک Seo فعال است، مالک document.title
+   خودِ Seo است و TitleSync (App.jsx) نباید عنوان عمومی مسیر را روی آن بنویسد */
+let seoActiveCount = 0
+export const seoOwnsTitle = () => seoActiveCount > 0
+
 export default function Seo({
   title,
   description = DEFAULT_DESC,
@@ -83,6 +90,12 @@ export default function Seo({
   jsonLd, // آبجکت، یا آرایه‌ای از آبجکت‌های schema.org
 }) {
   const jsonLdKey = jsonLd ? JSON.stringify(jsonLd) : ''
+
+  /* [فیکس F22] اعلام مالکیت عنوان تا unmount */
+  useEffect(() => {
+    seoActiveCount++
+    return () => { seoActiveCount-- }
+  }, [])
 
   useEffect(() => {
     const fullTitle = title ? `${title} | ${SITE_NAME}` : `${SITE_NAME} | پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی`

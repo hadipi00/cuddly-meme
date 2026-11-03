@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import DataTable from '../../components/DataTable'
 import { FormModal } from '../../components/Modal'
 import { payments, coupons } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
+import { req } from '../../services/http'
 import { faNum, toman } from '../../utils/format'
 
 const payBadge = { paid: ['موفق', 'b-green'], pending: ['در انتظار', 'b-amber'], refunded: ['برگشتی', 'b-red'] }
@@ -13,11 +14,35 @@ export default function AFinance() {
  const [tab, setTab] = useState('payments')
  const [modal, setModal] = useState(null)
  const [cList, setCList] = useState(coupons)
+ const [saving, setSaving] = useState(false)
 
- const saveCoupon = (d) => {
- setCList((l) => [{ id: 'c' + Date.now(), type: d.type, value: d.value, used: 0, cap: Number(d.cap) || 100, expires: d.expires || '—', status: 'active', ...d, code: d.code.toUpperCase() }, ...l])
- setModal(null)
- toast('کد تخفیف ساخته شد ')
+ /* [فیکس F15] کوپن‌ها از سرور — قبلاً فقط mock محلی بود و کدِ ساخته‌شده هرگز
+    در جدول coupons سرور ثبت نمی‌شد و در پرداخت «نامعتبر» می‌خورد */
+ useEffect(() => {
+  let alive = true
+  req('/admin/coupons').then((r) => {
+   if (alive && Array.isArray(r.coupons))
+    setCList(r.coupons.map((c) => ({ ...c, id: c.code, type: c.kind === 'amount' ? 'مبلغی' : 'درصدی', value: c.kind === 'amount' ? faNum(c.value) : `${faNum(c.value)}٪`, cap: c.kind === 'amount' ? null : 100, expires: c.expires || '—' })))
+  }).catch(() => { /* serverDown → mock */ })
+  return () => { alive = false }
+ }, [])
+
+ const saveCoupon = async (d) => {
+  if (saving) return
+  setSaving(true)
+  try {
+   const kind = d.type === 'مبلغی' ? 'amount' : 'percent'
+   const digits = String(d.value || '').replace(/[۰-۹]/g, (x) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(x)).replace(/[^0-9]/g, '')
+   const value = Number(digits) || 0
+   const r = await req('/admin/coupons', { method: 'POST', body: { code: d.code, kind, value, status: 'active', expires: d.expires || '' } })
+   const c = r.coupon
+   setCList((l) => [{ id: c.code, code: c.code, type: c.kind === 'amount' ? 'مبلغی' : 'درصدی', value: c.kind === 'amount' ? faNum(c.value) : `${faNum(c.value)}٪`, used: 0, cap: c.kind === 'amount' ? null : 100, expires: c.expires || '—', status: c.status }, ...l])
+   setModal(null)
+   toast('کد تخفیف ساخته و روی سرور ثبت شد')
+  } catch (e) {
+   if (!e.serverDown) toast(e.message || 'ساخت کد ناموفق بود', 'error')
+  }
+  setSaving(false)
  }
 
  return (
@@ -96,12 +121,23 @@ export default function AFinance() {
  addLabel="کد تخفیف جدید"
  actions={(r) => (
  <>
- <button className="icon-btn" title={r.status === 'active' ? 'غیرفعال‌سازی' : 'فعال‌سازی'} onClick={() => {
- setCList((l) => l.map((c) => (c.id === r.id ? { ...c, status: c.status === 'active' ? 'inactive' : 'active' } : c)))
- toast(r.status === 'active' ? 'کد غیرفعال شد' : 'کد فعال شد', 'info')
+ <button className="icon-btn" title={r.status === 'active' ? 'غیرفعال‌سازی' : 'فعال‌سازی'} onClick={async () => {
+  const next = r.status === 'active' ? 'inactive' : 'active'
+  try {
+   const digits = String(r.value || '').replace(/[۰-۹]/g, (x) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(x)).replace(/[^0-9]/g, '')
+   await req('/admin/coupons', { method: 'POST', body: { code: r.code, kind: r.type === 'مبلغی' ? 'amount' : 'percent', value: Number(digits) || 0, status: next, expires: r.expires && r.expires !== '—' ? r.expires : '' } })
+   setCList((l) => l.map((c) => (c.id === r.id ? { ...c, status: next } : c)))
+   toast(next === 'active' ? 'کد فعال شد' : 'کد غیرفعال شد', 'info')
+  } catch (e) { if (!e.serverDown) toast(e.message || 'تغییر وضعیت ناموفق بود', 'error') }
  }}><Icon name={r.status === 'active' ? 'x' : 'check'} /></button>
- <button className="icon-btn" title="کپی لینک" onClick={() => toast('کد کپی شد')}><Icon name="file" /></button>
- <button className="icon-btn" title="حذف" onClick={() => { setCList((l) => l.filter((c) => c.id !== r.id)); toast('کد حذف شد', 'info') }}><Icon name="trash" /></button>
+ <button className="icon-btn" title="کپی کد" onClick={() => { try { navigator.clipboard?.writeText(r.code); toast('کد کپی شد') } catch { toast('کد: ' + r.code, 'info') } }}><Icon name="file" /></button>
+ <button className="icon-btn" title="حذف" onClick={async () => {
+  try {
+   await req(`/admin/coupons/${encodeURIComponent(r.code)}`, { method: 'DELETE' })
+   setCList((l) => l.filter((c) => c.id !== r.id))
+   toast('کد حذف شد', 'info')
+  } catch (e) { if (!e.serverDown) toast(e.message || 'حذف ناموفق بود', 'error') }
+ }}><Icon name="trash" /></button>
  </>
  )}
  />

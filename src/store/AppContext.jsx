@@ -165,16 +165,10 @@ export function AppProvider({ children }) {
  : [...s.wishlist, item],
  }))
  },
- /** کلاس جدید (ساخت توسط مدرس/مدیر) — بلافاصله در جدول هفتگی دانش‌آموز دیده می‌شود */
- addClass(cls) {
- const id = 'cc' + Date.now()
- patch((s) => ({ customClasses: [...s.customClasses, { ...cls, id }] }))
- return id
- },
- updateClass(id, cls) {
- patch((s) => ({ customClasses: s.customClasses.map((c) => (c.id === id ? { ...c, ...cls } : c)) }))
- },
- removeClass(id) { patch((s) => ({ customClasses: s.customClasses.filter((c) => c.id !== id) })) },
+ /* [فیکس F7] توابع مردهٔ مسیر قدیمی حذف شدند (addClass/updateClass/removeClass/placeOrder)
+    — فقط روی localStorage کار می‌کردند و در جریان واقعی بک‌اند هیچ‌جا صدا زده نمی‌شدند؛
+    placeOrder سفارش ساختگی با کد تصادفی می‌ساخت که اگر جایی صدا زده می‌شد با
+    سفارش‌های واقعی سرور قاطی می‌شد. customClasses حالا فقط خوانده می‌شود (همیشه []). */
  toggleLesson(courseId, lessonIdx) {
  patch((s) => {
  const key = String(courseId)
@@ -188,14 +182,6 @@ export function AppProvider({ children }) {
  })
  },
  addMinutes(min) { patch((s) => ({ extraMinutes: s.extraMinutes + min })) },
- placeOrder(order) {
- /** کد سفارش با فضای بزرگ‌تر — قبلاً فقط ۹۰ کد ممکن بود و تکرار تولید می‌شد
-    (تکرار = کلید تکراری React در لیست سفارش‌ها) */
- const code = 'ORD-' + Math.floor(100000 + Math.random() * 900000)
- const today = new Date().toLocaleDateString('fa-IR')
- patch((s) => ({ orders: [...(s.orders || []), { code, date: today, ...order }], cart: [] }))
- return code
- },
  /* ---------- موتور کلاس زنده — دستور مدرس به سرور + آپدیت خوش‌بینانه ---------- */
  /** مدرس کلاس را شروع می‌کند — برای همه کاربران (از سرور) بج «زنده» و دکمه ورود فعال می‌شود */
  startLive(classId) {

@@ -76,6 +76,10 @@ export async function req(path, { method = 'GET', body, timeout = 0 } = {}) {
     }
     const e = new Error(data?.error || `خطای سرور (${res.status})`)
     e.status = res.status
+    /* [فیکس F10] پرچم‌های بدنهٔ خطا روی Error کپی می‌شوند — قبلاً دور ریخته می‌شدند و
+       چک‌های `e.expired` / `e.in_progress` / `e.done` در جریان آزمون هرگز true نمی‌شدند:
+       SExamResult برای همیشه «در حال بارگذاری» و autosave حلقهٔ بی‌پایان ۴۰۹ می‌زد */
+    if (data && typeof data === 'object') Object.assign(e, data)
     throw e
   }
   return data

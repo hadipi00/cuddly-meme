@@ -13,7 +13,9 @@ export default function SExams() {
  const [loaded, setLoaded] = useState(false)
 
  const load = () => {
-   req('/exams/available').then((r) => { setRows(r.exams || []); setLoaded(true) }).catch((e) => { toast(e.serverDown ? 'سرور در دسترس نیست' : e.message, 'error'); setLoaded(true) })
+   let alive = true
+   req('/exams/available').then((r) => { if (alive) { setRows(r.exams || []); setLoaded(true) } }).catch((e) => { if (alive) { toast(e.serverDown ? 'سرور در دسترس نیست' : e.message, 'error'); setLoaded(true) } })
+   return () => { alive = false }
  }
  useEffect(load, [])
 
@@ -75,9 +77,16 @@ export default function SExams() {
         </div>
        )}
        <div className="row mt8">
-        {(!a || a.status === 'in_progress') && w === 'open' && (
+        {/* [فیکس F24] تلاش in_progress دکمهٔ ادامه دارد حتی وقتی پنجرهٔ آزمون بسته است —
+            قبلاً در این حالت هیچ دکمه‌ای رندر نمی‌شد و فقط تایپ دستی URL نجات می‌داد */}
+        {a?.status === 'in_progress' && (
          <button className="btn btn-primary" onClick={() => nav(`/panel/student/exams/${e.id}/take`)}>
-          <Icon name="play" size={15} />{a?.status === 'in_progress' ? 'ادامه آزمون' : 'شروع آزمون'}
+          <Icon name="play" size={15} />{w === 'over' ? 'ارسال آزمون' : 'ادامه آزمون'}
+         </button>
+        )}
+        {!a && w === 'open' && (
+         <button className="btn btn-primary" onClick={() => nav(`/panel/student/exams/${e.id}/take`)}>
+          <Icon name="play" size={15} />شروع آزمون
          </button>
         )}
         {a && a.status !== 'in_progress' && (

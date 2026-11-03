@@ -1,9 +1,10 @@
 import Icon from './Icon'
+import { useState } from 'react'
 
 export function Modal({ open, title, onClose, children, wide = false }) {
  if (!open) return null
  return (
- <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+ <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose() }}>
  <div className={`modal ${wide ? 'wide' : ''}`}>
  <div className="modal-head">
  <h3>{title}</h3>
@@ -18,43 +19,51 @@ export function Modal({ open, title, onClose, children, wide = false }) {
 /**
  * مودال فرم عمومی — برای همه CRUD های پنل‌ها استفاده می‌شود.
  * fields: [{key, label, type: 'text'|'number'|'select'|'textarea'|'date', options, full, required}]
+ * [فیکس F20] onSubmit منتظر می‌ماند (Promise) و هنگام درخواست دکمه disable است —
+ *  قبلاً fire-and-forget بود؛ دابل‌کلیک «ثبت» = دو رکورد تکراری روی سرور
+ *  (AClasses/TClasses: دو کلاس دوبله، TExams: دو آزمون دوبله)
  */
 export function FormModal({ open, title, fields = [], initial = {}, onSubmit, onClose, submitLabel = 'ذخیره' }) {
+ const [busy, setBusy] = useState(false)
  if (!open) return null
- const handleSubmit = (e) => {
+ const handleSubmit = async (e) => {
  e.preventDefault()
+ if (busy) return
  const data = {}
  fields.forEach((f) => { data[f.key] = e.target.elements[f.key]?.value ?? initial[f.key] ?? '' })
- onSubmit(data)
+ setBusy(true)
+ try { await onSubmit(data) }
+ catch { /* خطا در صفحهٔ والد توست می‌شود */ }
+ finally { setBusy(false) }
  }
  return (
- <Modal open={open} title={title} onClose={onClose}>
+ <Modal open={open} title={title} onClose={busy ? undefined : onClose}>
  <form onSubmit={handleSubmit}>
  <div className="form-grid">
  {fields.map((f) => (
  <div key={f.key} className={`field ${f.full ? 'full' : ''}`}>
  <label>{f.label}</label>
  {f.type === 'select' ? (
- <select name={f.key} className="select" defaultValue={initial[f.key] ?? (f.options?.[0]?.value ?? f.options?.[0])}>
+ <select name={f.key} className="select" defaultValue={initial[f.key] ?? (f.options?.[0]?.value ?? f.options?.[0])} disabled={busy}>
  {(f.options || []).map((o) => typeof o === 'object'
  ? <option key={o.value} value={o.value}>{o.label}</option>
  : <option key={o} value={o}>{o}</option>)}
  </select>
  ) : f.type === 'textarea' ? (
- <textarea name={f.key} className="textarea" defaultValue={initial[f.key]} />
+ <textarea name={f.key} className="textarea" defaultValue={initial[f.key]} disabled={busy} />
  ) : (
  <input
  name={f.key} className="input" type={f.type || 'text'}
  defaultValue={initial[f.key]} required={f.required !== false}
- placeholder={f.placeholder}
+ placeholder={f.placeholder} disabled={busy}
  />
  )}
  </div>
  ))}
  </div>
  <div className="modal-actions">
- <button type="submit" className="btn btn-primary">{submitLabel}</button>
- <button type="button" className="btn btn-ghost" onClick={onClose}>انصراف</button>
+ <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'در حال ذخیره…' : submitLabel}</button>
+ <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>انصراف</button>
  </div>
  </form>
  </Modal>

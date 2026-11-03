@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   CreditCard, ShoppingCart, User, Lock, Truck, PackageCheck, Wallet, Bike, MapPin,
@@ -31,6 +31,14 @@ const SHIP_METHODS = [
   },
 ]
 
+/* روش‌های پرداخت — زرین‌پال تنها درگاه فعال (سایرها به‌زودی) */
+const PAY_METHODS = [
+  { key: 'زرین‌پال', soon: false },
+  { key: 'درگاه ملت', soon: true },
+  { key: 'کیف پول مدرس‌یار', soon: true },
+  { key: 'کارت به کارت', soon: true },
+]
+
 export default function Checkout() {
   const { cart, toast, user, clearCart } = useApp()
   const nav = useNavigate()
@@ -40,6 +48,9 @@ export default function Checkout() {
   const [discount, setDiscount] = useState(0)
   const [shipKey, setShipKey] = useState('prepaid')
   const [paying, setPaying] = useState(false)
+  /* وضعیت درگاه از سرور (mock/sandbox/real) — برای نمایش حالت آزمایشی */
+  const [payConfig, setPayConfig] = useState(null)
+  useEffect(() => { req('/pay/config').then(setPayConfig).catch(() => {}) }, [])
 
   const subtotal = cart.reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
   const marketSub = cart.filter((i) => i.kind === 'market').reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
@@ -66,8 +77,9 @@ export default function Checkout() {
     }
   }
 
-  /* پرداخت واقعی — سفارش در بک‌اند ثبت می‌شود (قیمت/موجودی/تخفیف همه سرورمحور).
-     قبلاً فقط در localStorage می‌رفت و موجودی انبار کم نمی‌شد */
+  /* پرداخت واقعی — سبد پولی: ریدایرکت به درگاه زرین‌پال (بازگشت با callback و
+     تأیید سمت سرور) • سبد رایگان: ثبت مستقیم. سبد خرید تا بازگشت موفق از
+     درگاه پاک نمی‌شود — صفحهٔ بازگشت (/order-success) خالی‌اش می‌کند */
   const submit = async (e) => {
     e.preventDefault()
     if (cart.length === 0 || paying) return
@@ -76,21 +88,28 @@ export default function Checkout() {
       nav('/auth')
       return
     }
+    if (method !== 'زرین‌پال' && finalTotal > 0) {
+      toast('فعلاً فقط درگاه زرین‌پال فعال است', 'error')
+      return
+    }
     setPaying(true)
     try {
       const fd = Object.fromEntries(new FormData(e.target))
-      const r = await req('/checkout', {
-        method: 'POST',
-        body: {
-          items: cart.map((c) => ({ id: c.id, kind: c.kind, qty: c.qty || 1 })),
-          coupon: coupon.trim() || undefined,
-          shipKey,
-          contact: { name: fd.name, phone: fd.phone, email: fd.email, address: fd.address },
-        },
-      })
-      const ship = hasMarket ? { label: r.shipLabel, cost: r.shipCost } : null
-      clearCart() // سبد پس از ثبت واقعی سفارش در سرور خالی می‌شود
-      nav('/order-success', { state: { code: r.code, total: r.total, ship } })
+      const body = {
+        items: cart.map((c) => ({ id: c.id, kind: c.kind, qty: c.qty || 1 })),
+        coupon: coupon.trim() || undefined,
+        shipKey,
+        contact: { name: fd.name, phone: fd.phone, email: fd.email, address: fd.address },
+      }
+      if (finalTotal === 0) {
+        const r = await req('/checkout', { method: 'POST', body })
+        clearCart()
+        nav('/order-success', { state: { code: r.code, total: 0 } })
+      } else {
+        const r = await req('/pay/zarinpal/start', { method: 'POST', body })
+        window.location.assign(r.redirectUrl)
+        return // صفحه به درگاه می‌رود
+      }
     } catch (err) {
       if (err.status === 401) {
         toast('برای پرداخت ابتدا وارد حساب شوید', 'error')
@@ -169,12 +188,25 @@ export default function Checkout() {
               <div className="card pad">
                 <h3 className="mb16 row g8" style={{ fontSize: 15 }}><CreditCard size={17} className="text-teal" /> روش پرداخت</h3>
                 <div className="pay-methods">
-                  {['زرین‌پال', 'درگاه ملت', 'کیف پول مدرس‌یار', 'کارت به کارت'].map((m) => (
-                    <div key={m} className={`pay-method ${method === m ? 'on' : ''}`} onClick={() => setMethod(m)}>
-                      <Wallet size={17} /> {m}
+                  {PAY_METHODS.map((m) => (
+                    <div
+                      key={m.key}
+                      className={`pay-method ${method === m.key ? 'on' : ''} ${m.soon ? 'soon' : ''}`}
+                      onClick={() => !m.soon && setMethod(m.key)}
+                      style={m.soon ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+                      aria-pressed={method === m.key}
+                      role="button"
+                    >
+                      <Wallet size={17} /> {m.key}
+                      {m.soon && <span className="muted" style={{ fontSize: 11, marginInlineStart: 'auto' }}>به‌زودی</span>}
                     </div>
                   ))}
                 </div>
+                {payConfig?.mode === 'mock' && (
+                  <p className="muted small mt8" style={{ lineHeight: 1.9 }}>
+                    درگاه در حالت آزمایشی است (بدون پول واقعی) — برای اتصال به زرین‌پال، مرچنت‌کد را در تنظیمات سرور وارد کنید.
+                  </p>
+                )}
               </div>
 
               <div className="card pad">

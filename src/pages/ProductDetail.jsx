@@ -52,6 +52,9 @@ export default function ProductDetail() {
     if (product) pushViewed({ id: product.id, name: product.name })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id])
+  /* [فیکس F28] ریست qty/shot هنگام ناوبری بین محصولات — قبلاً تعداد انتخابی
+     محصول قبلی برای محصول بعدی می‌ماند و شات گالری هم ریست نمی‌شد */
+  useEffect(() => { setQty(1); setShot(0) }, [id])
   if (!product) {
     return (
       <div className="container section">
@@ -73,11 +76,14 @@ export default function ProductDetail() {
   ]
 
   const add = () => {
+    /* [فیکس F28] کلمپ qty به موجودی واقعی هنگام افزودن — قبلاً عدد انتخابی
+       بدون چک stock به سبد می‌رفت و reserveStock سرور خطا می‌داد */
+    const n = Math.min(Math.max(1, qty || 1), Math.max(1, product.stock || 1))
     addToCart(
       { id: product.id, name: product.name, price: product.price, icon: product.icon, color: product.color, kind: 'market', maxStock: product.stock },
-      qty
+      n
     )
-    toast(`${faNum(qty)} عدد به سبد خرید اضافه شد`)
+    toast(`${faNum(n)} عدد به سبد خرید اضافه شد`)
   }
 
   /** ثبت نظر واقعی در بک‌اند — قبلاً اصلاً راه ثبت نظر وجود نداشت (ناقصی) */

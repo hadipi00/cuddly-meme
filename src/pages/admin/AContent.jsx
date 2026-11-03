@@ -177,7 +177,7 @@ export default function AContent() {
  placeholder="مثلاً: میانگین مطالعه یا ۴.۲ ساعت…"
  value={q}
  onChange={(e) => setQ(e.target.value)}
- onKeyDown={(e) => e.key === 'Enter' && doSearch()}
+ onKeyDown={(e) => e.key === 'Enter' && !searching && doSearch()}
  />
  <button className="btn btn-sm" onClick={doSearch} disabled={searching}>
  <Icon name="search" size={15} /> {searching ? 'در حال جستجو…' : 'جستجو در سایت'}
@@ -228,7 +228,7 @@ export default function AContent() {
  autoFocus
  placeholder="متن جدید (خالی = حذف)"
  onChange={(e) => setEditing({ ...editing, value: e.target.value })}
- onKeyDown={(e) => e.key === 'Enter' && applyOverride(r.text, editing.value)}
+ onKeyDown={(e) => e.key === 'Enter' && !busy && applyOverride(r.text, editing.value)}
  />
  <button className="btn btn-sm" onClick={() => applyOverride(r.text, editing.value)} disabled={busy}>ذخیره</button>
  <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>انصراف</button>

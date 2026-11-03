@@ -616,14 +616,15 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const canSyncBoard = () => Date.now() - boardLocalTsRef.current > 3000
  const canSyncLock = () => Date.now() - lockLocalTsRef.current > 3000
 
- /* ---------- آغاز/برگزاری مجدد کلاس توسط مدرس ----------
-  * کلاسِ ended (جلسه قبل) با ورود مدرس، جلسه‌ی جدید شروع می‌شود — دیگر صفحه «پایان» گیر نمی‌کند */
+ /* ---------- همگام‌سازی وضعیت اولیه برای مدرس ----------
+  * [فیکس B7] شروع جلسهٔ جدید فقط با اکشن صریح کاربر (دکمهٔ «برگزاری جلسه جدید»
+  * در صفحهٔ پایان) — قبلاً صرفِ باز کردن صفحهٔ اتاق حتی برای کلاسِ ended بلافاصله
+  * startLive می‌زد (mutation در render!) و حتی در خطای شبکه هم session جعلی می‌ساخت */
  useEffect(() => {
    if (!isTeacher || !classId) return
    req(`/classes/${classId}/state`).then((st) => {
      if (st.status === 'live') setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: st.startedAt }))
-     else startLive(classId) // scheduled یا ended → برگزاری جلسه‌ی جدید
-   }).catch(() => startLive(classId))
+   }).catch(() => { /* قطعی شبکه → هیچ mutation؛ UI منتظر poll بعدی می‌ماند */ })
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
@@ -937,9 +938,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* ---------- SSE: رویدادهای لحظه‌ای (شتاب‌دهنده — همه‌چیز با polling هم پوشش داده شده) ---------- */
  useEffect(() => {
    if (!classId) return
-   const token = getToken() || ''
-   const es = new EventSource(`/api/classes/${classId}/events?token=${encodeURIComponent(token)}`)
-   esRef.current = es
+   let cancelled = false
+   let es = null
 
    const handleSse = (msg) => {
      switch (msg.type) {
@@ -1002,8 +1002,37 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      }
    }
 
-   es.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data) } catch { return } handleSse(m) }
-   return () => { es.close() }
+   /* [فیکس B8] توکن کامل JWT دیگر در query string نمی‌رود — تیکت ۲ دقیقه‌ای
+      مخصوص SSE (app.get('/api/sse-ticket')) گرفته و استفاده می‌شود؛ EventSource
+      هدر نمی‌فرستد پس توکن ده‌ساله در URL/log/history باقی نمی‌ماند */
+   const openEs = async () => {
+     let qs = ''
+     try { const t = await req('/sse-ticket'); if (t?.st) qs = `st=${encodeURIComponent(t.st)}` } catch { /* fallback */ }
+     if (!qs) { const token = getToken() || ''; qs = `token=${encodeURIComponent(token)}` }
+     if (cancelled) return
+     es = new EventSource(`/api/classes/${classId}/events?${qs}`)
+     esRef.current = es
+     es.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data) } catch { return } handleSse(m) }
+     /* [فیکس F6] خطای SSE بی‌پاسخ نبود — اگر سرور ۴۰۱/۴۰۳ می‌داد (حذف عضویت/توکن
+        باطل) مرورگر بی‌پایان reconnect می‌زد. با یک probe جدا بررسی می‌شود؛ در رد
+        شدن، اتصال بسته و کاربر به صفحهٔ کلاس‌ها هدایت می‌شود */
+     es.onerror = async () => {
+       if (cancelled) return
+       try {
+         await req(`/classes/${classId}/state`, { timeout: 5000 })
+         /* سرور پاسخ داد → قطعی موقت؛ EventSource خودش دوباره وصل می‌شود */
+       } catch (e) {
+         if (e.status === 401 || e.status === 403) {
+           cancelled = true
+           try { es.close() } catch { /* noop */ }
+           toast('دسترسی شما به این کلاس پایان یافت', 'error')
+           nav(isTeacher ? '/panel/teacher/classes' : '/panel/student/schedule')
+         }
+       }
+     }
+   }
+   openEs()
+   return () => { cancelled = true; try { es?.close() } catch { /* noop */ } }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
@@ -1169,6 +1198,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const participants = live?.participants || []
  const handsUp = participants.filter((p) => p.hand).length
  const classEnded = live?.status === 'ended'
+
+ /* [فیکس F4] با پایان کلاس، وضعیت UI میکروفون/دوربین ریست می‌شود — قبلاً ترک‌ها
+    stop و استریم null می‌شد ولی setMic/setCam زده نمی‌شد؛ اگر مدرس «برگزاری جلسه
+    جدید» می‌زد، دکمه‌ها روشن نشان داده می‌شدند در حالی که استریمی وجود نداشت */
+ useEffect(() => {
+   if (!classEnded) return
+   setMic(false)
+   setCam(false)
+   try { revokeMyMedia() } catch { /* noop */ }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classEnded])
 
  /* اجازه فعال‌سازی صدا/تصویر — مدرس همیشه دارد؛ دانش‌آموز فقط با تایید مدرس */
  const myPart = participants.find((p) => p.id === user?.id)

@@ -9,7 +9,11 @@ import { faNum } from '../utils/format'
 
 export default function Resume() {
  const teachers = useCatalog(content.teachers, fallbackTeachers)
- const lead = teachers[0]
+ /* [فیکس F31] گارد لیست خالی — قبلاً teachers[0].name کل صفحه را می‌انداخت */
+ const lead = teachers[0] || {
+  name: 'مدرس‌یار', bio: '', rating: 0,
+  students: 0, classesCount: 0, skills: [],
+ }
  return (
  <>
  <Seo

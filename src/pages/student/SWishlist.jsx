@@ -37,7 +37,9 @@ export default function SWishlist() {
  </div>
  <button className="btn btn-primary btn-sm btn-block mt16" onClick={() => {
  addToCart({ id: w.id, name: w.name, price: w.price, icon: w.icon, color: w.color, kind: w.kind })
- toast('به سبد خرید اضافه شد')
+ /* [فیکس F34] انتقال واقعی — از علاقه‌مندی هم حذف می‌شود؛ کلیک مکرر qty را بالا نمی‌برد */
+ toggleWish(w)
+ toast('به سبد خرید منتقل شد')
  }}>
  <Icon name="cart" size={15} /> انتقال به سبد خرید
  </button>

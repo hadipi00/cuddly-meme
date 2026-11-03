@@ -31,7 +31,12 @@ export default function Navbar() {
  return () => window.removeEventListener('scroll', onScroll)
  }, [])
 
- useEffect(() => { document.body.style.overflow = menu ? 'hidden' : '' }, [menu])
+ /* [فیکس F31] قفل اسکرول body در unmount آزاد می‌شود — قبلاً اگر با منوی
+    باز کامپوننت unmount می‌شد، صفحهٔ بعدی بدون اسکرول می‌ماند */
+ useEffect(() => {
+  document.body.style.overflow = menu ? 'hidden' : ''
+  return () => { document.body.style.overflow = '' }
+ }, [menu])
 
  return (
  <>

@@ -1,14 +1,18 @@
 import { faNum } from '../utils/format'
+import { useId } from 'react'
 
 /** نمودار خطی + ناحیه پر — SVG خالص */
 export function LineChart({ data = [], height = 240, color = '#2dd4bf', color2 = '#38bdf8', unit = '' }) {
+ const uid = useId()
  const W = 640, H = height, padX = 34, padY = 30
  const max = Math.max(...data.map((d) => d.value), 1) * 1.15
  const stepX = (W - padX * 2) / Math.max(data.length - 1, 1)
  const pts = data.map((d, i) => [padX + i * stepX, H - padY - (d.value / max) * (H - padY * 2)])
  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
  const area = `${line} L${pts[pts.length - 1]?.[0] ?? padX},${H - padY} L${padX},${H - padY} Z`
- const gid = `g${Math.abs(data.length * 31 + Math.round(max)).toString(36)}`
+ /* [فیکس F30] شناسهٔ گرادیان یکتا با useId — قبلاً gid از طول داده/max
+    ساخته می‌شد و دو چارت هم‌شکل در یک صفحه گرادیان مشترک می‌گرفتند */
+ const gid = `grad${uid.replace(/[^a-zA-Z0-9]/g, '')}`
 
  return (
  <div className="chart-wrap">

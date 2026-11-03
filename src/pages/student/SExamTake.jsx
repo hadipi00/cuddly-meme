@@ -5,9 +5,12 @@ import { Modal } from '../../components/Modal'
 import { useApp } from '../../store/AppContext'
 import { faNum } from '../../utils/format'
 import { req } from '../../services/http'
-import { useTicketedUrls } from '../../services/fileTicket'
+import { useTicketedUrls, invalidateTicket } from '../../services/fileTicket'
 
-const greek = ['۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸']
+/* [فیکس F34] تا ۱۰ مدال + fallback عددی — جفت‌های match در سازساز تا ۱۰تاست و
+   مدال نهم/دهم «undefined» رندر می‌شد */
+const greek = ['۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹', '۱۰']
+const medal = (n) => greek[n] ?? faNum(n + 1)
 const typeLabel = { mcq: 'گزینه‌ای', multi: 'چندگزینه‌ای', tf: 'درست/نادرت', blank: 'جای خالی', short: 'کوتاه‌پاسخ', essay: 'تشریحی', match: 'وصل‌کردنی', order: 'مرتب‌کردنی', pdfmcq: 'تستی' }
 const fmtTime = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -26,8 +29,10 @@ export default function SExamTake() {
  const [answers, setAnswers] = useState({})
  const [flags, setFlags] = useState(() => new Set())
  const [view, setView] = useState('questions')
- /* برگه سوال PDF حالا با تیکت امن لود می‌شود (URL فایل بدون تیکت ۴۰۱ می‌خورد) */
- const pdfPages = useTicketedUrls(attempt?.exam?.pdf_pages || [])
+ /* برگه سوال PDF حالا با تیکت امن لود می‌شود (URL فایل بدون تیکت ۴۰۱ می‌خورد)
+    [فیکس F34] در شکست، undefined برمی‌گردد و دکمهٔ تلاش مجدد می‌گیریم — قبلاً «در حال آماده‌سازی صفحه…» ابدی می‌ماند */
+ const [pdfRetry, setPdfRetry] = useState(0)
+ const pdfPages = useTicketedUrls(attempt?.exam?.pdf_pages || [], pdfRetry)
  const [remaining, setRemaining] = useState(0)
  const [sec, setSec] = useState({ tabs: 0, copy: 0, fs_exits: 0, newEvents: [] })
  const [warn, setWarn] = useState('')
@@ -62,15 +67,23 @@ export default function SExamTake() {
    })
  }, [eid])
 
- /* ---------- تایمر ---------- */
+ /* ---------- تایمر ----------
+    [فیکس F23] doSubmit از ref خوانده می‌شود (کلوژر کهنه → دوبار submit نبود)؛
+    interval در شکست auto-submit زنده می‌ماند و هر ثانیه دوباره تلاش می‌کند —
+    قبلاً در شکست ساعت روی ۰۰:۰۰ منجمد و هیچ retryای نبود */
+ const doSubmitRef = useRef(() => {})
+ const remainingRef = useRef(0)
+ useEffect(() => { doSubmitRef.current = doSubmit })
  useEffect(() => {
    if (!attempt) return
    const iv = setInterval(() => {
      const rem = attempt.deadline_at - (Date.now() - offRef.current)
      setRemaining(rem)
-     if (rem <= 0) { clearInterval(iv); doSubmit(true) }
+     remainingRef.current = rem
+     if (rem <= 0) doSubmitRef.current(true)
    }, 1000)
    return () => clearInterval(iv)
+   // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [attempt?.id])
 
  /* ---------- ذخیره خودکار ---------- */
@@ -134,7 +147,7 @@ export default function SExamTake() {
        markDirty()
      }
    }
-   const onBeforeUnload = (e) => { if (remaining > 0) { e.preventDefault(); e.returnValue = '' } }
+   const onBeforeUnload = (e) => { if (remainingRef.current > 0) { e.preventDefault(); e.returnValue = '' } }
    document.addEventListener('visibilitychange', onVis)
    document.addEventListener('copy', onCopy)
    document.addEventListener('cut', onCopy)
@@ -151,7 +164,9 @@ export default function SExamTake() {
      document.removeEventListener('fullscreenchange', onFs)
      window.removeEventListener('beforeunload', onBeforeUnload)
    }
- }, [attempt?.id, remaining])
+   /* [فیکس F23] remaining از deps حذف شد (remainingRef جایگزین) — قبلاً ۷ لیسنر
+      هر ثانیه remove/add می‌شدند */
+ }, [attempt?.id])
 
  const enterFs = async () => {
    try { await document.documentElement.requestFullscreen(); setFsNeed(false) } catch { setFsNeed(false) }
@@ -162,7 +177,11 @@ export default function SExamTake() {
    setAnswers((a) => { const n = { ...a, [qid]: v }; ansRef.current = n; return n })
    markDirty()
  }
- const clearAns = (qid) => setAnswers((a) => { const n = { ...a }; delete n[qid]; ansRef.current = n; return n })
+ /* [فیکس F11] پاک‌کردن پاسخ = مقدار null در payload + markDirty — قبلاً کلید از
+    payload حذف می‌شد (سرور merge را تغییر نمی‌داد) و markDirty هم زده نمی‌شد:
+    نه ذخیرهٔ خودکار نه submit حذف را اعلام نمی‌کردند → کارنامه با پاسخ قبلی
+    تصحیح و بعد از رفرش پاسخ قدیمی برمی‌گشت */
+ const clearAns = (qid) => { setAnswers((a) => { const n = { ...a, [qid]: null }; ansRef.current = n; return n }); markDirty() }
  const toggleFlag = (qid) => setFlags((f) => { const n = new Set(f); n.has(qid) ? n.delete(qid) : n.add(qid); return n })
  const moveItem = (qid, arr, from, dir) => {
    const to = from + dir
@@ -233,7 +252,7 @@ export default function SExamTake() {
     <div className="exm-opts">
      {q.opts.map((o, j) => (
       <button key={j} className={`exm-opt ${answers[q.qid] === j ? 'on' : ''}`} onClick={() => setAns(q.qid, j)}>
-       <span className="bub">{greek[j]}</span><span style={{ flex: 1 }}>{o}</span>
+       <span className="bub">{medal(j)}</span><span style={{ flex: 1 }}>{o}</span>
       </button>
      ))}
     </div>
@@ -245,7 +264,7 @@ export default function SExamTake() {
       return (
        <button key={j} className={`exm-opt ${sel ? 'on' : ''}`}
          onClick={() => setAns(q.qid, sel ? (answers[q.qid] || []).filter((c) => c !== j) : [...(answers[q.qid] || []), j])}>
-        <span className="bub">{greek[j]}</span><span style={{ flex: 1 }}>{o}</span>
+        <span className="bub">{medal(j)}</span><span style={{ flex: 1 }}>{o}</span>
        </button>
       )
      })}
@@ -273,7 +292,7 @@ export default function SExamTake() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
      {q.opts.left.map((l, li) => (
       <div key={li} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '10px 12px' }}>
-       <b className="small">{greek[li]}) {l}</b>
+       <b className="small">{medal(li)}) {l}</b>
        <div className="row mt8" style={{ flexWrap: 'wrap', gap: 6 }}>
         {q.opts.right.map((r, ri) => (
          <button key={ri} className={`exm-chip ${answers[q.qid]?.[li] === ri ? 'on' : ''}`} onClick={() => setAns(q.qid, { ...(answers[q.qid] || {}), [li]: ri })}>
@@ -331,7 +350,12 @@ export default function SExamTake() {
     <div className="exm-questions exm-qs-anim" onCopyCapture={(e) => exam.sec_copy_block && e.preventDefault()}>
      {pdfMode && (
       <div className="exm-pdfview mb16">
-       {pdfPages.map((u, i) => (u ? <img key={(u || '') + i} src={u} alt={`صفحه ${i + 1}`} /> : <div key={'ld' + i} className="muted small" style={{ padding: 12 }}>در حال آماده‌سازی صفحه {faNum(i + 1)}…</div>))}
+       {pdfPages.map((u, i) => (u ? <img key={(u || '') + i} src={u} alt={`صفحه ${i + 1}`} /> : u === undefined ? (
+        <div key={'err' + i} className="muted small" style={{ padding: 12, textAlign: 'center' }}>
+         بارگذاری صفحهٔ {faNum(i + 1)} ناموفق بود{' '}
+         <button className="btn btn-ghost btn-sm" onClick={() => { invalidateTicket(); setPdfRetry((n) => n + 1) }}>تلاش مجدد</button>
+        </div>
+       ) : <div key={'ld' + i} className="muted small" style={{ padding: 12 }}>در حال آماده‌سازی صفحه {faNum(i + 1)}…</div>))}
        {!pdfPages.length && <p className="muted small" style={{ padding: 16 }}>برگه‌ای بارگذاری نشده — با معلم خود تماس بگیرید.</p>}
       </div>
      )}

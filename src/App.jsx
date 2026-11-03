@@ -9,6 +9,7 @@ import { LoadingScreen } from './components/LoadingScreen'
 import { CartDrawer, Toasts } from './components/CartDrawer'
 import { useApp } from './store/AppContext'
 import { initPrefetch } from './lib/prefetch'
+import { seoOwnsTitle } from './components/Seo'
 
 /* ---------- lazy loading با مکانیزم retry — رفع ارور «لود نشد» ----------
  * اگر بارگذاری chunk به‌خاطر قطعی لحظه‌ای اینترنت یا کشِ قدیمی مرورگر
@@ -23,8 +24,12 @@ const lazyPage = (factory) =>
           setTimeout(() => {
             factory().then(resolve, (err) => {
               try {
-                if (!sessionStorage.getItem('my_chunk_reload')) {
-                  sessionStorage.setItem('my_chunk_reload', '1')
+                /* [فیکس F12] سقف رفرش = ۲ — قبلاً پرچم بولی بود و ChunkFlagClear آن را
+                   روی mount اپ (قبل از resolve چانک‌ها) پاک می‌کرد؛ بعد از هر deploy
+                   کاربر با کش قدیمی در حلقهٔ بی‌پایان reload می‌افتاد */
+                const n = Number(sessionStorage.getItem('my_chunk_reload') || 0)
+                if (n < 2) {
+                  sessionStorage.setItem('my_chunk_reload', String(n + 1))
                   window.location.reload()
                   return
                 }
@@ -36,10 +41,15 @@ const lazyPage = (factory) =>
     )
   )
 
-/** با mount موفق برنامه، پرچم رفرش اضطراری پاک می‌شود */
+/** پرچم رفرش اضطراری فقط بعد از ۴ ثانیه اجرای سالم برنامه پاک می‌شود —
+ *  [فیکس F12] قبلاً روی mount فوراً پاک می‌شد؛ mount اپ قبل از resolve شدن
+ *  lazy chunkها است، پس گارد عملاً هیچ‌وقت کار نمی‌کرد */
 function ChunkFlagClear() {
   useEffect(() => {
-    try { sessionStorage.removeItem('my_chunk_reload') } catch { /* noop */ }
+    const t = setTimeout(() => {
+      try { sessionStorage.removeItem('my_chunk_reload') } catch { /* noop */ }
+    }, 4000)
+    return () => clearTimeout(t)
   }, [])
   return null
 }
@@ -152,12 +162,19 @@ function titleFor(pathname) {
 
 const DEFAULT_TITLE = 'مدرس‌یار | پلتفرم کلاس آنلاین و فروش دوره‌های آموزشی'
 
-/** عنوان تب مرورگر را بر اساس مسیر فعلی به‌روز می‌کند */
+/** عنوان تب مرورگر را بر اساس مسیر فعلی به‌روز می‌کند
+ *  [فیکس F22] اگر صفحهٔ فعلی کامپوننت Seo دارد، مالکیت عنوان با Seo است —
+ *  قبلاً TitleSync بلافاصله بعد از Seo عنوان اختصاصی را با عنوان عمومی مسیر
+ *  بازنویسی می‌کرد (effect پدر بعد از effect فرزند اجرا می‌شود) */
 function TitleSync() {
  const { pathname } = useLocation()
  useEffect(() => {
- const t = titleFor(pathname)
- document.title = t ? `${t} | مدرس‌یار` : DEFAULT_TITLE
+ const t = setTimeout(() => {
+   if (seoOwnsTitle()) return
+   const rt = titleFor(pathname)
+   document.title = rt ? `${rt} | مدرس‌یار` : DEFAULT_TITLE
+ }, 0)
+ return () => clearTimeout(t)
  }, [pathname])
  return null
 }

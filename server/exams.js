@@ -127,28 +127,55 @@ export function registerExamRoutes(app) {
   /* ================= فایل‌های آزمون — با تیکت امضاشده کوتاه‌عمر =================
    * قبلاً static عمودی بود و برگه سوال و پاسخنامه معلم به هر کسی که URL را داشت
    * (بدون هیچ لاگینی) قابل دسترسی بود. حالا کلاینتِ لاگین‌شده تیکت ۱۵ دقیقه‌ای
-   * می‌گیرد و فایل‌ها فقط با همان تیکت سرو می‌شوند (تصاویر/لینک‌ها هم کار می‌کنند) */
+   * می‌گیرد و فایل‌ها فقط با همان تیکت سرو می‌شوند (تصاویر/لینک‌ها هم کار می‌کنند)
+   * [فیکس B3] تیکت بایند به کاربر است (فرمت exp.uid.sig) و سرو فایل تفکیک نقش دارد:
+   *   • پاسخنامه‌ها (answer_pdf هر آزمونی) فقط برای مالک/ادمین
+   *   • برگهٔ سوال/تصاویر سوالات فقط برای آزمون‌های published که دانش‌آموز حق
+   *     دیدنش را دارد (بدون course_id یا ثبت‌نام‌شده) یا در آن‌ها تلاش داشته */
   const FILE_TICKET_SECRET = randomBytes(32).toString('hex')
+  const fileTicketSign = (exp, uid) => createHmac('sha256', FILE_TICKET_SECRET).update(`${exp}.${uid}`).digest('hex')
   app.post('/api/exams/file-ticket', (req, res) => {
     const u = authUser(req)
     if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
     const exp = now() + 15 * 60_000
-    const sig = createHmac('sha256', FILE_TICKET_SECRET).update(String(exp)).digest('hex')
-    res.json({ st: `${exp}.${sig}`, exp })
+    const sig = fileTicketSign(exp, u.id)
+    res.json({ st: `${exp}.${u.id}.${sig}`, exp })
   })
   const validTicket = (st) => {
-    const dot = String(st || '').indexOf('.')
-    if (dot < 1) return false
-    const exp = st.slice(0, dot), sig = st.slice(dot + 1)
-    if (!/^[0-9]+$/.test(exp) || Number(exp) < now()) return false
-    const want = createHmac('sha256', FILE_TICKET_SECRET).update(exp).digest('hex')
-    if (sig.length !== want.length) return false
-    try { return timingSafeEqual(Buffer.from(sig), Buffer.from(want)) } catch { return false }
+    const parts = String(st || '').split('.')
+    if (parts.length !== 3) return null
+    const [exp, uid, sig] = parts
+    if (!/^[0-9]+$/.test(exp) || Number(exp) < now()) return null
+    if (!/^[a-z0-9-]{1,40}$/i.test(uid)) return null
+    const want = fileTicketSign(exp, uid)
+    if (sig.length !== want.length) return null
+    try { return timingSafeEqual(Buffer.from(sig), Buffer.from(want)) ? uid : null } catch { return null }
   }
-  app.use('/api/exams-files', (req, res, next) => {
-    if (!validTicket(req.query.st)) return res.status(401).json({ error: 'دسترسی به فایل آزمون نیازمند ورود است' })
+  const fileBase = (p) => String(p || '').split('/').pop().split('?')[0]
+  const staffFileGate = (req, res, next) => {
+    const uid = validTicket(req.query.st)
+    if (!uid) return res.status(401).json({ error: 'دسترسی به فایل آزمون نیازمند ورود است' })
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(uid)
+    if (!u) return res.status(401).json({ error: 'دسترسی به فایل آزمون نیازمند ورود است' })
+    if (u.role === 'teacher' || u.role === 'admin') return next()
+    /* دانش‌آموز: لیست فایل‌های مجازش ساخته می‌شود — پاسخنامه‌ها هرگز */
+    const allowed = new Set()
+    const deny = new Set()
+    for (const e of db.prepare('SELECT id, course_id, pdf_pages, answer_pdf FROM exams').all()) {
+      if (e.answer_pdf) deny.add(fileBase(e.answer_pdf))
+      const hasAttempt = !!db.prepare('SELECT 1 AS x FROM exam_attempts WHERE exam_id = ? AND student_id = ?').get(e.id, u.id)
+      if (e.status !== 'published' && !hasAttempt) continue
+      if (e.course_id && !isEnrolled(e.course_id, u.id)) continue
+      for (const p of P(e.pdf_pages, [])) allowed.add(fileBase(p))
+    }
+    for (const r of db.prepare('SELECT q.image AS img FROM exam_questions q JOIN exams e ON e.id = q.exam_id WHERE e.status = ?').all('published'))
+      if (r.img) allowed.add(fileBase(r.img))
+    const base = fileBase(req.path)
+    if (deny.has(base)) return res.status(403).json({ error: 'پاسخنامه فقط برای مدرس قابل مشاهده است' })
+    if (!allowed.has(base)) return res.status(403).json({ error: 'این فایل متعلق به آزمون‌های شما نیست' })
     next()
-  }, express.static(upDir, { maxAge: '1d', index: false }))
+  }
+  app.use('/api/exams-files', staffFileGate, express.static(upDir, { maxAge: '1d', index: false }))
 
   const requireTeacher = (req, res, next) => {
     const u = authUser(req)
@@ -184,7 +211,10 @@ export function registerExamRoutes(app) {
     const { name = 'file', data = '' } = req.body || {}
     const m = String(data).match(/^data:([\w/.+-]+);base64,(.+)$/)
     if (!m) return res.status(400).json({ error: 'فایل معتبر نیست' })
-    if (m[2].length > 14 * 1024 * 1024) return res.status(400).json({ error: 'حجم فایل باید کمتر از ۱۰ مگابایت باشد' })
+    /* [فیکس B21] حجم بر حسب بایتِ رمزگشایی‌شده چک می‌شود — قبلاً طول base64 با ۱۴MB
+       چک می‌شد ولی پیام «۱۰ مگابایت» می‌داد و هرگز با چک واقعی نمی‌خواند */
+    const bin = Buffer.from(m[2], 'base64')
+    if (bin.length > 10 * 1024 * 1024) return res.status(400).json({ error: 'حجم فایل باید کمتر از ۱۰ مگابایت باشد' })
     const ext = (String(name).split('.').pop() || '').toLowerCase()
     let real = ''
     if (ext === 'pdf' || m[1] === 'application/pdf') real = '.pdf'
@@ -207,12 +237,14 @@ export function registerExamRoutes(app) {
     const rows = (req.user.role === 'admin' ? db.prepare(sql).all() : db.prepare(sql).all(req.user.id))
     const cls = db.prepare('SELECT id, title FROM classes').all()
     const cName = Object.fromEntries(cls.map((c) => [c.id, c.title]))
+    /* [فیکس B22] یک COUNT گروهی به‌جای یک کوئری برای هر آزمون (N+1) */
+    const qc = Object.fromEntries(db.prepare("SELECT exam_id, COUNT(*) n FROM exam_questions GROUP BY exam_id").all().map((r) => [r.exam_id, r.n]))
     res.json({
       exams: rows.map((e) => ({
         id: e.id, title: e.title, desc: e.desc, status: e.status, mode: e.mode,
         duration_min: e.duration_min, open_at: e.open_at, close_at: e.close_at,
         course_id: e.course_id, course_title: cName[e.course_id] || '',
-        teacher_name: e.teacher_name, q_count: e.mode === 'pdf' ? e.q_count : db.prepare('SELECT COUNT(*) n FROM exam_questions WHERE exam_id = ?').get(e.id).n,
+        teacher_name: e.teacher_name, q_count: e.mode === 'pdf' ? e.q_count : (qc[e.id] || 0),
         stats: statsOf(e.id), updated_at: e.updated_at,
       })),
     })
@@ -237,6 +269,8 @@ export function registerExamRoutes(app) {
       WHERE e.status = 'published' ORDER BY COALESCE(e.open_at, e.created_at) DESC`).all()
     const mine = db.prepare('SELECT * FROM exam_attempts WHERE student_id = ?').all(req.user.id)
     const byExam = Object.fromEntries(mine.map((a) => [a.exam_id, a]))
+    /* [فیکس B22] یک COUNT گروهی به‌جای یک کوئری برای هر آزمون (N+1) */
+    const qc = Object.fromEntries(db.prepare("SELECT exam_id, COUNT(*) n FROM exam_questions GROUP BY exam_id").all().map((r) => [r.exam_id, r.n]))
     const out = []
     for (const e of rows) {
       if (e.course_id && !isEnrolled(e.course_id, req.user.id)) continue
@@ -244,7 +278,7 @@ export function registerExamRoutes(app) {
       out.push({
         id: e.id, title: e.title, desc: e.desc, mode: e.mode, teacher_name: e.teacher_name,
         course_title: e.course_title, duration_min: e.duration_min, open_at: e.open_at, close_at: e.close_at,
-        q_count: e.mode === 'pdf' ? e.q_count : db.prepare('SELECT COUNT(*) n FROM exam_questions WHERE exam_id = ?').get(e.id).n,
+        q_count: e.mode === 'pdf' ? e.q_count : (qc[e.id] || 0),
         status: e.status,
         attempt: a ? { id: a.id, status: a.status, score: a.score, max_score: a.max_score, deadline_at: a.deadline_at, started_at: a.started_at, flags: P(a.flags, []) } : null,
       })

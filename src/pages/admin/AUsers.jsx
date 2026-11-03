@@ -30,6 +30,8 @@ export default function AUsers({ kind }) {
 
  /** ارتقا/تنزل نقش واقعی کاربر — روی سرور ثبت می‌شود */
  const changeRole = async (u, role, msg) => {
+  /* [فیکس F32] تغییر نقش (مثل تنزل مدرس) برگشت‌ناپذیر است — confirm اضافه شد */
+  if (!window.confirm(`نقش «${u.name}» به ${role === 'teacher' ? 'مدرس' : 'دانش‌آموز'} تغییر کند؟ این عمل فوراً روی حساب واقعی او اعمال می‌شود.`)) return
   try {
    await req(`/admin/users/${u.id}/role`, { method: 'POST', body: { role } })
    toast(msg)
@@ -73,7 +75,7 @@ export default function AUsers({ kind }) {
  { key: 'joined', label: 'عضویت' },
  { key: 'teacherStudents', label: 'دانشجو', render: (r) => faNum(r.teacherStudents || 0) },
  { key: 'courses', label: 'کلاس‌ها', render: (r) => faNum(r.courses || 0) },
- { key: 'spent', label: 'درآمد تولیدی', render: (r) => toman(r.spent || 0) },
+ { key: 'spent', label: 'مجموع خرید', render: (r) => toman(r.spent || 0) },
  ]}
  rows={list}
  searchKeys={['name', 'email', 'title']}

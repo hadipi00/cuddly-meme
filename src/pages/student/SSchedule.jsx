@@ -53,13 +53,16 @@ export default function SSchedule() {
  }, [mine, customClasses])
 
  // اتصال به دیتای کلاس زنده (ساعت/مدت/مدرس)
+ // [فیکس F13] کلاس‌های واقعی سرور start/dur/desc خودشان را دارند — قبلاً فقط در
+ // liveClasses دمو جستجو می‌شد و ردیف‌های سرور (بدون slot) ساعت «—» و مدت ۹۰
+ // پیش‌فرض می‌گرفتند و desc واقعی هم drop می‌شد
  const withMeta = useMemo(() => all.map((c) => {
  const live = liveClasses.find((l) => l.id === c.liveId)
  return {
  ...c,
- start: live?.start || slotTime(c.slot),
- dur: live?.dur || 90,
- desc: live?.desc,
+ start: live?.start || c.start || (c.slot ? slotTime(c.slot) : '—'),
+ dur: live?.dur || c.dur || 90,
+ desc: live?.desc || c.desc,
  teacher: live?.teacher || c.teacher,
  href: c.liveId ? `/panel/student/live/${c.liveId}` : null,
  }
@@ -177,7 +180,7 @@ export default function SSchedule() {
  </div>
  ) : (
  <div className="grids g2 mb24">
- {todayList.map((c) => <TodayClassCard key={c.liveId || c.title} cls={c} now={now} onNotify={() => toast('یادآوری ۱۵ دقیقه قبل از شروع کلاس فعال شد')} />)}
+ {todayList.map((c) => <TodayClassCard key={c.liveId || c.title} cls={c} now={now} />)}
  </div>
  )}
 
@@ -245,9 +248,9 @@ export default function SSchedule() {
 }
 
 /* ---------- کارت کلاس امروز — با تایمر زنده ---------- */
-function TodayClassCard({ cls, now, onNotify }) {
+function TodayClassCard({ cls, now }) {
  const nav = useNavigate()
- const { liveSessions } = useApp()
+ const { liveSessions, toast } = useApp()
  const session = cls.liveId ? liveSessions[cls.liveId] : null
  const startsAt = nextOccurrence(cls.day, cls.start)
  const msLeft = startsAt.getTime() - now
@@ -282,8 +285,10 @@ function TodayClassCard({ cls, now, onNotify }) {
 
  {live ? (
  <div className="between wrap g12">
+ {/* [فیکس F13] elapsed برحسب میلی‌ثانیه است — قبلاً تقسیم بر ۳۶۰۰/۶۰ ثانیه‌ای
+     فرض می‌شد و کلاس ۵ دقیقه‌ای «83:20:00» نشان می‌داد */}
  <span className="live-timer" style={{ position: 'static', fontSize: 17, padding: '8px 16px' }} dir="ltr">
- {String(Math.floor(elapsed / 3600)).padStart(2, '0')}:{String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
+ {String(Math.floor(elapsed / 3600000)).padStart(2, '0')}:{String(Math.floor((elapsed % 3600000) / 60000)).padStart(2, '0')}:{String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')}
  </span>
  {cls.href && (
  <button className="btn btn-danger" onClick={() => nav(cls.href)}>
@@ -311,7 +316,8 @@ function TodayClassCard({ cls, now, onNotify }) {
  </div>
  {cls.href
  ? <button className="btn btn-ghost btn-sm" onClick={() => nav(cls.href)}><Icon name="eye" size={15} /> اتاق انتظار</button>
- : <button className="btn btn-ghost btn-sm" onClick={onNotify}><BellRing size={15} /> یادآوری</button>}
+ /* [فیکس F34] یادآوری قلابی — توست موفقیت جعلی نمی‌زد؛ صادقانه «به‌زودی» */
+ : <button className="btn btn-ghost btn-sm" disabled style={{ opacity: 0.5 }} onClick={() => toast('یادآوری پیامکی به‌زودی فعال می‌شود', 'info')}><BellRing size={15} /> یادآوری (به‌زودی)</button>}
  </div>
  )}
  </div>
