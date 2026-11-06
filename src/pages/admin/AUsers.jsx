@@ -23,6 +23,7 @@ export default function AUsers({ kind }) {
  const { toast } = useApp()
  const [modal, setModal] = useState(null)
  const [all, reload] = useRealUsers()
+ const [saving, setSaving] = useState(false)
  const list = all
   ? all.filter((u) => (kind === 'teacher' ? u.role === 'teacher' : u.role === 'student'))
   : (kind === 'teacher' ? fallbackTeachers.map((t) => ({ ...t, joined: t.joined })) : fallbackStudents)
@@ -42,10 +43,54 @@ export default function AUsers({ kind }) {
   }
  }
 
- const add = (data) => {
-  /* ساخت اکانت واقعی هنوز در این فاز نیست — در فازهای بعدی با /api/admin/users POST اضافه می‌شود */
-  setModal(null)
-  toast('ساخت اکانت واقعی به‌زودی از همین فرم فعال می‌شود — فعلاً ثبت‌نام کاربران از صفحه ثبت‌نام سایت انجام می‌شود', 'info')
+ /* [فیکس F40] ساخت/ویرایش واقعی اکانت — فقط مدیر. ثبت‌نام عمومی سایت همیشه
+    دانش‌آموز می‌سازد؛ اکانت معلم فقط از همین فرم ساخته می‌شود (رمز موقت +
+    اجبار تغییر در اولین ورود + شماره موبایل برای CRM) */
+ const add = async (data) => {
+  if (saving) return
+  setSaving(true)
+  try {
+   if (modal === 'new') {
+    await req('/admin/users', {
+     method: 'POST',
+     body: {
+      role: kind === 'teacher' ? 'teacher' : 'student',
+      name: data.name, title: data.role, phone: data.phone, email: data.email,
+      username: data.username, password: data.pass,
+     },
+    })
+    toast(`اکانت ساخته شد — نام‌کاربری: ${data.username || '—'} • رمز موقت است و در اولین ورود باید عوض شود`)
+   } else {
+    await req(`/admin/users/${modal.id}`, {
+     method: 'PATCH',
+     body: {
+      name: data.name, title: data.role, email: data.email,
+      phone: data.phone, username: data.username,
+     },
+    })
+    toast('مشخصات کاربر ذخیره شد')
+   }
+   setModal(null)
+   reload()
+  } catch (e) {
+   if (!e.serverDown) toast(e.message || 'عملیات ناموفق بود', 'error')
+   else toast('سرور در دسترس نیست', 'error')
+  }
+  setSaving(false)
+ }
+
+ /** [فیکس F40] بازنشانی رمز واقعی — رمز موقت + اجبار تغییر در اولین ورود + ابطال سشن‌ها */
+ const resetPw = async (u) => {
+  const pw = window.prompt(`رمز موقت جدید برای «${u.name}» (حداقل ۸ کاراکتر):`)
+  if (pw === null) return
+  if (pw.trim().length < 8) { toast('رمز باید حداقل ۸ کاراکتر باشد', 'error'); return }
+  try {
+   const r = await req(`/admin/users/${u.id}/password`, { method: 'POST', body: { password: pw.trim() } })
+   toast(r.note || 'رمز بازنشانی شد')
+  } catch (e) {
+   if (!e.serverDown) toast(e.message || 'بازنشانی رمز ناموفق بود', 'error')
+   else toast('سرور در دسترس نیست', 'error')
+  }
  }
 
  /* [CRM] خروجی CSV مشتریان — فایل UTF-8 با BOM برای اکسل؛ شماره موبایل ستون اصلی */
@@ -71,7 +116,7 @@ export default function AUsers({ kind }) {
  <div className="between wrap mb24">
  <div>
  <h2 style={{ fontSize: 17 }}>مدیریت مدرسان</h2>
- <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'اکانت‌های واقعی مدرسان سامانه — ارتقا دانش‌آموز به مدرس از پنل دانشجوها'}</span>
+ <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'اکانت معلم فقط از همین‌جا ساخته می‌شود (ثبت‌نام عمومی فقط دانش‌آموز می‌سازد) — یا ارتقای دانش‌آموز از پنل دانشجوها'}</span>
  </div>
  <button className="btn btn-ghost" onClick={() => exportCrm('teacher')}><Icon name="download" size={16} /> خروجی CRM</button>
  <button className="btn btn-primary" onClick={() => setModal('new')}><Icon name="plus" size={16} /> ساخت اکانت مدرس</button>
@@ -100,8 +145,9 @@ export default function AUsers({ kind }) {
  searchKeys={['name', 'email', 'phone', 'username', 'title']}
  actions={(r) => (
  <>
+ <button className="icon-btn" title="ویرایش مشخصات" onClick={() => setModal(r)}><Icon name="edit" /></button>
  <button className="icon-btn" title="تبدیل به دانش‌آموز" onClick={() => changeRole(r, 'student', `${r.name} به دانش‌آموز تغییر نقش یافت`)}><Icon name="user" /></button>
- <button className="icon-btn" title="بازنشانی رمز" onClick={() => toast(`بازنشانی رمز ${r.name} — قابلیت ایمیل به‌زودی`, 'info')}><Icon name="refresh" /></button>
+ <button className="icon-btn" title="بازنشانی رمز (رمز موقت)" onClick={() => resetPw(r)}><Icon name="refresh" /></button>
  </>
  )}
  />
@@ -112,15 +158,21 @@ export default function AUsers({ kind }) {
  title={modal === 'new' ? 'ساخت اکانت مدرس جدید' : `ویرایش ${modal?.name}`}
  onClose={() => setModal(null)}
  onSubmit={add}
- submitLabel={modal === 'new' ? 'ساخت اکانت و ارسال مشخصات' : 'ذخیره'}
- initial={modal && modal !== 'new' ? { name: modal.name, role: modal.title, phone: '', email: modal.email, commission: '۷۰' } : { commission: '۷۰' }}
- fields={[
+ submitLabel={modal === 'new' ? 'ساخت اکانت' : 'ذخیره'}
+ initial={modal && modal !== 'new' ? { name: modal.name, role: modal.title, phone: modal.phone || '', email: modal.email || '', username: modal.username || '' } : { commission: '۷۰' }}
+ fields={modal && modal !== 'new' ? [
+ { key: 'name', label: 'نام و نام خانوادگی', full: true },
+ { key: 'role', label: 'عنوان تخصصی', full: true, placeholder: 'مثلاً مدرس هوش مصنوعی' },
+ { key: 'username', label: 'نام کاربری', placeholder: 'a.rezaei' },
+ { key: 'phone', label: 'شماره موبایل (CRM)', placeholder: '۰۹۱۲…' },
+ { key: 'email', label: 'ایمیل', placeholder: 'teacher@example.com', required: false },
+ ] : [
  { key: 'name', label: 'نام و نام خانوادگی', full: true, placeholder: 'مثلاً علی رضایی' },
  { key: 'role', label: 'عنوان تخصصی', full: true, placeholder: 'مثلاً مدرس هوش مصنوعی' },
- { key: 'phone', label: 'شماره موبایل', placeholder: '۰۹۱۲…' },
- { key: 'email', label: 'ایمیل', placeholder: 'teacher@example.com' },
+ { key: 'phone', label: 'شماره موبایل (CRM)', placeholder: '۰۹۱۲…' },
+ { key: 'email', label: 'ایمیل', placeholder: 'teacher@example.com', required: false },
  { key: 'username', label: 'نام کاربری', placeholder: 'a.rezaei' },
- { key: 'pass', label: 'رمز عبور اولیه', placeholder: 'حداقل ۸ کاراکتر' },
+ { key: 'pass', label: 'رمز موقت (حداقل ۸ کاراکتر)', placeholder: '۸ کاراکتر یا بیشتر' },
  { key: 'commission', label: 'سهم مدرس از فروش (٪)', type: 'select', options: ['۶۰', '۶۵', '۷۰', '۷۵', '۸۰'] },
  { key: 'bio', label: 'بیوگرافی کوتاه', type: 'textarea', required: false },
  ]}
@@ -180,11 +232,19 @@ export default function AUsers({ kind }) {
  title={modal === 'new' ? 'افزودن دانشجوی جدید' : `ویرایش ${modal?.name}`}
  onClose={() => setModal(null)}
  onSubmit={add}
- initial={modal && modal !== 'new' ? { name: modal.name, email: modal.email } : {}}
- fields={[
+ submitLabel={modal === 'new' ? 'ساخت اکانت' : 'ذخیره'}
+ initial={modal && modal !== 'new' ? { name: modal.name, email: modal.email || '', phone: modal.phone || '', username: modal.username || '' } : {}}
+ fields={modal && modal !== 'new' ? [
  { key: 'name', label: 'نام و نام خانوادگی', full: true },
- { key: 'email', label: 'ایمیل' },
- { key: 'pass', label: 'رمز اولیه', required: false },
+ { key: 'username', label: 'نام کاربری', placeholder: 'sara_m' },
+ { key: 'phone', label: 'شماره موبایل (CRM)', placeholder: '۰۹۱۲…' },
+ { key: 'email', label: 'ایمیل', required: false },
+ ] : [
+ { key: 'name', label: 'نام و نام خانوادگی', full: true },
+ { key: 'username', label: 'نام کاربری', placeholder: 'sara_m' },
+ { key: 'phone', label: 'شماره موبایل (CRM)', placeholder: '۰۹۱۲…' },
+ { key: 'email', label: 'ایمیل', required: false },
+ { key: 'pass', label: 'رمز موقت (حداقل ۸ کاراکتر)', placeholder: '۸ کاراکتر یا بیشتر' },
  ]}
  />
  </div>

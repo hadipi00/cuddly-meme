@@ -8,13 +8,16 @@
 // شکل خروجی عیناً همان شکل mock است تا صفحات فرانت بدون تغییر شکل داده کار کنند.
 // =====================================================================
 import jwt from 'jsonwebtoken'
+import bcrypt from 'bcryptjs'
 import { db, JWT_SECRET, getSetting, setSetting } from './db.js'
 /* هسته مشترک پرداخت — قیمت‌گذاری/کد تخفیف/موجودی، مشترک با درگاه زرین‌پال (server/pay.js)
    تا هر دو جریان خرید دقیقاً یک منطق قیمت داشته باشند */
 import { faToday, faNum, evaluateCoupon, priceCart, reserveStock, uniqueOrderCode } from './checkout-core.js'
 /* [فیکس F16-d] وضعیت واقعی درگاه/پیامک برای نمایش در پنل ادمین */
 import { payMode } from './pay.js'
-import { smsConfigured } from './sms.js'
+import { normalizePhone, smsConfigured } from './sms.js'
+/* [فیکس F40] ابطال سشن‌های کاربر بعد از بازنشانی رمز توسط مدیر */
+import { revokeAllForUser } from './sessions.js'
 
 const now = () => Date.now()
 
@@ -699,6 +702,99 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
   const ROLE_LABELS = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
   db.prepare('UPDATE users SET title = ? WHERE id = ?').run(ROLE_LABELS[role], target.id)
   res.json({ ok: true, role })
+ })
+
+ /* ================================================================
+    [فیکس F40] ساخت و مدیریت اکانت‌ها فقط توسط مدیر — درخواست کاربر:
+    «اکانت معلم فقط توسط مدیر باید ساخته بشه».
+    ثبت‌نام عمومی سایت همیشه فقط دانش‌آموز می‌سازد (server/index.js)؛
+    حالا مدیر اکانت واقعی معلم/دانش‌آموز را با نام‌کاربری و رمز موقت از
+    همین پنل می‌سازد — رمز موقت است و اولین ورود اجبار به تغییر دارد.
+    ================================================================ */
+ const cleanU = (v, max = 80) => String(v ?? '').trim().slice(0, max)
+ const COLORS = ['grad-0', 'grad-1', 'grad-2', 'grad-3', 'grad-4', 'grad-5']
+
+ /* ساخت اکانت معلم/دانش‌آموز — فقط ادمین */
+ app.post('/api/admin/users', requireAdminC, (req, res) => {
+  const b = req.body || {}
+  const name = cleanU(b.name, 80)
+  const username = cleanU(b.username, 30).toLowerCase()
+  const password = String(b.password || '')
+  const role = String(b.role || 'teacher')
+  const email = cleanU(b.email, 120).toLowerCase()
+  const phone = normalizePhone(b.phone)
+  const title = cleanU(b.title, 80) || (role === 'teacher' ? 'مدرس' : 'دانش‌آموز')
+
+  if (!name) return res.status(400).json({ error: 'نام و نام‌خانوادگی الزامی است' })
+  if (!['teacher', 'student'].includes(role)) return res.status(400).json({ error: 'اکانت مدیر از این فرم ساخته نمی‌شود' })
+  if (!/^[a-z0-9_.]{3,30}$/.test(username)) return res.status(400).json({ error: 'نام کاربری فقط حروف انگلیسی، عدد، نقطه و زیرخط — بین ۳ تا ۳۰ کاراکتر' })
+  if (password.length < 8) return res.status(400).json({ error: 'رمز موقت باید حداقل ۸ کاراکتر باشد' })
+  if (password.length > 100) return res.status(400).json({ error: 'رمز خیلی بلند است' })
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
+  if (b.phone && !phone) return res.status(400).json({ error: 'شماره موبایل معتبر نیست — باید با ۰۹ شروع شود' })
+  if (!email && !phone) return res.status(400).json({ error: 'حداقل یکی از «ایمیل» یا «شماره موبایل» برای بازیابی حساب لازم است' })
+
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) return res.status(409).json({ error: 'این نام کاربری قبلاً گرفته شده' })
+  if (email && db.prepare('SELECT id FROM users WHERE email = ?').get(email)) return res.status(409).json({ error: 'این ایمیل قبلاً ثبت شده' })
+  if (phone && db.prepare('SELECT id FROM users WHERE phone = ?').get(phone)) return res.status(409).json({ error: 'این شماره موبایل قبلاً ثبت شده' })
+
+  const id = 'u-' + Math.random().toString(36).slice(2, 10)
+  try {
+   db.prepare(`INSERT INTO users (id, name, email, phone, username, password_hash, role, color, title, created_at, must_change_pw)
+     VALUES (?,?,?,?,?,?,?,?,?,?,1)`)
+    .run(id, name, email || null, phone, username, bcrypt.hashSync(password, 10), role,
+      COLORS[Math.floor(Math.random() * COLORS.length)], title, now())
+  } catch (e) {
+   if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'نام کاربری/ایمیل/شماره تکراری است' })
+   throw e
+  }
+  /* [CRM] شماره موبایل معلم/دانش‌آموزِ جدید همان‌جا در ستون phone ثبت می‌شود */
+  const u = db.prepare('SELECT id, name, username, role FROM users WHERE id = ?').get(id)
+  res.json({ ok: true, user: u, note: 'رمز موقت است — کاربر در اولین ورود باید آن را عوض کند' })
+ })
+
+ /* ویرایش مشخصات (نام/ایمیل/موبایل/عنوان/نام‌کاربری) — فقط ادمین */
+ app.patch('/api/admin/users/:id', requireAdminC, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(String(req.params.id || ''))
+  if (!target) return res.status(404).json({ error: 'کاربر پیدا نشد' })
+  const b = req.body || {}
+  const name = b.name !== undefined ? cleanU(b.name, 80) : target.name
+  if (!name) return res.status(400).json({ error: 'نام نمی‌تواند خالی باشد' })
+  const title = b.title !== undefined ? cleanU(b.title, 80) : target.title
+  const username = b.username !== undefined ? cleanU(b.username, 30).toLowerCase() : target.username
+  if (!/^[a-z0-9_.]{3,30}$/.test(username || '')) return res.status(400).json({ error: 'نام کاربری نامعتبر است' })
+  const email = b.email !== undefined ? cleanU(b.email, 120).toLowerCase() : target.email
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
+  let phone = target.phone
+  if (b.phone !== undefined) {
+   const p = normalizePhone(b.phone)
+   if (b.phone && !p) return res.status(400).json({ error: 'شماره موبایل معتبر نیست' })
+   phone = p // خالی کردن شماره هم مجاز است (null)
+  }
+  const dup = (col, val) => val && db.prepare(`SELECT id FROM users WHERE ${col} = ? AND id != ?`).get(val, target.id)
+  if (dup('username', username)) return res.status(409).json({ error: 'این نام کاربری قبلاً گرفته شده' })
+  if (email && dup('email', email)) return res.status(409).json({ error: 'این ایمیل قبلاً ثبت شده' })
+  if (phone && dup('phone', phone)) return res.status(409).json({ error: 'این شماره موبایل قبلاً ثبت شده' })
+  try {
+   db.prepare('UPDATE users SET name = ?, title = ?, username = ?, email = ?, phone = ? WHERE id = ?')
+    .run(name, title, username, email || null, phone, target.id)
+  } catch (e) {
+   if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'نام کاربری/ایمیل/شماره تکراری است' })
+   throw e
+  }
+  res.json({ ok: true })
+ })
+
+ /* بازنشانی رمز یک کاربر — فقط ادمین؛ رمز موقت + اجبار تغییر در اولین ورود + ابطال همهٔ سشن‌ها */
+ app.post('/api/admin/users/:id/password', requireAdminC, (req, res) => {
+  const target = db.prepare('SELECT id, name FROM users WHERE id = ?').get(String(req.params.id || ''))
+  if (!target) return res.status(404).json({ error: 'کاربر پیدا نشد' })
+  const password = String(req.body?.password || '')
+  if (password.length < 8) return res.status(400).json({ error: 'رمز موقت باید حداقل ۸ کاراکتر باشد' })
+  if (password.length > 100) return res.status(400).json({ error: 'رمز خیلی بلند است' })
+  db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 1 WHERE id = ?').run(bcrypt.hashSync(password, 10), target.id)
+  revokeAllForUser(target.id) // همهٔ دستگاه‌های کاربر بیرون می‌روند — با رمز موقت وارد می‌شود
+  res.json({ ok: true, note: `رمز موقت برای «${target.name}» ثبت شد — اولین ورود اجبار به تغییر دارد` })
  })
 
  /* ================================================================
