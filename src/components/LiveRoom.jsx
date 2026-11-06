@@ -857,6 +857,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  /* ---------- وضعیت زنده + چت ---------- */
  const [live, setLive] = useState(null)
+ const [stateChecked, setStateChecked] = useState(false) // [فیکس F38] وضعیت اولیهٔ سرور خوانده شد؟
  const [messages, setMessages] = useState([])
  const [input, setInput] = useState('')
  const [sending, setSending] = useState(false)
@@ -872,9 +873,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
   * startLive می‌زد (mutation در render!) و حتی در خطای شبکه هم session جعلی می‌ساخت */
  useEffect(() => {
    if (!isTeacher || !classId) return
+   /* [فیکس F38] وضعیت واقعی سرور همان اول خوانده می‌شود — قبلاً فقط 'live' هندل
+      می‌شد؛ کلاسِ ended در ۲.۵ ثانیهٔ اولِ ورود، اتاقِ زندهٔ قلابی نشان می‌داد */
+   let alive = true
    req(`/classes/${classId}/state`).then((st) => {
+     if (!alive) return
      if (st.status === 'live') setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: st.startedAt }))
-   }).catch(() => { /* قطعی شبکه → هیچ mutation؛ UI منتظر poll بعدی می‌ماند */ })
+     else if (st.status === 'ended') setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', startedAt: st.startedAt, endedAt: st.endedAt }))
+     setStateChecked(true)
+   }).catch(() => { if (alive) setStateChecked(true) /* قطعی شبکه → گیت شروع؛ startLive خطا را toast می‌کند */ })
+   return () => { alive = false }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
 
@@ -2028,6 +2036,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setLive({ status: 'live', startedAt: Date.now(), participants: participants })
    startLive(classId)
  }
+ /* [فیکس F38] شروع از گیتِ «کلاس هنوز شروع نشده» — آپدیت خوش‌بینانه + POST به سرور؛
+    اگر POST شکست بخورد poll وضعیت (هر ۲.۵ثانیه) دوباره به گیت برمی‌گرداند */
+ const beginClass = () => {
+   setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: Date.now() }))
+   startLive(classId)
+ }
 
   /* ---------- رسم وایت‌برد ---------- */
  const drawStroke = (ctx, s) => {
@@ -2231,6 +2245,29 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
            </>
          )}
        </div>
+     </div>
+   )
+ }
+
+ /* ---------- [فیکس F38] گیت شروع کلاس — فقط مدرس ----------
+  * اگر سرور کلاس را «scheduled» می‌داند، اتاق نباید شبیه جلسهٔ زنده رندر شود.
+  * قبلاً معلم اتاق را می‌دید (با تایمر ۰۰:۰۰ و بج قرمز) در حالی که POST /start
+  * هرگز ارسال نشده بود → دانش‌آموز برای همیشه روی «زمان‌بندی شده» می‌ماند. */
+ if (isTeacher && stateChecked && !classEnded && live?.status !== 'live') {
+   return (
+     <div className="card pad" style={{ maxWidth: 560, margin: '30px auto', textAlign: 'center' }}>
+       <div className="sc-icon teal" style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+         <Icon name="video" size={30} />
+       </div>
+       <h2 style={{ fontSize: 19, marginBottom: 6 }}>آمادهٔ برگزاری «{classInfo?.title || 'کلاس'}»</h2>
+       <p className="muted small mb16">این جلسه هنوز روی سرور شروع نشده است — با زدن دکمهٔ زیر، کلاس برای همهٔ دانش‌آموزانِ ثبت‌نام‌شده زنده می‌شود و دکمهٔ ورود در پنل آن‌ها فعال خواهد شد.</p>
+       <div className="row g12" style={{ justifyContent: 'center' }}>
+         <button className="btn btn-primary btn-lg" onClick={beginClass}>
+           <Icon name="play" filled size={17} /> شروع کلاس زنده
+         </button>
+         <Link to="/panel/teacher/live" className="btn btn-ghost">بازگشت</Link>
+       </div>
+       <p className="muted small mt16">پس از شروع، دوربین/میکروفون و اشتراک صفحه را از نوار پایین اتاق روشن کنید.</p>
      </div>
    )
  }

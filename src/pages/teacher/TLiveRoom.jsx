@@ -14,7 +14,7 @@ import { req } from '../../services/http'
  * (بج «در حال برگزاری» + تایمر + دکمه ورود در برنامه هفتگی و داشبورد آن‌ها ظاهر می‌شود).
  */
 export default function TLiveRoom() {
- const { toast, liveSessions, endLive } = useApp()
+ const { toast, liveSessions, endLive, startLive } = useApp()
  const [active, setActive] = useState(null)
  const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
  const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
@@ -176,7 +176,15 @@ export default function TLiveRoom() {
  با زدن دکمه زیر، جلسه برای {faNum(preparing.students)} دانشجوی این کلاس زنده می‌شود و دکمه ورود در پنل آن‌ها فعال خواهد شد.
  </p>
  <div className="row g12 mt24" style={{ justifyContent: 'center' }}>
- <button className="btn btn-primary btn-lg" onClick={() => setActive(preparing)}>
+ <button className="btn btn-primary btn-lg" onClick={() => {
+   /* [فیکس F38] باگ بحرانی گزارش کاربر: «کلاس برای دانش‌آموز شروع نمی‌شود و روی
+      زمان‌بندی می‌ماند». ریشه: این دکمه فقط اتاق را باز می‌کرد (setActive) و
+      startLive هرگز به سرور نمی‌رفت → status در DB همان 'scheduled' می‌ماند،
+      /api/live/overview هیچ‌وقت 'live' نمی‌داد و دانش‌آموز در اتاق انتظار گیر می‌کرد.
+      حالا با همین کلیک جلسه واقعاً روی سرور زنده می‌شود (POST /classes/:id/start). */
+   startLive(preparing.liveId || preparing.id)
+   setActive(preparing)
+ }}>
  <Icon name="play" filled size={17} /> شروع کلاس زنده
  </button>
  <button className="btn btn-ghost" onClick={() => setPreparing(null)}>انصراف</button>
