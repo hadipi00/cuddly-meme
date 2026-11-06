@@ -72,17 +72,36 @@ export default function Footer() {
  </div>
  </div>
  <div className="footer-bottom">
- {pub?.enamadHtml && (
- <div className="footer-enamad" style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}
-  dangerouslySetInnerHTML={{ __html: String(pub.enamadHtml).slice(0, 2000) }} />
- )}
- <span>© ۱۴۰۴ {pick(pub.site?.name, site.name)} — تمام حقوق محفوظ است.</span>
- <span className="muted small" style={{ display: 'inline-flex', gap: 12, flexWrap: 'wrap' }}>
- {pub.maintenance && <span className="badge b-amber">حالت تعمیر و نگهداری فعال است</span>}
- {pick(pub.site?.phone, site.phone) && <span dir="ltr">{pick(pub.site?.phone, site.phone)}</span>}
- {pick(pub.site?.email, site.email) && <span dir="ltr">{pick(pub.site?.email, site.email)}</span>}
- </span>
- <span>ساخته‌شده با برای جامعه آموزشی ایران</span>
+ {/* [فیکس R11+R12] جایگاه همیشگی نماد اعتماد الکترونیکی (اینماد) در فوتر — طبق الزامات اینماد
+     و درگاه‌های پرداخت، نماد باید در پاورقی همه صفحات دیده شود. کد رسمی (a/img از
+     trustseal.enamad.ir) از پنل ادمین → تنظیمات عمومی → «کد نماد اعتماد» وارد می‌شود و دقیقاً
+     همین‌جا رندر می‌شود؛ تا قبل از آن، یک کاشی سفید شبیه نشان واقعی اینماد نمایش داده می‌شود */}
+ <div className="footer-badges">
+  {pub?.enamadHtml ? (
+   <div className="footer-enamad" dangerouslySetInnerHTML={{ __html: String(pub.enamadHtml).slice(0, 2000) }} />
+  ) : (
+   <div className="seal-slot" title="جایگاه نماد اعتماد الکترونیکی (اینماد) — پس از دریافت کد از enamad.ir، کد رسمی را در پنل ادمین → تنظیمات عمومی وارد کنید">
+   <svg className="seal-enamad-mark" viewBox="0 0 48 48" width="42" height="42" aria-hidden="true" role="img">
+   <circle cx="24" cy="24" r="22.5" fill="#ffffff" stroke="#d9e2ee" strokeWidth="1.5" />
+   <rect x="13.5" y="13.5" width="21" height="21" rx="2.5" fill="#1e5aa8" />
+   <rect x="13.5" y="13.5" width="21" height="21" rx="2.5" fill="#2f7dc4" transform="rotate(45 24 24)" />
+   <circle cx="24" cy="24" r="5.5" fill="#ffffff" />
+   <circle cx="24" cy="24" r="2.5" fill="#1e5aa8" />
+   </svg>
+   <b>نماد اعتماد الکترونیکی</b>
+   <span>اینماد</span>
+   </div>
+  )}
+ </div>
+ <div className="footer-bottom-row">
+  <span>© ۱۴۰۴ {pick(pub.site?.name, site.name)} — تمام حقوق محفوظ است.</span>
+  <span className="muted small" style={{ display: 'inline-flex', gap: 12, flexWrap: 'wrap' }}>
+  {pub.maintenance && <span className="badge b-amber">حالت تعمیر و نگهداری فعال است</span>}
+  {pick(pub.site?.phone, site.phone) && <span dir="ltr">{pick(pub.site?.phone, site.phone)}</span>}
+  {pick(pub.site?.email, site.email) && <span dir="ltr">{pick(pub.site?.email, site.email)}</span>}
+  </span>
+  <span>ساخته‌شده با برای جامعه آموزشی ایران</span>
+ </div>
  </div>
  </div>
  </footer>

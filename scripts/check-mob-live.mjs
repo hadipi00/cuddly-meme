@@ -15,7 +15,7 @@ const main = async () => {
     await ctx.grantPermissions(['camera', 'microphone'], { origin: BASE })
     const p = await ctx.newPage()
     await p.goto(BASE + '/auth', { waitUntil: 'networkidle' })
-    await p.fill('input[placeholder="you@example.com"]', email)
+    await p.fill('input[placeholder="نام کاربری یا 09…"]', email)
     await p.fill('input[type="password"]', '12345678')
     await p.evaluate(() => { [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'ورود به حساب')?.click() })
     await p.waitForTimeout(1500)

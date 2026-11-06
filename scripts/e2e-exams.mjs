@@ -24,7 +24,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function loginIn(page, who) {
   await page.goto(BASE + '/auth', { waitUntil: 'networkidle' })
-  await page.fill('input[placeholder="you@example.com"]', who.email)
+  /* [فیکس R12] صفحه Auth بازطراحی شد — ورودی شناسه حالا placeholder «نام کاربری یا 09…» دارد
+     (سلکتور قدیمی you@example.com دیگر وجود ندارد و fill تایم‌اوت می‌شد) */
+  await page.fill('input[placeholder="نام کاربری یا 09…"]', who.email)
   await page.fill('input[type="password"]', who.password)
   await page.evaluate(() => {
     const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'ورود به حساب')

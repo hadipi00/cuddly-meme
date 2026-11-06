@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function loginIn(page, who) {
   await page.goto(BASE + '/auth', { waitUntil: 'networkidle' })
-  await page.fill('input[placeholder="you@example.com"]', who.email)
+  await page.fill('input[placeholder="نام کاربری یا 09…"]', who.email)
   await page.fill('input[type="password"]', who.password)
   await page.evaluate(() => { [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'ورود به حساب')?.click() })
   await page.waitForTimeout(1500)
