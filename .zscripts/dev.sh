@@ -16,8 +16,14 @@ check_frontend() { curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://lo
 
 # 1) وابستگی‌ها (وقتی node_modules هست سریع رد می‌شود)
 if [ ! -d "$PROJECT_DIR/node_modules" ]; then
-  log "installing dependencies..."
+  log "installing root dependencies..."
   bun install >> "$LOG_DIR/dev.log" 2>&1
+fi
+
+# 1-ب) وابستگی‌های بک‌اند (server/node_modules بعد از recycle ممکن است نباشد)
+if [ ! -d "$PROJECT_DIR/server/node_modules/express" ]; then
+  log "installing server dependencies..."
+  (cd "$PROJECT_DIR/server" && npm install --no-audit --no-fund --loglevel=error >> "$LOG_DIR/dev.log" 2>&1)
 fi
 
 # 2) بک‌اند Express روی 4000
