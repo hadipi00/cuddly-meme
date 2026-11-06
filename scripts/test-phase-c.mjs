@@ -46,17 +46,21 @@ console.log('— C3: ولیدیشن ورودی‌ها —')
   ok('ساعت ۲۵:۹۹ رد می‌شود', badStart.status === 400, 'got ' + badStart.status)
   const faStart = await req('/classes', { method: 'POST', token: teacher, body: { title: 'تست ساعت فارسی', day: 2, start: '۱۴:۳۰' } })
   ok('ساعت فارسی ۱۴:۳۰ پذیرفته و استاندارد می‌شود', faStart.status === 200 && faStart.data.class?.start === '14:30', 'got ' + faStart.data.class?.start)
+  /* [سخت‌سازی فعلی] روز نامعتبر دیگر کلمپ نمی‌شود — با 400 رد می‌شود (امن‌تر از کلمپ خاموش) */
   const badDay = await req('/classes', { method: 'POST', token: teacher, body: { title: 'تست روز', day: 99, start: '10:00' } })
-  ok('روز ۹۹ → کلمپ به ۶', badDay.status === 200 && badDay.data.class?.day === 6, 'got ' + badDay.data.class?.day)
+  ok('روز ۹۹ با 400 رد می‌شود (ولیدیشن سخت‌گیرانه)', badDay.status === 400, 'got ' + badDay.status)
   const hugeCap = await req('/classes', { method: 'POST', token: teacher, body: { title: 'تست ظرفیت', day: 1, start: '09:00', cap: 99999999 } })
   ok('ظرفیت نجومی → کلمپ به ۱۰۰۰۰', hugeCap.status === 200 && hugeCap.data.class?.cap === 10000, 'got ' + hugeCap.data.class?.cap)
   // پاک‌سازی کلاس‌های تستی
   for (const id of [faStart.data.class?.id, badDay.data.class?.id, hugeCap.data.class?.id]) {
     if (id) await req(`/classes/${id}`, { method: 'DELETE', token: teacher })
   }
-  // ثبت‌نام با نام ۱۰ کیلوبایتی
-  const junk = await req('/auth/register', { method: 'POST', body: { name: 'x'.repeat(10000), email: `junk${Date.now()}@t.ir`, password: '123456' } })
-  ok('نام ۱۰هزار حرفی رد می‌شود', junk.status === 400, 'got ' + junk.status)
+  /* [مسیر قدیمی حذف شده] ثبت‌نام حالا OTP-محور است: /auth/otp/request → verify → register/complete.
+     مسیر قدیمی /auth/register باید 404 بدهد و مسیر جدید هم توکن/ورودی زباله را رد کند */
+  const oldRoute = await req('/auth/register', { method: 'POST', body: { name: 'x'.repeat(10000), email: `junk${Date.now()}@t.ir`, password: '123456' } })
+  ok('مسیر قدیمی /auth/register حذف شده → 404', oldRoute.status === 404, 'got ' + oldRoute.status)
+  const junk = await req('/auth/register/complete', { method: 'POST', body: { regToken: 'garbage.token.value', firstName: 'x'.repeat(10000), lastName: 'y', username: `junk${Date.now()}`.slice(0, 20), password: '123456' } })
+  ok('ثبت‌نام با regToken جعلی / نام ۱۰هزار حرفی رد می‌شود', junk.status === 400, 'got ' + junk.status)
 }
 
 console.log(`\n——— نتیجه فاز C: ${pass} موفق، ${fail} ناموفق ———`)

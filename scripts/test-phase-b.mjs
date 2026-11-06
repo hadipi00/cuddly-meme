@@ -38,8 +38,15 @@ console.log('— B2: تیکت فایل‌های آزمون —')
   const fname = url.split('/').pop()
   const bad = await fetch(`${API}/exams-files/${fname}?st=9999999999.deadbeef`)
   ok('تیکت جعلی رد می‌شود', bad.status === 401, 'got ' + bad.status)
-  const good = await fetch(`${API}/exams-files/${fname}?st=${encodeURIComponent(t1.data.st)}`)
-  ok('فایل با تیکت معتبر → 200 تصویر', good.status === 200 && (good.headers.get('content-type') || '').includes('image/png'), 'got ' + good.status + ' ' + good.headers.get('content-type'))
+  /* [B19 تیکت‌بایند — رفتار جدید و عمدی] تیکتِ دانش‌آموز فقط برای فایل‌های آزمون‌های
+     مجاز خودش کار می‌کند؛ فایل آپلودی مستقل که به هیچ آزمونی وصل نیست → 403.
+     (انتظار قدیمی «200 تصویر» مربوط به قبل از سخت‌سازی بایند بود) */
+  const scoped = await fetch(`${API}/exams-files/${fname}?st=${encodeURIComponent(t1.data.st)}`)
+  ok('فایل خارج از دامنهٔ آزمون‌های دانش‌آموز → 403 (بایند B19)', scoped.status === 403, 'got ' + scoped.status)
+  /* مسیر مثبت: تیکتِ مدرس (staff) همان فایل مستقل را می‌بیند */
+  const tt = await req('/exams/file-ticket', { method: 'POST', token: teacher })
+  const staff = await fetch(`${API}/exams-files/${fname}?st=${encodeURIComponent(tt.data.st)}`)
+  ok('فایل با تیکت مدرس → 200 تصویر', staff.status === 200 && (staff.headers.get('content-type') || '').includes('image/png'), 'got ' + staff.status + ' ' + staff.headers.get('content-type'))
 }
 
 console.log('— B3: اعتبارسنجی PATCH آزمون —')
