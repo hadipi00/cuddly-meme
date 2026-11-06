@@ -110,6 +110,43 @@ CREATE TABLE IF NOT EXISTS course_access (
 );
 `)
 
+/* [فیکس اولین‌اجرا] ستون‌های meta و ship روی جدول orders.
+   قبلاً این مهاجرت‌ها فقط در content.js بود، اما content.js تابع payMode را از
+   همین فایل ایمپورت می‌کند → pay.js قبل از بدنهٔ content.js ارزیابی می‌شود و
+   آماده‌سازیِ کوئری‌های meta روی دیتابیس تازه (بدون ستون meta) کرش می‌کرد.
+   حالا مهاجرت پیش از همهٔ prepareهای این فایل انجام می‌شود (idempotent). */
+try { db.exec("ALTER TABLE orders ADD COLUMN meta TEXT DEFAULT ''") } catch { /* ستون هست */ }
+try { db.exec("ALTER TABLE orders ADD COLUMN ship TEXT DEFAULT ''") } catch { /* ستون هست */ }
+
+/* [فیکس اولین‌اجرا ۲] جدول courses هم در content.js ساخته می‌شد ولی
+   courseExists در همین فایل (قبل از content.js) prepare می‌شود → روی
+   دیتابیس تازه «no such table: courses». همین اسکیما را اینجا هم با
+   IF NOT EXISTS می‌سازیم؛ مهاجرت‌های status/image هنوز کار content.js است. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS courses (
+  id            INTEGER PRIMARY KEY,
+  title         TEXT NOT NULL,
+  teacher       TEXT NOT NULL DEFAULT '',
+  teacher_id    TEXT NOT NULL DEFAULT 't1',
+  cat           TEXT NOT NULL DEFAULT '',
+  price         INTEGER NOT NULL DEFAULT 0,
+  old_price     INTEGER,
+  rating        REAL NOT NULL DEFAULT 4.5,
+  students      INTEGER NOT NULL DEFAULT 0,
+  hours         INTEGER NOT NULL DEFAULT 0,
+  lessons_count INTEGER NOT NULL DEFAULT 0,
+  level         TEXT DEFAULT '',
+  type          TEXT DEFAULT 'recorded',
+  badge         TEXT,
+  icon          TEXT DEFAULT 'book',
+  color         TEXT DEFAULT 'grad-0',
+  desc          TEXT DEFAULT '',
+  features      TEXT NOT NULL DEFAULT '[]',
+  curriculum    TEXT NOT NULL DEFAULT '[]',
+  created_at    INTEGER NOT NULL
+);
+`)
+
 const q = {
   paymentByAuthority: db.prepare('SELECT * FROM payments WHERE authority = ?'),
   markPaid: db.prepare("UPDATE payments SET status='paid', ref_id=?, card_pan=?, verified_at=? WHERE authority=? AND status='pending'"),
