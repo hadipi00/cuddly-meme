@@ -5,7 +5,7 @@ import { FormModal } from '../../components/Modal'
 import { Avatar } from '../../components/ui'
 import { students as fallbackStudents, teachers as fallbackTeachers } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
-import { req, getToken } from '../../services/http'
+import { req, authedFetch } from '../../services/http'
 import { faNum, toman } from '../../utils/format'
 
 const ROLE_BADGE = { student: ['دانش‌آموز', 'b-sky'], teacher: ['مدرس', 'b-violet'], admin: ['مدیر', 'b-red'] }
@@ -96,9 +96,8 @@ export default function AUsers({ kind }) {
  /* [CRM] خروجی CSV مشتریان — فایل UTF-8 با BOM برای اکسل؛ شماره موبایل ستون اصلی */
  const exportCrm = async (role) => {
   try {
-   const res = await fetch('/api/admin/users.csv' + (role ? `?role=${role}` : ''), {
-     headers: { Authorization: `Bearer ${getToken()}` },
-   })
+   /* [فیکس سشن] خروجی CSV با authedFetch — اگر توکن منقضی شده باشد بی‌صدا تازه می‌شود */
+   const res = await authedFetch('/api/admin/users.csv' + (role ? `?role=${role}` : ''))
    if (!res.ok) throw new Error()
    const blob = await res.blob()
    const a = document.createElement('a')

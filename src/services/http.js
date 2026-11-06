@@ -94,6 +94,32 @@ export function doRefresh() {
 /* مسیرهایی که خودشان احراز هویت‌اند — برای آن‌ها تازه‌سازی/تلاش مجدد بی‌معناست */
 const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/otp', '/auth/logout']
 
+/* [فیکس «همش میگه نشست منقضی شده»] پیام «نشست منقضی» فقط وقتی واقعی است که
+ * درخواستِ شکست‌خورده اصلاً توکن داشته باشد؛ ۴۰۱ِ یک بازدیدکنندهٔ ناشناس
+ * (مثلاً poll صفحهٔ عمومی) نشست مرده نیست و نباید کل اپ را به ورود بفرستد */
+const isAuthPath = (path) => AUTH_PATHS.some((p) => path.startsWith(p))
+
+/** fetch با پشتیبانی توکن — برای درخواست‌های باینری/استریم که از req() استفاده نمی‌کنند.
+ *  [فیکس «ارسال با وقفه افتاده — برای همیشه»] آپلود تکه‌های رسانهٔ کلاس زنده قبلاً با
+ *  fetch خام بود؛ وقتی توکن دسترسی ۳۰دقیقه‌ای وسط کلاس منقضی می‌شد، همهٔ تکه‌ها
+ *  ۴۰۱ می‌خوردند، هیچ تازه‌سازی‌ای انجام نمی‌شد و صدا/تصویر مدرس برای همیشه
+ *  قطع می‌ماند. حالا مثل req(): روی ۴۰۱ یک‌بار توکن تازه‌سازی بی‌صدا می‌شود و
+ *  درخواست با توکن تازه تکرار می‌شود (single-flight مشترک با بقیهٔ اپ) */
+export async function authedFetch(url, { headers = {}, ...opts } = {}) {
+  const h = { ...headers }
+  const t = getToken()
+  if (t) h.Authorization = `Bearer ${t}`
+  let res = await fetch(url, { ...opts, headers: h })
+  if (res.status === 401 && getRefresh()) {
+    const r = await doRefresh()
+    if (r?.token) {
+      h.Authorization = `Bearer ${r.token}`
+      res = await fetch(url, { ...opts, headers: h })
+    }
+  }
+  return res
+}
+
 /**
  * درخواست به API مدرس‌یار
  * @returns {Promise<Object>} پاسخ JSON سرور
@@ -139,13 +165,14 @@ export async function req(path, { method = 'GET', body, timeout = 0, _retried = 
       throw e
     }
     /* [سشن ماندگار] توکن دسترسی منقضی شده → بی‌سروصدا تازه‌سازی + تلاش مجدد (فقط یک‌بار) */
-    if (res.status === 401 && !_retried && !AUTH_PATHS.some((p) => path.startsWith(p)) && getRefresh()) {
+    if (res.status === 401 && !_retried && !isAuthPath(path) && getRefresh()) {
       const r = await doRefresh()
       if (r?.token) return req(path, { method, body, timeout, _retried: true })
     }
-    /* [فیکس] 401 نهایی بدون توکن تازه‌سازی (یا تازه‌سازی بی‌جواب) = نشست مرده —
-       مسیرهای auth مستثنا هستند (رمز غلطِ صفحه ورود ≠ نشست منقضی) */
-    if (res.status === 401 && !AUTH_PATHS.some((p) => path.startsWith(p))) {
+    /* [فیکس] 401 نهایی = نشست مرده — فقط اگر درخواست واقعاً توکن داشت.
+       ۴۰۱ِ ناشناس (بدون هیچ نشستی) فقط یک «دسترسی مجاز نیست» است و نباید
+       toast «نشست منقضی» بفرستد و توکن‌های احتمالاً معتبر تب‌های دیگر را پاک کند */
+    if (res.status === 401 && !isAuthPath(path) && token) {
       announceSessionExpired()
     }
     const e = new Error(data?.error || `خطای سرور (${res.status})`)

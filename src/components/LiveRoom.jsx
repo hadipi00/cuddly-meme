@@ -6,7 +6,7 @@ import { Avatar } from './ui'
 import { Modal } from './Modal'
 import { useApp } from '../store/AppContext'
 import { faNum } from '../utils/format'
-import { req, getToken } from '../services/http'
+import { req, authedFetch, getToken } from '../services/http'
 
 /**
  * اتاق کلاس زنده — رله رسانه با «دو کانال مستقل» (بدون WebRTC)
@@ -1040,9 +1040,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      const tid = setTimeout(() => ac.abort(), 5000)
      const t0 = Date.now()
      try {
-       const res = await fetch(`/api/classes/${classId}/media/up${q}`, {
+       /* [فیکس «ارسال با وقفه افتاده — برای همیشه»] قبلاً fetch خام با توکن ثابت بود؛
+        * وقتی توکن دسترسی وسط کلاس منقضی می‌شد، همهٔ تکه‌ها ۴۰۱ می‌خوردند، هیچ
+        * تازه‌سازی‌ای انجام نمی‌شد و صدا/تصویر مدرس دیگر به دانش‌آموز نمی‌رسید.
+        * حالا authedFetch روی ۴۰۱ توکن را بی‌صدا تازه می‌کند و تکه با توکن تازه می‌رود */
+       const res = await authedFetch(`/api/classes/${classId}/media/up${q}`, {
          method: 'POST',
-         headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() || ''}` },
+         headers: { 'Content-Type': 'application/octet-stream' },
          body: blob,
          signal: ac.signal,
        })

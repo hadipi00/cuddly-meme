@@ -90,10 +90,23 @@ export function AppProvider({ children }) {
  return { ok: true, role: u.role, demo: true }
  }, [toast])
 
- /* ---------- همگام‌سازی وضعیت کلاس زنده از سرور (منبع حقیقت) ---------- */
+ /* ---------- همگام‌سازی وضعیت کلاس زنده از سرور (منبع حقیقت) ----------
+  * [فیکس «همش میگه نشست منقضی شده»] این poll قبلاً از لحظهٔ بوت و حتی برای
+  * بازدیدکنندهٔ ناشناس هر ۴ ثانیه اجرا می‌شد؛ چون /live/overview روی سرور
+  * فقط برای کاربر لاگین‌شده است، هر بار ۴۰۱ می‌گرفت و رخداد «نشست منقضی»
+  * را به کل اپ پخش می‌کرد → پیام تکراری + پاک‌شدن نشست واقعی تب‌های دیگر.
+  * حالا فقط وقتی کاربر واقعی لاگین است poll می‌شود و هنگام خروج وضعیت پاک می‌شود */
  const liveRef = useRef({})
+ const isLoggedIn = !!state.user?.id
  useEffect(() => {
  let alive = true
+ if (!isLoggedIn) {
+ if (liveRef.current && Object.keys(liveRef.current).length) {
+ liveRef.current = {}
+ patch(() => ({ liveSessions: {} }))
+ }
+ return
+ }
  const tick = async () => {
  try {
  const r = await req('/live/overview')
@@ -107,12 +120,12 @@ export function AppProvider({ children }) {
  liveRef.current = next
  patch(() => ({ liveSessions: next }))
  }
- } catch { /* سرور قطع است — حالت دمو */ }
+ } catch { /* سرور قطع است یا نشست همین لحظه مرده — poll بعدی */ }
  }
  tick()
  const t = setInterval(tick, 4000)
  return () => { alive = false; clearInterval(t) }
- }, [])
+ }, [isLoggedIn])
 
  const value = useMemo(() => ({
  ...state,
