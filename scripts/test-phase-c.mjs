@@ -32,8 +32,10 @@ console.log('— C2: هدرهای امنیتی —')
 console.log('— C1: rate limit لاگین —')
 {
   let last = 0
+  /* [نکته] شناسهٔ آرمانی (غیرواقعی) — قبلاً sara@demo.ir بود که fail-gate همان
+     حساب واقعی را قفل می‌کرد و سوئیت‌های بعدیِ روی همان بک‌اند (مثل آزمون) 429 می‌خوردند */
   for (let i = 0; i < 13; i++) {
-    const r = await req('/auth/login', { method: 'POST', body: { email: 'sara@demo.ir', password: 'wrong-' + i } })
+    const r = await req('/auth/login', { method: 'POST', body: { email: 'bruteforce-probe@demo.ir', password: 'wrong-' + i } })
     last = r.status
     if (r.status === 429) break
   }

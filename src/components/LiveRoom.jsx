@@ -2705,8 +2705,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} onFlip={canFlip ? () => switchCam() : undefined} />
        </div>
      )}
-     {tFeed && !watchingFeed && feedTile('t', tFeed, false)}
-     {tsFeed && !watchingScreen && feedTile('ts', tsFeed, false)}
+     {tFeed && !watchingFeed && (<div style={{ width: 128, flexShrink: 0 }}>{feedTile('t', tFeed, false)}</div>)}
+     {tsFeed && !watchingScreen && (<div style={{ width: 128, flexShrink: 0 }}>{feedTile('ts', tsFeed, false)}</div>)}
      {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}

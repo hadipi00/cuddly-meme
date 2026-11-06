@@ -210,9 +210,9 @@
 .lesson-item .l-dur { margin-inline-start: auto; font-size: 11.5px; color: var(--faint); }
 
 /* ---------- live room ---------- */
-.live-grid { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: stretch; }
+.live-grid { display: grid; grid-template-columns: 1fr 296px; gap: 14px; align-items: stretch; }
 .live-stage { border: 1px solid var(--line2); border-radius: var(--r-lg); overflow: hidden; display: flex; flex-direction: column; background: var(--stage); }
-.live-view { aspect-ratio: 16 / 9.5; position: relative; display: flex; align-items: center; justify-content: center; }
+.live-view { aspect-ratio: 16 / 9; position: relative; display: flex; align-items: center; justify-content: center; }
 .live-view.camera { background: radial-gradient(500px 340px at 50% 42%, rgba(45, 212, 191, 0.13), transparent 70%), linear-gradient(160deg, var(--live-a), var(--live-b)); }
 .live-view.screen { background: linear-gradient(160deg, var(--live-c), var(--live-d)); }
 .live-tile {
@@ -287,7 +287,7 @@
 .part-row .pr-icons .muted-off { color: var(--red); }
 
 /* ---------- web whiteboard + real video ---------- */
-.wb-wrap { position: absolute; inset: 52px 18px 16px; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
+.wb-wrap { position: absolute; inset: 48px 12px 12px; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.18); }
 .wb-canvas { width: 100%; height: 100%; display: block; background: #fff; }
 .wb-toolbar {
  position: absolute; top: 10px; inset-inline-start: 50%; transform: translateX(50%); z-index: 4;
@@ -323,7 +323,7 @@
 }
 .cam-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
 /* [فیکس F39 — درخواست کاربر] وقتی تخته/صفحه فعال نیست، دوربین باید «بزرگ» دیده شود */
-.cam-tile.big { width: min(58%, 560px); }
+.cam-tile.big { width: min(64%, 660px); }
 .cam-tile.self { border-color: rgba(45, 212, 191, 0.55); }
 .cam-tile .cam-off { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
 /* لایه آواتار روی ویدیو — ویدیو زیرش mount می‌ماند تا با باز/بستن دوربین سیاه نشود */
@@ -341,7 +341,8 @@
  position: absolute; bottom: 12px; inset-inline-start: 12px; display: flex; gap: 8px; z-index: 3;
  max-width: calc(100% - 24px); overflow-x: auto; padding-bottom: 2px;
 }
-.cam-strip .cam-tile { min-width: 128px; border-radius: 10px; }
+.cam-strip .cam-tile { width: 100%; min-width: 0; max-width: 172px; border-radius: 10px; }
+.cam-strip > * { flex-shrink: 0; }
 
 /* [فیکس F39] دکمهٔ شناور تعویض دوربین روی کاشی خودم — ضروری برای موبایل */
 .tile-flip {
@@ -380,19 +381,30 @@
  background: rgba(45, 212, 191, 0.13); color: var(--teal); border: 1px solid rgba(45, 212, 191, 0.3); flex-shrink: 0;
 }
 
-/* ---------- تمام‌صفحه کلاس [فیکس F36-b] — کل اتاق: صحنه + کنترل‌ها ---------- */
-.live-grid:fullscreen { background: #020617; padding: 12px; border-radius: 0; grid-template-columns: 1fr; }
-.live-grid:-webkit-full-screen { background: #020617; padding: 12px; border-radius: 0; grid-template-columns: 1fr; }
-.live-grid:fullscreen .live-stage, .live-grid:-webkit-full-screen .live-stage { border-color: rgba(148, 163, 184, 0.22); }
+/* ---------- تمام‌صفحه کلاس [فیکس F36-b] — کل اتاق: صحنه + کنترل‌ها ----------
+   [پولیش ظاهری] حاشیه‌ها به‌حداقل رسیدند تا صحنه (تخته/اسکرین/دوربین) بیشترین جا را بگیرد */
+.live-grid:fullscreen { background: #020617; padding: 6px; border-radius: 0; grid-template-columns: 1fr; gap: 8px; }
+.live-grid:-webkit-full-screen { background: #020617; padding: 6px; border-radius: 0; grid-template-columns: 1fr; gap: 8px; }
+.live-grid:fullscreen .live-stage, .live-grid:-webkit-full-screen .live-stage { border-color: rgba(148, 163, 184, 0.22); border-radius: 10px; }
 .live-grid:fullscreen .live-view, .live-grid:-webkit-full-screen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+/* تخته در فول‌اسکرین تا لبه‌ها — فقط حاشیهٔ لازم برای برچسب/نوار ابزار */
+.live-grid:fullscreen .wb-wrap, .live-grid:-webkit-full-screen .wb-wrap { inset: 42px 8px 8px; border-radius: 10px; }
+.live-grid:fullscreen .live-controls, .live-grid:-webkit-full-screen .live-controls { padding: 8px 12px; }
+/* دوربین در فول‌اسکرین هم قهرمان */
+.live-grid:fullscreen .cam-grid, .live-grid:-webkit-full-screen .cam-grid { height: 92%; }
+.live-grid:fullscreen .cam-tile.big, .live-grid:-webkit-full-screen .cam-tile.big { width: min(74%, 920px); }
 /* [فیکس F39 — درخواست صریح کاربر] چت در فول‌اسکرین «کلاً» وجود ندارد —
    در هر حالتی (جمع یا باز)، بدون استثنا؛ فقط خارج از فول‌اسکرین دیده می‌شود */
 .live-grid:fullscreen .live-side, .live-grid:-webkit-full-screen .live-side { display: none !important; }
 /* شبه‌فول‌اسکرین — وقتی مرورگر (قاب iframe بدون allow / iOS Safari روی div) اجازه
    Fullscreen API نمی‌دهد؛ قبلاً این کلاس در CSS بود ولی هیچ‌وقت از JS ست نمی‌شد */
-.live-grid.pseudo-fs { position: fixed; inset: 0; z-index: 1400; background: #020617; padding: 12px; border-radius: 0; overflow: auto; grid-template-columns: 1fr; }
-.live-grid.pseudo-fs .live-stage { border-color: rgba(148, 163, 184, 0.22); }
+.live-grid.pseudo-fs { position: fixed; inset: 0; z-index: 1400; background: #020617; padding: 6px; border-radius: 0; overflow: auto; grid-template-columns: 1fr; gap: 8px; }
+.live-grid.pseudo-fs .live-stage { border-color: rgba(148, 163, 184, 0.22); border-radius: 10px; }
 .live-grid.pseudo-fs .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
+.live-grid.pseudo-fs .wb-wrap { inset: 42px 8px 8px; border-radius: 10px; }
+.live-grid.pseudo-fs .live-controls { padding: 8px 12px; }
+.live-grid.pseudo-fs .cam-grid { height: 92%; }
+.live-grid.pseudo-fs .cam-tile.big { width: min(74%, 920px); }
 .live-grid.pseudo-fs .chat-body { max-height: none; flex: 1; }
 .live-grid.pseudo-fs .part-list { max-height: none; flex: 1; }
 /* [فیکس F39] در شبه‌فول‌اسکرین هم چت مطلقاً مخفی */
