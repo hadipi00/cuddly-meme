@@ -181,7 +181,9 @@ app.post('/api/auth/login', rateLimit(30, 60_000), (req, res) => {
 app.post('/api/auth/otp/request', rateLimit(15, 60_000), async (req, res) => {
   try {
     const r = await requestOtp(req.body?.phone, String(req.body?.purpose || 'login'))
-    if (!r.ok) return res.status(r.wait ? 429 : 400).json({ error: r.error, wait: r.wait })
+    if (!r.ok) return res.status(r.wait ? 429 : 400).json({ error: r.error, wait: r.wait,
+      /* [فیکس F39] پرچم‌های چک ثبت‌نام قبل از ارسال — کلاینت جریان را عوض می‌کند */
+      notRegistered: !!r.notRegistered, alreadyRegistered: !!r.alreadyRegistered })
     /* در حالت دمو (بدون پنل پیامک) devCode برمی‌گردد تا جریان کامل تست‌پذیر باشد */
     res.json(r)
   } catch (e) {

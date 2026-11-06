@@ -36,6 +36,20 @@ export async function requestOtp(rawPhone, purpose) {
   if (!phone) return { ok: false, error: 'شماره موبایل معتبر نیست — باید با ۰۹ شروع شود و ۱۱ رقم باشد' }
   if (!PURPOSES.includes(purpose)) return { ok: false, error: 'درخواست نامعتبر است' }
 
+  /* [فیکس F39] چک ثبت‌نام «قبل از ارسال کد» — درخواست مستقیم کاربر:
+     • ورود/بازیابی رمز → اگر شماره ثبت‌نام نشده باشد، نه پیامکی می‌رود نه ردیف
+       کدی ساخته می‌شود؛ کلاینت با پرچم notRegistered کاربر را به ثبت‌نام می‌برد.
+     • ثبت‌نام → اگر شماره قبلاً گرفته شده باشد، به‌جای هدر دادن پیامک، پرچم
+       alreadyRegistered برمی‌گردد تا کلاینت به جریان «ورود با کد پیامکی» برود.
+     (چک هم‌ارز در مرحلهٔ verify هم باقی است — برای مسابقهٔ هم‌زمانی) */
+  const reg = db.prepare('SELECT id FROM users WHERE phone = ?').get(phone)
+  if (purpose === 'register' && reg) {
+    return { ok: false, alreadyRegistered: true, error: 'این شماره قبلاً ثبت شده — از «ورود با کد پیامکی» استفاده کنید' }
+  }
+  if (purpose !== 'register' && !reg) {
+    return { ok: false, notRegistered: true, error: 'این شماره ثبت‌نام نشده — ابتدا حساب بسازید' }
+  }
+
   /* ضد بمباران — از ledger واقعی ارسال‌ها (sms_log) */
   const hourN = sentCount(phone, now() - 3600_000)
   if (hourN >= HOURLY_CAP) return { ok: false, error: 'تعداد کد‌های ارسالی به این شماره زیاد بوده — یک ساعت دیگر تلاش کنید' }

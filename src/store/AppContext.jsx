@@ -128,7 +128,8 @@ export function AppProvider({ children }) {
  return { ok: true, devCode: r.devCode || '', sent: !!r.sent, expiresIn: r.expiresIn || 120 }
  } catch (e) {
  if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — ورود با کد پیامکی فعلاً ممکن نیست' }
- return { ok: false, error: e.message, wait: e.wait || 0 }
+ /* [فیکس F39] پرچم‌های چک ثبت‌نام قبل از ارسال کد — فرم با آن‌ها جریان را عوض می‌کند */
+ return { ok: false, error: e.message, wait: e.wait || 0, notRegistered: !!e.notRegistered, alreadyRegistered: !!e.alreadyRegistered }
  }
  },
  /** ورود با کد پیامکی — اگر شماره ثبت‌نام نشده باشد notRegistered=true برمی‌گردد */

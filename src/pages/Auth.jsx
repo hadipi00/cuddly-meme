@@ -115,7 +115,23 @@ export default function Auth() {
    setBusy(true); setError('')
    const r = await requestOtp(normDigits(phone).trim(), purpose)
    setBusy(false)
-   if (!r.ok) { setError(r.error || 'ارسال کد ناموفق بود'); if (r.wait) setResendIn(r.wait); return }
+   if (!r.ok) {
+     setError(r.error || 'ارسال کد ناموفق بود')
+     if (r.wait) setResendIn(r.wait)
+     /* [فیکس F39] چک ثبت‌نام «قبل از ارسال کد» — درخواست کاربر:
+        • ورود با شمارهٔ ثبت‌نام‌نشده → نه پیامکی می‌رود نه کدی ساخته می‌شود؛
+          خودکار به جریان ثبت‌نام می‌رویم (شماره حفظ می‌شود).
+        • ثبت‌نام با شمارهٔ قبلاً ثبت‌شده → خودکار به ورود پیامکی با ارسال کد. */
+     if (r.notRegistered && purpose !== 'register') {
+       toast('این شماره ثبت‌نام نشده — ثبت‌نام را ادامه دهید', 'info')
+       setMode('register'); setStep(1)
+     } else if (r.alreadyRegistered && purpose === 'register') {
+       toast('این شماره قبلاً ثبت شده — کد ورود برایتان ارسال شد', 'info')
+       setMode('login'); setLoginMethod('otp')
+       sendCode('login')
+     }
+     return
+   }
    setDevCode(r.devCode || '')
    setOtpKey((k) => k + 1)
    setResendIn(60)
