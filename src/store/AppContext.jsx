@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { DEMO_USERS } from '../config/site'
-import { req, setToken, getToken, setRefresh, getRefresh } from '../services/http'
+import { req, setToken, getToken, setRefresh, getRefresh, doRefresh, SESSION_EXPIRED_EVENT } from '../services/http'
 
 // ================= استور مرکزی برنامه (ورود، سبد خرید، علاقه‌مندی، کلاس‌ها و ...) =================
 // ورود/ثبت‌نام به بک‌اند واقعی (JWT) وصل است؛ اگر سرور در دسترس نباشد
@@ -36,11 +36,16 @@ export function AppProvider({ children }) {
 
  const patch = (fn) => setState((s) => ({ ...s, ...fn(s) }))
 
- /* ---------- خودترمیمی هویت: تطبیق کاربر با توکن همین تب (sessionStorage) ---------- */
+ /* ---------- خودترمیمی هویت: تطبیق کاربر با توکن همین تب (sessionStorage) ----------
+  * [فیکس باگ «کلاس شروع نمیشود»] سه حالت هنگام بوت هندل می‌شود:
+  *   ۱) توکن هست → اعتبارسنجی با /auth/me (مثل قبل)
+  *   ۲) توکن نیست ولی refresh هست → تمدید بی‌سروصدا و بعد اعتبارسنجی
+  *   ۳) هیچ نشستی نیست ولی user ماندگار هست → «کاربر زامبی» — قبلاً همین حالت
+  *      پنل را با دادهٔ دمو و درخواست‌های 401 بی‌صدا بالا می‌آورد که ریشهٔ
+  *      «معلم کلاس را شروع کرد ولی دانش‌آموز چیزی ندید» بود؛ حالا پاکسازی می‌شود */
  useEffect(() => {
-   if (!getToken()) return
    let alive = true
-   req('/auth/me').then((r) => {
+   const validate = () => req('/auth/me').then((r) => {
      if (!alive || !r.user) return
      if (r.token) setToken(r.token) // تمدید اسلایدی سشن — کاربر فعال هرگز منقضی نمی‌شود
      // کاربر همیشه با نسخه تازه سرور جایگزین می‌شود تا فیلدهای جدید (مثل roleLabel) هم بیاید
@@ -51,9 +56,30 @@ export function AppProvider({ children }) {
         (http.js اول بی‌سروصدا refresh می‌کند و فقط آن‌وقت خطا می‌رسد) */
      if (e.status === 401) { setToken(null); setRefresh(null); setState((s) => ({ ...s, user: null, token: null })) }
    })
+   if (getToken()) {
+     validate()
+   } else if (getRefresh()) {
+     doRefresh().then((r) => { if (r?.token) validate(); else if (alive) setState((s) => (s.user ? { ...s, user: null, token: null } : s)) })
+   } else {
+     /* حالت زامبی — بدون نشست واقعی، user ماندگار بی‌اعتبار است */
+     setState((s) => (s.user ? { ...s, user: null, token: null } : s))
+   }
    return () => { alive = false }
-   // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [])
+
+ /* ---------- مرگ نشست وسط کار (401 نهایی در هر درخواستی) → خروج تمیز ----------
+  * قبلاً هر کامپوننت خطا را خودش بی‌صدا قورت می‌داد و کاربر نصفه‌کار با
+  * توکن مرده می‌ماند؛ حالا یک‌جا خروج + پیام روشن و RouteGuard به /auth می‌برد */
+ useEffect(() => {
+   const onExpired = () => {
+     setToken(null)
+     setRefresh(null)
+     setState((s) => (s.user ? { ...s, user: null, token: null } : s))
+     toast('نشست شما منقضی شده است — لطفاً دوباره وارد شوید', 'error')
+   }
+   window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+   return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
+ }, [toast])
 
  /** حالت دمو (فقط وقتی بک‌اند در دسترس نیست) */
  const loginDemo = useCallback((role, name) => {

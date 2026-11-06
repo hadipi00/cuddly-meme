@@ -19,6 +19,7 @@ export default function TLiveRoom() {
  const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
  const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
  const [loaded, setLoaded] = useState(false) // تا کلاس‌های واقعی از سرور نیامده، دمو شروع‌پذیر نیست
+ const [authErr, setAuthErr] = useState(false) // [فیکس] خطای احراز هویت ≠ قطعی سرور
  const now = useNow(1000)
 
  /* چک واقعی تجهیزات (getUserMedia) برای صفحه آماده‌سازی — بالای early-returnها */
@@ -39,7 +40,10 @@ export default function TLiveRoom() {
 
  /* کلاس‌های این مدرس از بک‌اند واقعی — [فیکس F8] لیست خالیِ «موفق» دیگر با دمو
     اشتباه گرفته نمی‌شود: پاسخ سرور اومده → همان خالی نمایش داده می‌شود («هنوز
-    کلاسی نساخته‌اید»). دمو فقط وقتی می‌ماند که سرور در دسترس نباشد */
+    کلاسی نساخته‌اید»). دمو فقط وقتی می‌ماند که سرور در دسترس نباشد.
+    [فیکس باگ «کلاس شروع نمیشود»] خطای 401/403 هرگز نباید به لیست دمو بریزد —
+    قبلاً نشست مرده + fallback دمو باعث می‌شد مدرس کلاس‌های قلابی ببیند، دکمهٔ
+    شروع با 401 شکست بخورد و گیت «هنوز روی سرور شروع نشده» همیشه بماند */
  useEffect(() => {
  let alive = true
  req('/me/teaching').then((r) => {
@@ -50,7 +54,12 @@ export default function TLiveRoom() {
  id: c.id, liveId: c.id, title: c.title, day: c.day, start: c.start,
  dur: c.dur, students: c.enrolled, room: c.room, desc: c.desc, icon: c.icon, color: c.color,
  })))
- }).catch(() => { if (alive) setLoaded(true) })
+ }).catch((e) => {
+ if (!alive) return
+ setLoaded(true)
+ if (e.serverDown) return // قطعی واقعی شبکه → دمو اشکالی ندارد
+ if (e.status === 401 || e.status === 403) { setAuthErr(true); setMyClasses([]) }
+ })
  return () => { alive = false }
  }, [])
 
@@ -71,13 +80,22 @@ export default function TLiveRoom() {
  </div>
  </div>
 
+ {/* [فیکس] خطای دسترسی — پیام صریح به‌جای کلاس‌های دموی قلابی */}
+ {authErr && (
+ <div className="card pad mb24" style={{ textAlign: 'center', borderColor: 'rgba(248,113,113,0.5)' }}>
+ <b style={{ color: 'var(--red)' }}>خطای دسترسی — نشست شما معتبر نیست</b>
+ <p className="muted small mt8">احتمالاً نشست شما منقضی شده است. لطفاً با حساب مدرسِ همان کلاس دوباره وارد شوید.</p>
+ <a href="/auth?role=teacher" className="btn btn-primary btn-sm mt16">ورود مجدد</a>
+ </div>
+ )}
+
  <div className="grids g2 mb24">
  {!loaded && (
  <div className="card pad" style={{ gridColumn: '1 / -1', textAlign: 'center' }}>
  <span className="muted small">در حال دریافت کلاس‌های شما از سرور…</span>
  </div>
  )}
- {loaded && !myClasses.length && (
+ {loaded && !myClasses.length && !authErr && (
  <div className="card pad" style={{ textAlign: 'center', padding: 40 }}>
  <b>هنوز کلاسی نساخته‌اید</b>
  <p className="muted small mt8">از بخش «کلاس‌های من» یک کلاس هفتگی بسازید تا اینجا برای برگزاری زنده ظاهر شود.</p>

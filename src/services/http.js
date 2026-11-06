@@ -50,7 +50,18 @@ export const markServerUp = (v) => { serverUp = v }
 
 /* ---------- تازه‌سازی بی‌سروصدا با single-flight ---------- */
 let refreshFlight = null
-function doRefresh() {
+/** [فیکس باگ «کلاس شروع نمیشود»] مرگ نشست باید «بلند» اعلام شود.
+ *  قبلاً 401 نهایی فقط در همان کامپوننت catch می‌شد → پنل با user ماندگارِ
+ *  localStorage «زامبی» می‌ماند، TLiveRoom به کلاس‌های دموی قلابی می‌افتید،
+ *  POST /start با 401 شکست می‌خورد و دانش‌آموز برای همیشه روی «زمان‌بندی شده» می‌ماند.
+ *  حالا هر 401ِ نهایی (بعد از تلاش تازه‌سازی) رخداد سراسری پخش می‌کند تا
+ *  AppContext کاربر را پاک و به صفحه ورود برگرداند. */
+export const SESSION_EXPIRED_EVENT = 'modaresyar:session-expired'
+export const announceSessionExpired = () => {
+  try { window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT)) } catch { /* noop */ }
+}
+
+export function doRefresh() {
   if (refreshFlight) return refreshFlight
   refreshFlight = (async () => {
     try {
@@ -64,6 +75,7 @@ function doRefresh() {
       if (!res.ok) {
         setRefresh(null) // سشن واقعاً تمام/ابطال شده — ورود مجدد لازم است
         setToken(null)
+        announceSessionExpired() // [فیکس] به کل اپ اعلام کن: نشست مرده است
         return null
       }
       const d = await res.json().catch(() => null)
@@ -130,6 +142,11 @@ export async function req(path, { method = 'GET', body, timeout = 0, _retried = 
     if (res.status === 401 && !_retried && !AUTH_PATHS.some((p) => path.startsWith(p)) && getRefresh()) {
       const r = await doRefresh()
       if (r?.token) return req(path, { method, body, timeout, _retried: true })
+    }
+    /* [فیکس] 401 نهایی بدون توکن تازه‌سازی (یا تازه‌سازی بی‌جواب) = نشست مرده —
+       مسیرهای auth مستثنا هستند (رمز غلطِ صفحه ورود ≠ نشست منقضی) */
+    if (res.status === 401 && !AUTH_PATHS.some((p) => path.startsWith(p))) {
+      announceSessionExpired()
     }
     const e = new Error(data?.error || `خطای سرور (${res.status})`)
     e.status = res.status

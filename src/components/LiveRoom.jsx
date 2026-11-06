@@ -858,6 +858,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* ---------- وضعیت زنده + چت ---------- */
  const [live, setLive] = useState(null)
  const [stateChecked, setStateChecked] = useState(false) // [فیکس F38] وضعیت اولیهٔ سرور خوانده شد؟
+ const [authDenied, setAuthDenied] = useState(false) // [فیکس] 401/403 در خواندن وضعیت = نشست مرده ≠ «کلاس شروع نشده»
  const [messages, setMessages] = useState([])
  const [input, setInput] = useState('')
  const [sending, setSending] = useState(false)
@@ -881,7 +882,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      if (st.status === 'live') setLive((l) => ({ ...(l || { participants: [] }), status: 'live', startedAt: st.startedAt }))
      else if (st.status === 'ended') setLive((l) => ({ ...(l || { participants: [] }), status: 'ended', startedAt: st.startedAt, endedAt: st.endedAt }))
      setStateChecked(true)
-   }).catch(() => { if (alive) setStateChecked(true) /* قطعی شبکه → گیت شروع؛ startLive خطا را toast می‌کند */ })
+   }).catch((e) => {
+     if (!alive) return
+     /* [فیکس باگ «کلاس شروع نمیشود»] خطای احراز هویت هرگز نباید گیت «شروع کلاس»
+        نشان دهد — قبلاً با نشست مرده، این گیت همیشه می‌ماند و مدرس فکر می‌کرد
+        کلاس شروع شده در حالی که POST /start هرگز موفق نشده بود */
+     if (e.status === 401 || e.status === 403) setAuthDenied(true)
+     setStateChecked(true)
+   })
    return () => { alive = false }
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [classId])
@@ -2244,6 +2252,23 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
              {classId && <Link to={`/panel/student/classes/${classId}`} className="btn btn-primary">جزئیات کلاس و ضبط‌ها</Link>}
            </>
          )}
+       </div>
+     </div>
+   )
+ }
+
+ /* ---------- [فیکس] نشست مرده → پیام صریح، نه گیت گمراه‌کنندهٔ «شروع کلاس» ---------- */
+ if (authDenied) {
+   return (
+     <div className="card pad" style={{ maxWidth: 560, margin: '30px auto', textAlign: 'center' }}>
+       <div className="sc-icon" style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', background: 'rgba(248,113,113,0.14)', color: 'var(--red)' }}>
+         <Icon name="lock" size={28} />
+       </div>
+       <h2 style={{ fontSize: 19, marginBottom: 6 }}>دسترسی به این کلاس ممکن نیست</h2>
+       <p className="muted small mb16">نشست شما منقضی شده یا اجازهٔ مدیریت این کلاس را ندارید — لطفاً با حساب مدرسِ همان کلاس دوباره وارد شوید.</p>
+       <div className="row g12" style={{ justifyContent: 'center' }}>
+         <a href="/auth?role=teacher" className="btn btn-primary">ورود مجدد</a>
+         <Link to="/panel/teacher/live" className="btn btn-ghost">بازگشت</Link>
        </div>
      </div>
    )
