@@ -123,9 +123,10 @@ export default function ASettings() {
  </div>
  <div className="field"><label>آدرس دفتر</label><input className="input" value={s.site_address} onChange={(e) => setS({ ...s, site_address: e.target.value })} /></div>
  <div className="field"><label>ساعات کاری</label><input className="input" value={s.site_working_hours} onChange={(e) => setS({ ...s, site_working_hours: e.target.value })} /></div>
- <div className="field"><label>کد نماد اعتماد اینماد (HTML رسمی از پنل enamad.ir — در فوتر نمایش داده می‌شود)</label>
-  <textarea className="input" dir="ltr" rows={3} placeholder='<a href="https://trustseal.enamad.ir/?id=…">…</a>'
+ <div className="field"><label>کد نماد اعتماد اینماد (HTML رسمی از پنل enamad.ir — در پاورقی همه صفحات نمایش داده می‌شود)</label>
+  <textarea className="input" dir="ltr" rows={3} placeholder={'<a href="https://trustseal.enamad.ir/?id=ID&Code=CODE" target="_blank" referrerpolicy="origin"><img src="https://trustseal.enamad.ir/logo.aspx?id=ID&Code=CODE" alt="اینماد" /></a>'}
    value={s.enamad_html} onChange={(e) => setS({ ...s, enamad_html: e.target.value })} />
+  <p className="muted small mt8">پس از ثبت‌نام و تأیید در enamad.ir، از «دریافت کد نماد» کد HTML را عیناً همین‌جا بچسبانید تا به‌جای کاشی جایگاه، نشان واقعی اینماد در فوتر نمایش داده شود. تا آن زمان یک کاشی سفید جایگاه‌نما در فوتر دیده می‌شود.</p>
  </div>
  <div className="toggle-row"><div><b>حالت تعمیر و نگهداری</b><p>در صورت فعال‌سازی، پیام تعمیر در Footer و صفحات عمومی دیده می‌شود</p></div>
  <Toggle on={s.maintenance_mode} onChange={(v) => setS({ ...s, maintenance_mode: v })} /></div>
