@@ -37,3 +37,4 @@ server/data/
 
 # فایل‌های آپلودی آزمون (سوالات PDF/تصویر و پاسخنامه)
 server/uploads/
+upload/
