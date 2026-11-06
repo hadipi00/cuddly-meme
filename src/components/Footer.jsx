@@ -72,6 +72,10 @@ export default function Footer() {
  </div>
  </div>
  <div className="footer-bottom">
+ {pub?.enamadHtml && (
+ <div className="footer-enamad" style={{ display: 'flex', justifyContent: 'center', padding: '8px 0' }}
+  dangerouslySetInnerHTML={{ __html: String(pub.enamadHtml).slice(0, 2000) }} />
+ )}
  <span>© ۱۴۰۴ {pick(pub.site?.name, site.name)} — تمام حقوق محفوظ است.</span>
  <span className="muted small" style={{ display: 'inline-flex', gap: 12, flexWrap: 'wrap' }}>
  {pub.maintenance && <span className="badge b-amber">حالت تعمیر و نگهداری فعال است</span>}

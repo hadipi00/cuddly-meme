@@ -8,6 +8,12 @@ import { useApp } from '../../store/AppContext'
 import { faNum, toman } from '../../utils/format'
 
 const statusMap = { paid: ['پرداخت شده', 'b-green'], pending: ['در انتظار پرداخت', 'b-amber'], shipped: ['ارسال شده', 'b-sky'], delivered: ['تحویل شده', 'b-green'], canceled: ['لغو شده', 'b-red'] }
+/* [کارت‌به‌کارت] برچسب وضعیت با توجه به روش پرداخت — pending کارت‌به‌کارتی یعنی منتظر تأیید رسید */
+const orderBadge = (o) => {
+ if (o.gateway === 'card2card' && (o.status === 'pending' || o.status === 'shipped'))
+  return ['در انتظار تأیید رسید', 'b-amber']
+ return statusMap[o.status] || statusMap.paid
+}
 
 /** سفارش‌های واقعی کاربر از سرور (/api/me/orders) — گروه‌بندی ردیف‌های هم‌کد.
     قبلاً فقط داده موک ثابت نشان داده می‌شد و خریدهای واقعی هیچ‌جا دیده نمی‌شد */
@@ -21,7 +27,7 @@ function useMyOrders() {
    if (!alive || !Array.isArray(r.orders)) return
    const byCode = new Map()
    for (const o of r.orders) {
-    if (!byCode.has(o.code)) byCode.set(o.code, { code: o.code, items: [], total: 0, date: new Date(o.createdAt).toLocaleDateString('fa-IR'), status: o.status })
+    if (!byCode.has(o.code)) byCode.set(o.code, { code: o.code, items: [], total: 0, date: new Date(o.createdAt).toLocaleDateString('fa-IR'), status: o.status, gateway: o.gateway })
     const g = byCode.get(o.code)
     if (o.kind !== 'shipping') g.items.push(o.title)
     g.total += o.amount || 0
@@ -52,7 +58,7 @@ export default function SOrders() {
  <thead><tr><th>کد سفارش</th><th>اقلام</th><th>مبلغ</th><th>تاریخ</th><th>وضعیت</th><th>فاکتور</th></tr></thead>
  <tbody>
  {all.map((o) => {
- const [label, cls] = statusMap[o.status] || statusMap.paid
+ const [label, cls] = orderBadge(o)
  return (
  <tr key={o.code}>
  <td className="cell-strong" dir="ltr" style={{ textAlign: 'right' }}>{o.code}</td>

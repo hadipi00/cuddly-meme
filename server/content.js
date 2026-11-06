@@ -1021,6 +1021,11 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
   maintenance_mode: 1, registration_open: 1,
   /* درگاه پرداخت — fallback زرین‌پال (pay.js) */
   zarinpal_merchant: 64, zarinpal_sandbox: 1,
+  /* [کارت‌به‌کارت] روشن/خاموش‌کردن روش‌های پرداخت + اطلاعات کارت — pay.js */
+  pay_zarinpal_enabled: 1, pay_card2card_enabled: 1,
+  c2c_card_number: 34, c2c_card_bank: 40, c2c_card_holder: 60, c2c_note: 240,
+  /* نماد اعتماد اینماد — کد HTML رسمی (a/img اسکریپت trustseal) در فوتر */
+  enamad_html: 1500,
   /* پیامک — fallback ملی پیامک (sms.js) */
   sms_username: 80, sms_password: 120, sms_from: 40, sms_admin: 40,
  }
@@ -1049,7 +1054,12 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
     return res.status(400).json({ error: 'مرچنت‌کد زرین‌پال باید یک UUID معتبر ۳۶ کاراکتری باشد' })
    }
    if (k === 'site_email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
-   if ((k === 'maintenance_mode' || k === 'registration_open' || k === 'zarinpal_sandbox')) v = (v === '1' || v === 'true' || v === true) ? '1' : ''
+   /* شماره کارت کارت‌به‌کارت — فقط رقم و خط تیره (قالب آزاد ۱۶ رقم) */
+   if (k === 'c2c_card_number' && v && !/^[0-9\-]{16,24}$/.test(v.replace(/\s/g, '')))
+    return res.status(400).json({ error: 'شماره کارت فقط رقم و خط تیره است (مثلاً 6037-9976-0000-0000)' })
+   if ((k === 'maintenance_mode' || k === 'registration_open' || k === 'zarinpal_sandbox'
+    || k === 'pay_zarinpal_enabled' || k === 'pay_card2card_enabled')) v = (v === '1' || v === 'true' || v === true) ? '1' : ''
+   if (k === 'c2c_card_number' && v) v = v.replace(/\s/g, '')
    setSetting(k, v)
    n++
   }
@@ -1069,6 +1079,8 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
    },
    registrationOpen: getSetting('registration_open', '1') !== '',
    maintenance: getSetting('maintenance_mode', '') === '1',
+   /* نماد اعتماد اینماد — کد HTML که ادمین در پنل وارد کرده (فوتر رندر می‌کند) */
+   enamadHtml: getSetting('enamad_html', '') || undefined,
   })
  })
 }

@@ -6,6 +6,17 @@ const otpReq = (phone, purpose) =>
   fetch(`${B}/auth/otp/request`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, purpose }) })
 
 const main = async () => {
+  /* [اصلاح idempotent] سقف ۵ کد در ساعت برای هر شماره (ضد بمباران پیامک — رفتار درست سرور)
+     قبلاً تست با شمارهٔ ثابت سارا کد می‌گرفت و در اجراهای مکرر قفل می‌شد.
+     حالا کاربر با شمارهٔ یکتا در هر اجرا ساخته می‌شود. */
+  const S = Date.now().toString(36)
+  const PH = `0936${String(Date.now()).slice(-7)}`   // شمارهٔ یکتای این اجرا
+  const UN = `t_otp_${S}`
+  const admin = await (await fetch(`${B}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'admin', password: '12345678' }) })).json()
+  if (!admin.token) throw new Error('admin login failed')
+  const mk = await fetch(`${B}/admin/users`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` }, body: JSON.stringify({ role: 'student', name: 'کاربر OTP تست', username: UN, password: 'OtpTest99', phone: PH, email: '' }) }).then((r) => r.json())
+  ok('ساخت کاربر یکتا برای تست OTP', mk.ok === true && mk.user?.username === UN)
+
   // ۱) ورود با شمارهٔ ثبت‌نام‌نشده → نه کد می‌آید نه ردیف OTP ساخته می‌شود
   const r1 = otpReq('09351112233', 'login')
   const s1 = await (await r1).json()
@@ -21,7 +32,7 @@ const main = async () => {
   ok('ثبت‌نام با شمارهٔ ثبت‌شده → alreadyRegistered + بدون devCode', s3.alreadyRegistered === true && !s3.devCode && !s3.ok)
 
   // ۴) ورود با شمارهٔ ثبت‌شده → کد واقعاً ساخته/ارسال می‌شود (حالت دمو: devCode)
-  const s4 = await (await otpReq('09120000002', 'login')).json()
+  const s4 = await (await otpReq(PH, 'login')).json()
   ok('ورود با شمارهٔ ثبت‌شده → کد صادر شد', s4.ok === true && !!s4.devCode)
 
   // ۵) هیچ ردیف OTP یا پیامکی برای شماره‌های ثبت‌نام‌نشده ساخته نشده باشد
@@ -32,8 +43,8 @@ const main = async () => {
   ok('بدون پیامک برای شمارهٔ ثبت‌نام‌نشده', smsRows === 0)
 
   // ۶) جریان کامل ورود پیامکی با شمارهٔ ثبت‌شده (کد دمو → توکن)
-  const v = await (await fetch(`${B}/auth/otp/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: '09120000002', code: s4.devCode, purpose: 'login' }) })).json()
-  ok('تأیید کد → ورود موفق دانش‌آموز', v.ok === true && v.user?.username === 'sara')
+  const v = await (await fetch(`${B}/auth/otp/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: PH, code: s4.devCode, purpose: 'login' }) })).json()
+  ok('تأیید کد → ورود موفق کاربر جدید', v.ok === true && v.user?.username === UN)
 }
 
 main().catch((e) => { console.error('FAIL — exception:', e.message); process.exitCode = 1 })

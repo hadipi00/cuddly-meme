@@ -30,6 +30,9 @@
 // =====================================================================
 import express from 'express'
 import jwt from 'jsonwebtoken'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join, basename, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { db, JWT_SECRET, getSetting } from './db.js'
 import { priceCart, reserveStock, restoreStock, uniqueOrderCode, faNum } from './checkout-core.js'
 import { smsConfigured, normalizePhone, notifyOrderPaid } from './sms.js'
@@ -78,7 +81,25 @@ if (payMode() !== 'mock' && !MERCHANT_OK())
   console.warn('[pay] هشدار: ZARINPAL_MERCHANT_ID باید یک UUID معتبر ۳۶ کاراکتری باشد')
 
 export const PAYMENT_TTL_MS = 30 * 60 * 1000 // عمر authority زرین‌پال ~۳۰ دقیقه
+export const C2C_TTL_MS = 24 * 60 * 60 * 1000 // مهلت آپلود رسید کارت‌به‌کارت — ۲۴ ساعت
 const MIN_AMOUNT = 1000                      // حداقل مبلغ قابل پرداخت (تومان)
+
+/* ---------------- [کارت‌به‌کارت] روش‌های پرداخت — کنترل از پنل ادمین ----------------
+ * هر روش با تنظیم DB روشن/خاموش می‌شود (پیش‌فرض: هر دو روشن).
+ * کارت‌به‌کارت: کاربر مبلغ را کارت‌به‌کارت (مثلاً رایگان از طریق اپ بله‌پی) واریز
+ * می‌کند، تصویر رسید را آپلود می‌کند و مدیر از پنل تأیید/رد می‌کند. */
+const sOn = (k) => getSetting(k, '1') === '1'
+export const payMethodsCfg = () => ({
+  zarinpal: sOn('pay_zarinpal_enabled'),
+  card2card: sOn('pay_card2card_enabled'),
+  card: {
+    number: (getSetting('c2c_card_number', '') || '').trim(),
+    bank: (getSetting('c2c_card_bank', '') || '').trim(),
+    holder: (getSetting('c2c_card_holder', '') || '').trim(),
+    note: (getSetting('c2c_note', '') || '').trim(),
+  },
+})
+const c2cAuthority = (code) => 'C2C-' + String(code || '').trim().toUpperCase()
 
 /* ---------------- مهاجرت سبک: ستون qty برای ردیف سفارش ----------------
    برای برگرداندن صحیح موجودی در انصراف/انقضای پرداخت، تعداد هر قلم باید
@@ -104,6 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_payments_code ON payments(code);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 `)
 try { db.exec('ALTER TABLE payments ADD COLUMN fulfilled_at INTEGER') } catch { /* ستون هست */ }
+/* [کارت‌به‌کارت] مسیر نسبی تصویر رسید آپلودشده */
+try { db.exec('ALTER TABLE payments ADD COLUMN receipt TEXT') } catch { /* ستون هست */ }
+
+/* پوشهٔ رسیدهای کارت‌به‌کارت — کنار آپلودی آزمون‌ها (gitignore شده) */
+const c2cDir = join(dirname(fileURLToPath(import.meta.url)), 'uploads', 'c2c')
 
 /* [فیکس B5] دسترسی دورهٔ ضبط‌شده — قبلاً خرید دوره هیچ دسترسی‌ای فعال نمی‌کرد */
 db.exec(`
@@ -154,7 +180,8 @@ CREATE TABLE IF NOT EXISTS courses (
 
 const q = {
   paymentByAuthority: db.prepare('SELECT * FROM payments WHERE authority = ?'),
-  markPaid: db.prepare("UPDATE payments SET status='paid', ref_id=?, card_pan=?, verified_at=? WHERE authority=? AND status='pending'"),
+  /* [کارت‌به‌کارت] review هم به paid می‌رود (رسید آپلودشده)؛ زرین‌پال همیشه pending است */
+  markPaid: db.prepare("UPDATE payments SET status='paid', ref_id=?, card_pan=?, verified_at=? WHERE authority=? AND status IN ('pending','review')"),
   markFulfilled: db.prepare('UPDATE payments SET fulfilled_at = ? WHERE authority = ? AND fulfilled_at IS NULL'),
   paidUnfulfilled: db.prepare("SELECT authority, code, user_id, amount FROM payments WHERE status='paid' AND fulfilled_at IS NULL ORDER BY verified_at LIMIT 50"),
   markFailed: db.prepare("UPDATE payments SET status='failed', verified_at=? WHERE authority=? AND status='pending'"),
@@ -171,7 +198,14 @@ const q = {
   courseAccessAdd: db.prepare('INSERT OR IGNORE INTO course_access (course_id, user_id, created_at) VALUES (?,?,?)'),
   courseExists: db.prepare('SELECT id, title FROM courses WHERE id = ?'),
   markRefunded: db.prepare("UPDATE orders SET status='refunded' WHERE code = ? AND status = 'paid'"),
-  expiredPending: db.prepare("SELECT authority FROM payments WHERE status='pending' AND created_at < ? LIMIT 50"),
+  /* [کارت‌به‌کارت] TTL بر اساس روش — زرین‌پال ۳۰ دقیقه، کارت‌به‌کارت ۲۴ ساعت */
+  pendingSweep: db.prepare("SELECT authority, mode, created_at FROM payments WHERE status='pending'"),
+  markReview: db.prepare("UPDATE payments SET status='review', receipt=? WHERE authority=? AND status IN ('pending','review')"),
+  markRejected: db.prepare("UPDATE payments SET status='rejected', verified_at=? WHERE authority=? AND status IN ('pending','review')"),
+  c2cList: db.prepare(`SELECT p.*, u.name AS user_name, u.phone AS user_phone FROM payments p
+    LEFT JOIN users u ON u.id = p.user_id WHERE p.mode='card2card'
+    ORDER BY CASE p.status WHEN 'review' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, p.created_at DESC LIMIT 100`),
+  orderTitlesByCode: db.prepare('SELECT kind, item_id, title FROM orders WHERE code = ?'),
 }
 
 /* ---------------- احراز هویت (همان قرارداد index.js) ---------------- */
@@ -266,12 +300,16 @@ function fulfillPaidOrder({ code, userId, amount }) {
   return rows.length
 }
 
-/* شکست/انصراف پرداخت — حذف ردیف‌های pending سفارش + برگرداندن موجودی رزرو */
-function failPendingPayment(authority, { expired = false } = {}) {
+/* شکست/انصراف/ردِ رسید — حذف ردیف‌های pending سفارش + برگرداندن موجودی رزرو */
+function failPendingPayment(authority, { expired = false, rejected = false } = {}) {
   const p = q.paymentByAuthority.get(authority)
-  if (!p || p.status !== 'pending') return false
+  if (!p) return false
+  /* گارد وضعیت: زرین‌پال فقط pending؛ ردِ رسید از pending و review هر دو */
+  if (rejected ? !['pending', 'review'].includes(p.status) : p.status !== 'pending') return false
   /* گارد اتمیک: فقط یک بار اجازهٔ آزادسازی (جلوگیری از دوبار برگشت موجودی) */
-  const res = expired ? q.markExpired.run(nowMs(), authority) : q.markFailed.run(nowMs(), authority)
+  const res = rejected ? q.markRejected.run(nowMs(), authority)
+    : expired ? q.markExpired.run(nowMs(), authority)
+    : q.markFailed.run(nowMs(), authority)
   if (res.changes === 0) return false
   /* [فیکس B11] برگشت موجودی + حذف ردیف‌ها در تراکنش — قبلاً کرش بین آن‌ها
      یعنی یا موجودی برای همیشه رزرو می‌ماند یا ردیف pending یتیم می‌ماند */
@@ -291,8 +329,12 @@ function failPendingPayment(authority, { expired = false } = {}) {
    [فیکس B10] ردیف‌های paid-بدون-fulfill هم دوباره تسویه می‌شوند (جبران کرش)
    [فیکس B16] با تایمر دوره‌ای ۵ دقیقه‌ای هم اجرا می‌شود (پایین) — قبلاً فقط lazy */
 function sweepExpiredPayments() {
-  const rows = q.expiredPending.all(nowMs() - PAYMENT_TTL_MS)
-  for (const p of rows) failPendingPayment(p.authority, { expired: true })
+  /* TTL بر اساس روش پرداخت — زرین‌پال ۳۰ دقیقه، کارت‌به‌کارت ۲۴ ساعت */
+  const rows = q.pendingSweep.all()
+  for (const p of rows) {
+    const ttl = p.mode === 'card2card' ? C2C_TTL_MS : PAYMENT_TTL_MS
+    if (p.created_at < nowMs() - ttl) failPendingPayment(p.authority, { expired: true })
+  }
   /* سفارش‌هایی که پولشان گرفته شده ولی fulfill نشده‌اند (کرش بین markPaid و fulfill) */
   for (const p of q.paidUnfulfilled.all()) {
     try {
@@ -368,14 +410,26 @@ export async function startZarinPayment({ user, lines, total, description, meta,
 export function registerPayRoutes(app) {
   const payRoutes = express.Router()
 
-  /* وضعیت پیکربندی پرداخت/پیامک — برای نمایش حالت آزمایشی در UI (بدون داده حساس) */
-  payRoutes.get('/config', (req, res) =>
-    res.json({ mode: payMode(), minAmount: MIN_AMOUNT, sms: smsConfigured() }))
+  /* گارد ادمین برای مسیرهای رسیدهای کارت‌به‌کارت */
+  const requirePayAdmin = (req, res, next) => {
+    const u = authUser(req)
+    if (!u || u.role !== 'admin') return res.status(403).json({ error: 'فقط مدیر سامانه' })
+    req.user = u
+    next()
+  }
+
+  /* وضعیت پیکربندی پرداخت/پیامک — برای نمایش حالت آزمایشی در UI (بدون داده حساس)
+     [کارت‌به‌کارت] روش‌های فعال + اطلاعات کارت برای صفحهٔ تسویه */
+  payRoutes.get('/config', (req, res) => {
+    const m = payMethodsCfg()
+    res.json({ mode: payMode(), minAmount: MIN_AMOUNT, sms: smsConfigured(), methods: { zarinpal: m.zarinpal, card2card: m.card2card }, card: m.card })
+  })
 
   /* شروع پرداخت سبد خرید — همان بدنهٔ /api/checkout */
   payRoutes.post('/zarinpal/start', async (req, res) => {
     const u = authUser(req)
     if (!u) return res.status(401).json({ error: 'برای پرداخت ابتدا وارد حساب شوید' })
+    if (!payMethodsCfg().zarinpal) return res.status(400).json({ error: 'درگاه زرین‌پال توسط مدیر غیرفعال شده است' })
     if (payMode() !== 'mock' && !MERCHANT_OK())
       return res.status(500).json({ error: 'مرچنت‌کد زرین‌پال معتبر نیست — تنظیمات سرور را بررسی کنید' })
     sweepExpiredPayments()
@@ -400,6 +454,123 @@ export function registerPayRoutes(app) {
       console.error('[pay] start failed:', e.message)
       res.status(502).json({ error: 'خطا در اتصال به درگاه پرداخت — دوباره تلاش کنید' })
     }
+  })
+
+  /* ---------------- کارت‌به‌کارت (بله‌پی / هر بانکی) ----------------
+   * سفارش pending با gateway='card2card' ثبت و موجودی رزرو می‌شود (مهلت ۲۴ ساعت)،
+   * کاربر رسید تصویری را آپلود می‌کند و مدیر از پنل مالی تأیید/رد می‌کند.
+   * تأیید = همان fulfillPaidOrder زرین‌پال (ثبت‌نام کلاس/دسترسی دوره + پیامک) */
+  payRoutes.post('/card2card/start', (req, res) => {
+    const u = authUser(req)
+    if (!u) return res.status(401).json({ error: 'برای ثبت سفارش ابتدا وارد حساب شوید' })
+    const m = payMethodsCfg()
+    if (!m.card2card) return res.status(400).json({ error: 'روش کارت‌به‌کارت توسط مدیر غیرفعال شده است' })
+    sweepExpiredPayments()
+
+    const p = priceCart(u, req.body)
+    if (p.error) return res.status(p.status || 400).json({ error: p.error })
+    if (p.total < MIN_AMOUNT)
+      return res.status(400).json({ error: `حداقل مبلغ سفارش ${faNum(MIN_AMOUNT)} تومان است` })
+
+    const code = uniqueOrderCode()
+    if (!code) return res.status(500).json({ error: 'خطا در تولید کد سفارش — دوباره تلاش کنید' })
+    const rs = reserveStock(p.lines)
+    if (rs) return res.status(400).json({ error: rs })
+
+    const insOrder = db.prepare(`INSERT INTO orders (code, user_id, kind, item_id, title, amount, status, gateway, meta, created_at, qty)
+      VALUES (?,?,?,?,?,?,'pending','card2card',?,?,?)`)
+    try {
+      db.exec('BEGIN')
+      for (const l of p.lines)
+        insOrder.run(code, u.id, l.kind, l.id, `${l.title}${l.qty > 1 ? ` × ${faNum(l.qty)}` : ''}`, l.final, p.meta, nowMs(), l.qty || 1)
+      db.exec('COMMIT')
+    } catch (e) {
+      try { db.exec('ROLLBACK') } catch { }
+      restoreStock(p.lines)
+      console.error('[pay] c2c insert order failed:', e.message)
+      return res.status(500).json({ error: 'خطا در ثبت سفارش — دوباره تلاش کنید' })
+    }
+
+    const authority = c2cAuthority(code)
+    db.prepare(`INSERT INTO payments (authority, code, user_id, amount, status, mode, created_at)
+      VALUES (?,?,?,?,'pending','card2card',?)`).run(authority, code, u.id, p.total, nowMs())
+    res.json({ ok: true, code, total: p.total, method: 'card2card', card: m.card })
+  })
+
+  /* وضعیت سفارش کارت‌به‌کارت — فقط برای صاحب سفارش */
+  payRoutes.get('/card2card/status/:code', (req, res) => {
+    const u = authUser(req)
+    if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
+    const p = q.paymentByAuthority.get(c2cAuthority(req.params.code))
+    if (!p || p.user_id !== u.id) return res.status(404).json({ error: 'سفارش پیدا نشد' })
+    res.json({ code: p.code, status: p.status, amount: p.amount, hasReceipt: !!p.receipt, refId: p.ref_id || '' })
+  })
+
+  /* آپلود رسید تصویری (dataURL ≤ ۴MB) — کاربر مالک سفارش */
+  payRoutes.post('/card2card/:code/receipt', (req, res) => {
+    const u = authUser(req)
+    if (!u) return res.status(401).json({ error: 'ابتدا وارد حساب شوید' })
+    const p = q.paymentByAuthority.get(c2cAuthority(req.params.code))
+    if (!p || p.user_id !== u.id) return res.status(404).json({ error: 'سفارش پیدا نشد' })
+    if (p.status === 'paid') return res.status(400).json({ error: 'این سفارش قبلاً تأیید شده است' })
+    if (!['pending', 'review'].includes(p.status))
+      return res.status(400).json({ error: 'این سفارش قابل رسیدگذاری نیست — دوباره سفارش ثبت کنید' })
+
+    const img = String(req.body?.image || '')
+    const mm = img.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/)
+    if (!mm) return res.status(400).json({ error: 'فقط تصویر رسید (JPG/PNG/WebP) پذیرفته می‌شود' })
+    const buf = Buffer.from(mm[2].replace(/\s+/g, ''), 'base64')
+    if (!buf.length) return res.status(400).json({ error: 'تصویر رسید خالی است' })
+    if (buf.length > 4 * 1024 * 1024) return res.status(400).json({ error: 'حجم رسید باید کمتر از ۴ مگابایت باشد' })
+
+    mkdirSync(c2cDir, { recursive: true })
+    const ext = mm[1] === 'jpeg' ? 'jpg' : mm[1]
+    const fname = `${p.authority.replace(/[^A-Za-z0-9-]/g, '')}.${ext}`
+    writeFileSync(join(c2cDir, fname), buf)
+    const upd = q.markReview.run(`uploads/c2c/${fname}`, p.authority)
+    if (upd.changes === 0) return res.status(409).json({ error: 'وضعیت سفارش تغییر کرده — صفحه را تازه کنید' })
+    res.json({ ok: true, status: 'review' })
+  })
+
+  /* ---- ادمین: صف رسیدهای کارت‌به‌کارت ---- */
+  payRoutes.get('/admin/c2c', requirePayAdmin, (req, res) => {
+    const rows = q.c2cList.all().map((p) => ({
+      authority: p.authority, code: p.code, userName: p.user_name || '—', userPhone: p.user_phone || '',
+      amount: p.amount, status: p.status, hasReceipt: !!p.receipt,
+      createdAt: p.created_at, refId: p.ref_id || '',
+      items: q.orderTitlesByCode.all(p.code).map((o) => o.title).join('، '),
+    }))
+    res.json({ payments: rows })
+  })
+
+  /* تصویر رسید — فقط ادمین (basename برای ضد path-traversal) */
+  payRoutes.get('/admin/c2c/:authority/receipt', requirePayAdmin, (req, res) => {
+    const p = q.paymentByAuthority.get(String(req.params.authority))
+    if (!p?.receipt) return res.status(404).json({ error: 'رسیدی ثبت نشده است' })
+    res.sendFile(join(c2cDir, basename(p.receipt)))
+  })
+
+  /* تأیید رسید → همان مسیر تکمیل زرین‌پال (سفارش paid + ثبت‌نام/دسترسی + پیامک) */
+  payRoutes.post('/admin/c2c/:authority/approve', requirePayAdmin, (req, res) => {
+    const p = q.paymentByAuthority.get(String(req.params.authority))
+    if (!p || p.mode !== 'card2card') return res.status(404).json({ error: 'پرداخت کارت‌به‌کارت پیدا نشد' })
+    if (p.status === 'paid') return res.json({ ok: true, already: true })
+    if (p.status !== 'review') return res.status(400).json({ error: 'اول باید رسید آپلود شود' })
+    const refId = String(req.body?.refId || '').trim().slice(0, 40) || `C2C-${String(nowMs()).slice(-9)}`
+    const marked = q.markPaid.run(refId, '', nowMs(), p.authority)
+    if (marked.changes === 0) return res.status(409).json({ error: 'وضعیت پرداخت تغییر کرده — صفحه را تازه کنید' })
+    fulfillPaidOrder({ code: p.code, userId: p.user_id, amount: p.amount })
+    q.markFulfilled.run(nowMs(), p.authority)
+    res.json({ ok: true, code: p.code, refId })
+  })
+
+  /* رد رسید → موجودی برمی‌گردد، ردیف‌های سفارش حذف می‌شوند، وضعیت rejected */
+  payRoutes.post('/admin/c2c/:authority/reject', requirePayAdmin, (req, res) => {
+    const p = q.paymentByAuthority.get(String(req.params.authority))
+    if (!p || p.mode !== 'card2card') return res.status(404).json({ error: 'پرداخت کارت‌به‌کارت پیدا نشد' })
+    const done = failPendingPayment(p.authority, { rejected: true })
+    if (!done) return res.status(400).json({ error: 'این سفارش در وضعیت قابل رد نیست' })
+    res.json({ ok: true })
   })
 
   /* بازگشت از درگاه — GET ریدایرکتی با Authority/Status در کوئری.

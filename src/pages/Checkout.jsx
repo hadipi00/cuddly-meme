@@ -31,26 +31,40 @@ const SHIP_METHODS = [
   },
 ]
 
-/* روش‌های پرداخت — زرین‌پال تنها درگاه فعال (سایرها به‌زودی) */
-const PAY_METHODS = [
-  { key: 'زرین‌پال', soon: false },
-  { key: 'درگاه ملت', soon: true },
-  { key: 'کیف پول مدرس‌یار', soon: true },
-  { key: 'کارت به کارت', soon: true },
+/* روش‌های پرداخت — از سرور خوانده می‌شود (/api/pay/config): زرین‌پال + کارت‌به‌کارت
+   هرکدام از پنل ادمین روشن/خاموش می‌شوند؛ غیرفعال‌ها اصلاً رندر نمی‌شوند */
+const SOON_METHODS = [
+  { key: 'mellat', label: 'درگاه ملت' },
+  { key: 'wallet', label: 'کیف پول مدرس‌یار' },
 ]
 
 export default function Checkout() {
   const { cart, toast, user, clearCart } = useApp()
   const nav = useNavigate()
-  const [method, setMethod] = useState('زرین‌پال')
+  const [method, setMethod] = useState('')
   const [coupon, setCoupon] = useState('')
   const [couponLabel, setCouponLabel] = useState('')
   const [discount, setDiscount] = useState(0)
   const [shipKey, setShipKey] = useState('prepaid')
   const [paying, setPaying] = useState(false)
-  /* وضعیت درگاه از سرور (mock/sandbox/real) — برای نمایش حالت آزمایشی */
+  /* وضعیت درگاه و روش‌های فعال از سرور (mock/sandbox/real + enable/disable ادمین) */
   const [payConfig, setPayConfig] = useState(null)
   useEffect(() => { req('/pay/config').then(setPayConfig).catch(() => {}) }, [])
+
+  const enabled = payConfig?.methods || { zarinpal: true, card2card: false }
+  const payMethodList = [
+    ...(enabled.zarinpal ? [{ key: 'zarinpal', label: 'زرین‌پال' }] : []),
+    ...(enabled.card2card ? [{ key: 'card2card', label: 'کارت به کارت' }] : []),
+    ...SOON_METHODS.map((m) => ({ ...m, soon: true })),
+  ]
+  /* اگر روش انتخابی بعد از لود تنظیمات غیرفعال بود → اولین روش فعال */
+  useEffect(() => {
+    if (payConfig && !payMethodList.some((m) => m.key === method && !m.soon)) {
+      const first = payMethodList.find((m) => !m.soon)
+      setMethod(first ? first.key : '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payConfig])
 
   const subtotal = cart.reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
   const marketSub = cart.filter((i) => i.kind === 'market').reduce((a, i) => a + (i.price || 0) * (i.qty || 1), 0)
@@ -88,8 +102,12 @@ export default function Checkout() {
       nav('/auth')
       return
     }
-    if (method !== 'زرین‌پال' && finalTotal > 0) {
-      toast('فعلاً فقط درگاه زرین‌پال فعال است', 'error')
+    if (!method) {
+      toast('هیچ روش پرداختی فعال نیست — با پشتیبانی تماس بگیرید', 'error')
+      return
+    }
+    if (method !== 'zarinpal' && method !== 'card2card' && finalTotal > 0) {
+      toast('این روش هنوز فعال نشده است', 'error')
       return
     }
     setPaying(true)
@@ -105,6 +123,12 @@ export default function Checkout() {
         const r = await req('/checkout', { method: 'POST', body })
         clearCart()
         nav('/order-success', { state: { code: r.code, total: 0 } })
+      } else if (method === 'card2card') {
+        /* کارت‌به‌کارت: سفارش pending ثبت می‌شود، کاربر رسید را آپلود می‌کند و
+           مدیر از پنل تأیید می‌کند — صفحهٔ نتیجه کارت و آپلودرس را نشان می‌دهد */
+        const r = await req('/pay/card2card/start', { method: 'POST', body })
+        clearCart()
+        nav(`/order-success?status=c2c&code=${encodeURIComponent(r.code)}&total=${r.total}`)
       } else {
         const r = await req('/pay/zarinpal/start', { method: 'POST', body })
         window.location.assign(r.redirectUrl)
@@ -187,22 +211,46 @@ export default function Checkout() {
 
               <div className="card pad">
                 <h3 className="mb16 row g8" style={{ fontSize: 15 }}><CreditCard size={17} className="text-teal" /> روش پرداخت</h3>
-                <div className="pay-methods">
-                  {PAY_METHODS.map((m) => (
-                    <div
-                      key={m.key}
-                      className={`pay-method ${method === m.key ? 'on' : ''} ${m.soon ? 'soon' : ''}`}
-                      onClick={() => !m.soon && setMethod(m.key)}
-                      style={m.soon ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
-                      aria-pressed={method === m.key}
-                      role="button"
-                    >
-                      <Wallet size={17} /> {m.key}
-                      {m.soon && <span className="muted" style={{ fontSize: 11, marginInlineStart: 'auto' }}>به‌زودی</span>}
+                {payMethodList.length === 0 || (!payMethodList.some((m) => !m.soon) && payConfig) ? (
+                  <p className="muted small">هیچ روش پرداختی فعال نیست — با پشتیبانی تماس بگیرید.</p>
+                ) : (
+                  <div className="pay-methods">
+                    {payMethodList.map((m) => (
+                      <div
+                        key={m.key}
+                        className={`pay-method ${method === m.key ? 'on' : ''} ${m.soon ? 'soon' : ''}`}
+                        onClick={() => !m.soon && setMethod(m.key)}
+                        style={m.soon ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+                        aria-pressed={method === m.key}
+                        role="button"
+                      >
+                        <Wallet size={17} /> {m.label}
+                        {m.soon && <span className="muted" style={{ fontSize: 11, marginInlineStart: 'auto' }}>به‌زودی</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {method === 'card2card' && payConfig?.card && (
+                  <div className="card mt16" style={{ padding: 16, border: '1px dashed var(--line2)' }}>
+                    <b className="small">واریز کارت‌به‌کارت به کارت زیر:</b>
+                    {payConfig.card.number ? (
+                      <div className="row g8 mt8 items-center">
+                        <b style={{ fontSize: 17, letterSpacing: 1 }} dir="ltr">{payConfig.card.number}</b>
+                        <button type="button" className="btn btn-ghost btn-sm"
+                          onClick={() => { navigator.clipboard?.writeText(payConfig.card.number.replace(/-/g, '')); toast('شماره کارت کپی شد') }}>
+                          کپی
+                        </button>
+                      </div>
+                    ) : <p className="muted small mt8">شماره کارت هنوز توسط مدیر تنظیم نشده — با پشتیبانی هماهنگ کنید.</p>}
+                    <div className="muted small mt8" style={{ lineHeight: 2 }}>
+                      {payConfig.card.bank && <>بانک: <b>{payConfig.card.bank}</b> — </>}
+                      {payConfig.card.holder && <>به نام: <b>{payConfig.card.holder}</b> — </>}
+                      بعد از واریز (مثلاً رایگان از طریق اپ بله‌پی)، تصویر رسید را در مرحلهٔ بعد آپلود کنید تا مدیر سفارش را تأیید کند.
                     </div>
-                  ))}
-                </div>
-                {payConfig?.mode === 'mock' && (
+                    {payConfig.card.note && <p className="muted small mt8" style={{ lineHeight: 2 }}>💡 {payConfig.card.note}</p>}
+                  </div>
+                )}
+                {method === 'zarinpal' && payConfig?.mode === 'mock' && (
                   <p className="muted small mt8" style={{ lineHeight: 1.9 }}>
                     درگاه در حالت آزمایشی است (بدون پول واقعی) — برای اتصال به زرین‌پال، مرچنت‌کد را در تنظیمات سرور وارد کنید.
                   </p>

@@ -61,6 +61,13 @@ export default function ASettings() {
  registration_open: r.settings.registration_open !== '',
  zarinpal_merchant: r.settings.zarinpal_merchant || '',
  zarinpal_sandbox: r.settings.zarinpal_sandbox === '1',
+ pay_zarinpal_enabled: r.settings.pay_zarinpal_enabled !== '',
+ pay_card2card_enabled: r.settings.pay_card2card_enabled !== '',
+ c2c_card_number: r.settings.c2c_card_number || '',
+ c2c_card_bank: r.settings.c2c_card_bank || '',
+ c2c_card_holder: r.settings.c2c_card_holder || '',
+ c2c_note: r.settings.c2c_note || '',
+ enamad_html: r.settings.enamad_html || '',
  sms_username: r.settings.sms_username || '',
  sms_password: r.settings.sms_password || '',
  sms_from: r.settings.sms_from || '',
@@ -116,11 +123,15 @@ export default function ASettings() {
  </div>
  <div className="field"><label>آدرس دفتر</label><input className="input" value={s.site_address} onChange={(e) => setS({ ...s, site_address: e.target.value })} /></div>
  <div className="field"><label>ساعات کاری</label><input className="input" value={s.site_working_hours} onChange={(e) => setS({ ...s, site_working_hours: e.target.value })} /></div>
+ <div className="field"><label>کد نماد اعتماد اینماد (HTML رسمی از پنل enamad.ir — در فوتر نمایش داده می‌شود)</label>
+  <textarea className="input" dir="ltr" rows={3} placeholder='<a href="https://trustseal.enamad.ir/?id=…">…</a>'
+   value={s.enamad_html} onChange={(e) => setS({ ...s, enamad_html: e.target.value })} />
+ </div>
  <div className="toggle-row"><div><b>حالت تعمیر و نگهداری</b><p>در صورت فعال‌سازی، پیام تعمیر در Footer و صفحات عمومی دیده می‌شود</p></div>
  <Toggle on={s.maintenance_mode} onChange={(v) => setS({ ...s, maintenance_mode: v })} /></div>
  <div className="toggle-row"><div><b>فعال‌سازی ثبت‌نام دانشجو</b><p>اجازه ساخت حساب جدید توسط کاربران</p></div>
  <Toggle on={s.registration_open} onChange={(v) => setS({ ...s, registration_open: v })} /></div>
- <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['site_name', 'site_tagline', 'site_phone', 'site_email', 'site_address', 'site_working_hours', 'maintenance_mode', 'registration_open'], 'تنظیمات عمومی')}>
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['site_name', 'site_tagline', 'site_phone', 'site_email', 'site_address', 'site_working_hours', 'maintenance_mode', 'registration_open', 'enamad_html'], 'تنظیمات عمومی')}>
  <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیره'}
  </button>
  <p className="muted small mt8">نام/تلفن/ایمیل/آدرس ذخیره‌شده بلافاصله در Footer و صفحه تماس همه کاربران اعمال می‌شود.</p>
@@ -129,25 +140,48 @@ export default function ASettings() {
 
  {sec === 'payment' && (
  <div className="card pad">
- <h3 className="mb16">درگاه پرداخت زرین‌پال</h3>
- <div className="badge b-teal mb16" style={{ maxWidth: 260 }}>
+ <h3 className="mb16">روش‌های پرداخت</h3>
+ <div className="badge b-teal mb16" style={{ maxWidth: 300 }}>
  وضعیت فعلی: {PAY_MODE_LABEL[meta.payMode] || meta.payMode}
  </div>
+
+ <div className="toggle-row"><div><b>درگاه زرین‌پال</b><p>پرداخت آنلاین با درگاه بانکی — مرچنت و حالت سندباکس/واقعی در پایین</p></div>
+ <Toggle on={s.pay_zarinpal_enabled} onChange={(v) => setS({ ...s, pay_zarinpal_enabled: v })} /></div>
+ <div className="toggle-row"><div><b>کارت به کارت</b><p>واریز به کارت سایت (مثلاً رایگان از طریق اپ بله‌پی) + آپلود رسید + تأیید مدیر در پنل مالی</p></div>
+ <Toggle on={s.pay_card2card_enabled} onChange={(v) => setS({ ...s, pay_card2card_enabled: v })} /></div>
+
+ <h3 className="mt24 mb16">درگاه زرین‌پال</h3>
  <div className="field"><label>مرچنت‌کد (Merchant ID) — UUID ۳۶ کاراکتری</label>
  <input className="input" dir="ltr" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
  value={s.zarinpal_merchant} onChange={(e) => setS({ ...s, zarinpal_merchant: e.target.value })} />
  </div>
- <div className="toggle-row"><div><b>حالت Sandbox</b><p>پرداخت واقعی انجام نمی‌شود — با مرچنت آزمایشی زرین‌پال تست کنید</p></div>
+ <div className="toggle-row"><div><b>حالت Sandbox</b><p>پرداخت واقعی انجام نمی‌شود — با مرچنت آزمایشی زرین‌پال تست کنید (sandbox.zarinpal.com)</p></div>
  <Toggle on={s.zarinpal_sandbox} onChange={(v) => setS({ ...s, zarinpal_sandbox: v })} /></div>
  <div className="toggle-row"><div><b>کشف خودکار تراکنش‌های معلق</b><p>سوییپ دوره‌ای پرداخت‌های رهاشده — همیشه فعال است (سرورمحور)</p></div>
  <Toggle on onChange={() => {}} /></div>
- <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['zarinpal_merchant', 'zarinpal_sandbox'], 'تنظیمات درگاه')}>
- <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیره'}
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['pay_zarinpal_enabled', 'pay_card2card_enabled', 'zarinpal_merchant', 'zarinpal_sandbox'], 'تنظیمات درگاه')}>
+ <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیرهٔ روش‌ها و درگاه'}
  </button>
  <p className="muted small mt8">
  مرچنت ذخیره‌شده در دیتابیس fallback env است؛ تا وقتی خالی باشد سرور در حالت mock می‌ماند.
- پس از ذخیره، وضعیت بالا با اولین درخواست بعدی به‌روز می‌شود.
+ روش غیرفعال‌شده بلافاصله از صفحهٔ تسویهٔ کاربران حذف می‌شود.
  </p>
+
+ <h3 className="mt24 mb16">کارت به کارت — اطلاعات کارت سایت</h3>
+ <div className="field-row">
+ <div className="field"><label>شماره کارت</label><input className="input" dir="ltr" placeholder="6037-9976-0000-0000"
+ value={s.c2c_card_number} onChange={(e) => setS({ ...s, c2c_card_number: e.target.value })} /></div>
+ <div className="field"><label>بانک</label><input className="input" placeholder="مثلاً بانک ملی"
+ value={s.c2c_card_bank} onChange={(e) => setS({ ...s, c2c_card_bank: e.target.value })} /></div>
+ </div>
+ <div className="field"><label>به نام (صاحب حساب)</label><input className="input" placeholder="مثلاً مؤسسه آموزشی مدرس‌یار"
+ value={s.c2c_card_holder} onChange={(e) => setS({ ...s, c2c_card_holder: e.target.value })} /></div>
+ <div className="field"><label>راهنمای نمایش به خریدار</label><input className="input" placeholder="مثلاً: واریز از طریق اپ بله‌پی رایگان است — بعد از واریز رسید را آپلود کنید"
+ value={s.c2c_note} onChange={(e) => setS({ ...s, c2c_note: e.target.value })} /></div>
+ <button className="btn btn-primary mt16" disabled={busy} onClick={() => save(['c2c_card_number', 'c2c_card_bank', 'c2c_card_holder', 'c2c_note'], 'اطلاعات کارت‌به‌کارت')}>
+ <Icon name="check" size={16} /> {busy ? 'در حال ذخیره…' : 'ذخیرهٔ اطلاعات کارت'}
+ </button>
+ <p className="muted small mt8">این اطلاعات در صفحهٔ تسویه و صفحهٔ رسید کارت‌به‌کارت به خریدار نشان داده می‌شود. رسیدهای آپلودشده در پنل ← مدیریت مالی ← رسیدهای کارت‌به‌کارت تأیید می‌شوند.</p>
  </div>
  )}
 
