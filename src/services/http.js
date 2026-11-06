@@ -2,13 +2,20 @@
 // کلاینت HTTP بک‌اند واقعی — توکن JWT + تشخیص قطع سرور (fallback به دمو)
 // همه درخواست‌ها same-origin از مسیر /api (در dev پروکسی Vite → :4000)
 // ---------------------------------------------------------------------
-// توکن «به ازای هر تب» ذخیره می‌شود (sessionStorage) تا بتوان در یک مرورگر
-// همزمان با دو حساب (مدرس در یک تب + دانش‌آموز در تب دیگر) تست کرد؛
-// آخرین ورود در localStorage می‌ماند تا تب‌های جدید هم وارد شوند.
+// معماری سشن ماندگار [مهاجرت CRM/B30]:
+//   • توکن دسترسی کوتاه‌مدت (۳۰دقیقه) — «به ازای هر تب» ذخیره می‌شود
+//     (sessionStorage) تا بتوان در یک مرورگر همزمان با دو حساب تست کرد؛
+//     آخرین ورود در localStorage می‌ماند تا تب‌های جدید هم وارد شوند.
+//   • توکن تازه‌سازی یک‌ساله در localStorage — سشن با هر 401 خودکار و
+//     بی‌سروصدا تمدید می‌شود (چرخش سمت سرور)؛ یعنی تا وقتی مرورگر/دستگاه
+//     عوض نشود کاربر هرگز از حساب خارج نمی‌شود.
+//   • اگر چند درخواست همزمان 401 بگیرند فقط «یک» تازه‌سازی انجام می‌شود
+//     (single-flight) و بعدش همه درخواست‌ها دوباره می‌روند.
 // =====================================================================
 
 const TOKEN_KEY = 'modaresyar:token'
 const SESSION_KEY = 'modaresyar:token:tab'
+const REFRESH_KEY = 'modaresyar:refresh'
 
 export const getToken = () => {
   try { return sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(TOKEN_KEY) } catch { return null }
@@ -25,17 +32,62 @@ export const setToken = (t) => {
   } catch { /* ignore */ }
 }
 
+/* توکن تازه‌سازی — مشترک بین تب‌های یک مرورگر؛ سرور مهلت هم‌زمانی تب‌ها را پوشش می‌دهد */
+export const getRefresh = () => {
+  try { return localStorage.getItem(REFRESH_KEY) } catch { return null }
+}
+export const setRefresh = (t) => {
+  try {
+    if (t) localStorage.setItem(REFRESH_KEY, t)
+    else localStorage.removeItem(REFRESH_KEY)
+  } catch { /* ignore */ }
+}
+
 /** وضعیت دسترس‌پذیری سرور — بعد از اولین خطای شبکه false می‌شود */
 let serverUp = null
 export const isServerUp = () => serverUp
 export const markServerUp = (v) => { serverUp = v }
+
+/* ---------- تازه‌سازی بی‌سروصدا با single-flight ---------- */
+let refreshFlight = null
+function doRefresh() {
+  if (refreshFlight) return refreshFlight
+  refreshFlight = (async () => {
+    try {
+      const rt = getRefresh()
+      if (!rt) return null
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: rt }),
+      })
+      if (!res.ok) {
+        setRefresh(null) // سشن واقعاً تمام/ابطال شده — ورود مجدد لازم است
+        setToken(null)
+        return null
+      }
+      const d = await res.json().catch(() => null)
+      if (d?.token) {
+        setToken(d.token)
+        if (d.refreshToken) setRefresh(d.refreshToken)
+        return d
+      }
+      return null
+    } catch { return null } /* قطع شبکه — تلاش مجدد بعدی */
+  })()
+  setTimeout(() => { refreshFlight = null }, 250)
+  return refreshFlight
+}
+
+/* مسیرهایی که خودشان احراز هویت‌اند — برای آن‌ها تازه‌سازی/تلاش مجدد بی‌معناست */
+const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/otp', '/auth/logout']
 
 /**
  * درخواست به API مدرس‌یار
  * @returns {Promise<Object>} پاسخ JSON سرور
  * @throws Error با پرچم serverDown=true اگر سرور در دسترس نباشد (→ حالت دمو)
  */
-export async function req(path, { method = 'GET', body, timeout = 0 } = {}) {
+export async function req(path, { method = 'GET', body, timeout = 0, _retried = false } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   const token = getToken()
@@ -74,11 +126,16 @@ export async function req(path, { method = 'GET', body, timeout = 0 } = {}) {
       e.serverDown = true
       throw e
     }
+    /* [سشن ماندگار] توکن دسترسی منقضی شده → بی‌سروصدا تازه‌سازی + تلاش مجدد (فقط یک‌بار) */
+    if (res.status === 401 && !_retried && !AUTH_PATHS.some((p) => path.startsWith(p)) && getRefresh()) {
+      const r = await doRefresh()
+      if (r?.token) return req(path, { method, body, timeout, _retried: true })
+    }
     const e = new Error(data?.error || `خطای سرور (${res.status})`)
     e.status = res.status
     /* [فیکس F10] پرچم‌های بدنهٔ خطا روی Error کپی می‌شوند — قبلاً دور ریخته می‌شدند و
-       چک‌های `e.expired` / `e.in_progress` / `e.done` در جریان آزمون هرگز true نمی‌شدند:
-       SExamResult برای همیشه «در حال بارگذاری» و autosave حلقهٔ بی‌پایان ۴۰۹ می‌زد */
+        چک‌های `e.expired` / `e.in_progress` / `e.done` در جریان آزمون هرگز true نمی‌شدند:
+        SExamResult برای همیشه «در حال بارگذاری» و autosave حلقهٔ بی‌پایان ۴۰۹ می‌زد */
     if (data && typeof data === 'object') Object.assign(e, data)
     throw e
   }

@@ -131,6 +131,84 @@ try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFA
 /* [فیکس B26-UI] پرچم «اجبار تغییر رمز اولین ورود» برای اکانت‌های دموی با رمز عمومی */
 try { db.exec('ALTER TABLE users ADD COLUMN must_change_pw INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
+/* ---------------- [مهاجرت CRM] ستون‌های تلفن و نام کاربری ----------------
+ * شماره موبایل ستون فقرات CRM مشتریان + ورود با کد پیامکی است؛
+ * username هم برای ورود سریع «نام کاربری + رمز» لازم است. */
+try { db.exec('ALTER TABLE users ADD COLUMN phone TEXT') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE users ADD COLUMN username TEXT') } catch { /* ستون هست */ }
+
+/* [مهاجرت CRM] ایمیل دیگر اجباری نیست — ثبت‌نام رسمی سایت فقط با شماره موبایل است.
+ * SQLite اجازهٔ تغییر NOT NULL با ALTER ندارد → بازسازی یک‌بارهٔ جدول (فقط بار اول).
+ * UNIQUE روی ستون NULL-پذیر چند ردیف NULL را می‌پذیرد (چند ثبت‌نامِ بدون ایمیل) */
+try {
+  const emailCol = db.prepare('PRAGMA table_info(users)').all().find((c) => c.name === 'email')
+  if (emailCol && emailCol.notnull) {
+    console.log('[db] rebuilding users table → email becomes optional…')
+    db.exec('PRAGMA foreign_keys = OFF')
+    db.exec('BEGIN')
+    try {
+      db.exec(`CREATE TABLE users_new (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  email         TEXT UNIQUE,
+  phone         TEXT,
+  username      TEXT,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student','teacher','admin')),
+  color         TEXT DEFAULT 'grad-0',
+  title         TEXT,
+  created_at    INTEGER NOT NULL,
+  must_change_pw INTEGER NOT NULL DEFAULT 0
+)`)
+      db.exec(`INSERT INTO users_new (id, name, email, phone, username, password_hash, role, color, title, created_at, must_change_pw)
+               SELECT id, name, email, phone, username, password_hash, role, color, title, created_at, must_change_pw FROM users`)
+      db.exec('DROP TABLE users')
+      db.exec('ALTER TABLE users_new RENAME TO users')
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      throw e
+    }
+    db.exec('PRAGMA foreign_keys = ON')
+    const broken = db.prepare('PRAGMA foreign_key_check').all()
+    if (broken.length) throw new Error('foreign_key_check failed after users rebuild')
+    console.log('[db] users table rebuilt — email is now optional')
+  }
+} catch (e) { console.error('[db] users rebuild failed:', e.message) }
+
+/* یکتایی تلفن و نام کاربری — فقط برای ردیف‌های واقعاً مقداردار */
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL')
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL')
+
+/* ---------------- جدول کدهای یکبارمصرف پیامکی (OTP) ----------------
+ * هش‌شده ذخیره می‌شود (نه متن خام) + سقف تلاش + انقضای ۲ دقیقه */
+db.exec(`
+CREATE TABLE IF NOT EXISTS otps (
+  phone      TEXT NOT NULL,
+  purpose    TEXT NOT NULL,             -- login | register | reset
+  code_hash  TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (phone, purpose)
+);
+/* ---------------- سشن‌های ماندگار (Refresh Token) ----------------
+ * توکنِ ۳۶۵روزه با هر تازه‌سازی می‌چرخد؛ فقط هشِ SHA-256 در DB ذخیره می‌شود.
+ * revoked=1 یعنی چرخیده/باطل — استفادهٔ دوبارهٔ آن بیرون از مهلت تب‌ها = کشف سرقت */
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash TEXT PRIMARY KEY,
+  family_id  TEXT NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  revoked    INTEGER NOT NULL DEFAULT 0,
+  next_enc   TEXT,                      -- توکن بعدیِ رمزنگاری‌شده (مهلت هم‌زمانی تب‌ها)
+  created_at INTEGER NOT NULL,
+  last_used  INTEGER,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_family ON auth_sessions(family_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user   ON auth_sessions(user_id);
+`)
+
 /* ---------------- تنظیمات سیستم (پنل ادمین — F16) ----------------
    [فیکس F16-d] قبلاً «تنظیمات» پنل ادمین فقط toast جعلی می‌زد؛ حالا key/value
    واقعی در DB ذخیره می‌شود. منبع: env اول، تنظیم DB دوم (تنظیم DB برنده است
@@ -169,6 +247,39 @@ try {
     if (n) console.log(`[db] ${n} demo account(s) flagged for first-login password change`)
   }
 } catch { /* noop */ }
+
+/* ---------------- [مهاجرت CRM] نام‌کاربری و تلفن برای اکانت‌های بدون آن ----------------
+ * اکانت‌های قدیمی (مخصوصاً دمویی‌های @demo.ir) username و phone ندارند؛
+ * از لوکال‌پارت ایمیل نام‌کاربری می‌سازیم و شماره دموی ثابت می‌دهیم تا
+ * ورود با نام‌کاربری و ورود با کد پیامکی برای دمو هم تست‌پذیر باشد */
+try {
+  if (!getSetting('migration_identity_v1')) {
+    const DEMO_PHONES = {
+      'admin@demo.ir': '09120000001', 'sara@demo.ir': '09120000002', 'amir@demo.ir': '09120000003',
+      'yalda@demo.ir': '09120000004', 'reza@demo.ir': '09120000005', 'maryam@demo.ir': '09120000006',
+      'ali@demo.ir': '09120000007', 'hossein@demo.ir': '09120000008', 'negar@demo.ir': '09120000009',
+    }
+    const rows = db.prepare('SELECT id, email, username, phone FROM users').all()
+    const usedU = new Set(rows.map((r) => r.username).filter(Boolean).map((x) => x.toLowerCase()))
+    const upd = db.prepare('UPDATE users SET username = ?, phone = ? WHERE id = ?')
+    let n = 0
+    for (const r of rows) {
+      let un = r.username ? r.username : null
+      if (!un && r.email) {
+        const base = r.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_.]/g, '') || 'user'
+        let cand = base
+        let i = 1
+        while (usedU.has(cand)) cand = base + (++i)
+        un = cand
+        usedU.add(un)
+      }
+      const ph = r.phone || DEMO_PHONES[r.email] || null
+      if ((un && un !== r.username) || (ph && ph !== r.phone)) { upd.run(un, ph, r.id); n++ }
+    }
+    setSetting('migration_identity_v1', '1')
+    if (n) console.log(`[db] ${n} user(s) got username/phone (migration_identity_v1)`)
+  }
+} catch (e) { console.error('[db] identity migration failed:', e.message) }
 
 /* ویرایش متون سایت از پنل مدیریت — «متن اصلی → متن جایگزین» (خالی = حذف متن) */
 db.exec(`
@@ -228,22 +339,22 @@ if (userCount === 0 && (SEED_DISABLED || (IS_PROD && !SEED_ALLOWED_IN_PROD))) {
   /* [فیکس B26-UI] اکانت‌های دمو با رمز عمومی متولد می‌شوند → از همان اول
      پرچم اجبار تغییر رمز اولین ورود دارند (قبلاً رمز عمومی برای همیشه می‌ماند) */
   const insUser = db.prepare(
-    'INSERT INTO users (id, name, email, password_hash, role, color, title, created_at, must_change_pw) VALUES (?,?,?,?,?,?,?,?,1)'
+    'INSERT INTO users (id, name, email, phone, username, password_hash, role, color, title, created_at, must_change_pw) VALUES (?,?,?,?,?,?,?,?,?,?,1)'
   )
 
   const users = [
-    ['u-admin',  'مدیر سامانه',      'admin@demo.ir',  'admin',   'grad-5', 'مدیر پلتفرم مدرس‌یار'],
-    ['u-sara',   'سارا محمدی',       'sara@demo.ir',   'student', 'grad-3', 'دانش‌آموز پایه دوازدهم'],
-    ['u-amir',   'امیرحسین طباطبایی','amir@demo.ir',   'student', 'grad-1', 'دانش‌آموز دوره ری‌اکت'],
-    ['u-yalda',  'یلدا قاسمی',       'yalda@demo.ir',  'student', 'grad-4', 'دانش‌آموز طراحی UI'],
-    ['u-reza',   'رضا کریمی',        'reza@demo.ir',   'teacher', 'grad-0', 'مدرس برنامه‌نویسی و استاد ارشد آکادمی'],
-    ['u-maryam', 'مریم احمدی',       'maryam@demo.ir', 'teacher', 'grad-4', 'مدرس طراحی و تجربه کاربری'],
-    ['u-ali',    'علی نادری',        'ali@demo.ir',    'teacher', 'grad-2', 'مدرس زبان انگلیسی و آیلتس'],
-    ['u-hossein','حسین موسوی',       'hossein@demo.ir','teacher', 'grad-3', 'مدرس ریاضیات و کنکور'],
-    ['u-negar',  'نگار رستمی',       'negar@demo.ir',  'teacher', 'grad-1', 'مدرس بازاریابی دیجیتال'],
+    ['u-admin',  'مدیر سامانه',      'admin@demo.ir',  'admin',   '09120000001', 'admin',   'grad-5', 'مدیر پلتفرم مدرس‌یار'],
+    ['u-sara',   'سارا محمدی',       'sara@demo.ir',   'student', '09120000002', 'sara',    'grad-3', 'دانش‌آموز پایه دوازدهم'],
+    ['u-amir',   'امیرحسین طباطبایی','amir@demo.ir',   'student', '09120000003', 'amir',    'grad-1', 'دانش‌آموز دوره ری‌اکت'],
+    ['u-yalda',  'یلدا قاسمی',       'yalda@demo.ir',  'student', '09120000004', 'yalda',   'grad-4', 'دانش‌آموز طراحی UI'],
+    ['u-reza',   'رضا کریمی',        'reza@demo.ir',   'teacher', '09120000005', 'reza',    'grad-0', 'مدرس برنامه‌نویسی و استاد ارشد آکادمی'],
+    ['u-maryam', 'مریم احمدی',       'maryam@demo.ir', 'teacher', '09120000006', 'maryam',  'grad-4', 'مدرس طراحی و تجربه کاربری'],
+    ['u-ali',    'علی نادری',        'ali@demo.ir',    'teacher', '09120000007', 'ali',     'grad-2', 'مدرس زبان انگلیسی و آیلتس'],
+    ['u-hossein','حسین موسوی',       'hossein@demo.ir','teacher', '09120000008', 'hossein', 'grad-3', 'مدرس ریاضیات و کنکور'],
+    ['u-negar',  'نگار رستمی',       'negar@demo.ir',  'teacher', '09120000009', 'negar',   'grad-1', 'مدرس بازاریابی دیجیتال'],
   ]
-  for (const [id, name, email, role, color, title] of users) {
-    insUser.run(id, name, email, hash, role, color, title, now)
+  for (const [id, name, email, role, phone, username, color, title] of users) {
+    insUser.run(id, name, email, phone, username, hash, role, color, title, now)
   }
 
   // کلاس‌های آنلاین — دقیقاً همان ۱۰ کلاس دموی فرانت (l1..l10)
@@ -285,7 +396,10 @@ if (userCount === 0 && (SEED_DISABLED || (IS_PROD && !SEED_ALLOWED_IN_PROD))) {
 /** برچسب فارسی نقش — در سمت کلاینت هم بعد از رفرش/تب جدید در دسترس باشد (فیکس «پنل undefined») */
 const ROLE_LABELS = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
 export const publicUser = (u) =>
-  u ? { id: u.id, name: u.name, email: u.email, role: u.role, roleLabel: ROLE_LABELS[u.role] || u.title || '', color: u.color, title: u.title,
+  u ? { id: u.id, name: u.name, email: u.email,
+    /* [مهاجرت CRM] شماره موبایل و نام‌کاربری هم بخشی از پروفایل شدند */
+    phone: u.phone || '', username: u.username || '',
+    role: u.role, roleLabel: ROLE_LABELS[u.role] || u.title || '', color: u.color, title: u.title,
     /* [فیکس B26-UI] فرانت با این پرچم مودال اجباری تغییر رمز نشان می‌دهد */
     mustChangePassword: !!Number(u.must_change_pw) } : null
 

@@ -5,7 +5,7 @@ import { FormModal } from '../../components/Modal'
 import { Avatar } from '../../components/ui'
 import { students as fallbackStudents, teachers as fallbackTeachers } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
-import { req } from '../../services/http'
+import { req, getToken } from '../../services/http'
 import { faNum, toman } from '../../utils/format'
 
 const ROLE_BADGE = { student: ['دانش‌آموز', 'b-sky'], teacher: ['مدرس', 'b-violet'], admin: ['مدیر', 'b-red'] }
@@ -48,6 +48,23 @@ export default function AUsers({ kind }) {
   toast('ساخت اکانت واقعی به‌زودی از همین فرم فعال می‌شود — فعلاً ثبت‌نام کاربران از صفحه ثبت‌نام سایت انجام می‌شود', 'info')
  }
 
+ /* [CRM] خروجی CSV مشتریان — فایل UTF-8 با BOM برای اکسل؛ شماره موبایل ستون اصلی */
+ const exportCrm = async (role) => {
+  try {
+   const res = await fetch('/api/admin/users.csv' + (role ? `?role=${role}` : ''), {
+     headers: { Authorization: `Bearer ${getToken()}` },
+   })
+   if (!res.ok) throw new Error()
+   const blob = await res.blob()
+   const a = document.createElement('a')
+   a.href = URL.createObjectURL(blob)
+   a.download = `modaresyar-crm-${role || 'all'}.csv`
+   a.click()
+   URL.revokeObjectURL(a.href)
+   toast('خروجی CRM دانلود شد — شماره موبایل‌ها برای پیام‌کوتاه آماده است')
+  } catch { toast('خروجی CSV ناموفق بود — سرور در دسترس نیست', 'error') }
+ }
+
  if (kind === 'teacher') {
  return (
  <div>
@@ -56,6 +73,7 @@ export default function AUsers({ kind }) {
  <h2 style={{ fontSize: 17 }}>مدیریت مدرسان</h2>
  <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'اکانت‌های واقعی مدرسان سامانه — ارتقا دانش‌آموز به مدرس از پنل دانشجوها'}</span>
  </div>
+ <button className="btn btn-ghost" onClick={() => exportCrm('teacher')}><Icon name="download" size={16} /> خروجی CRM</button>
  <button className="btn btn-primary" onClick={() => setModal('new')}><Icon name="plus" size={16} /> ساخت اکانت مدرس</button>
  </div>
 
@@ -71,14 +89,15 @@ export default function AUsers({ kind }) {
  { key: 'name', label: 'مدرس', render: (r) => (
  <div className="cell-user"><Avatar name={r.name} size={34} color="grad-0" /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }}>{r.title || 'مدرس'}</span></div></div>
  ) },
- { key: 'email', label: 'ایمیل', render: (r) => <span dir="ltr">{r.email}</span> },
+ { key: 'phone', label: 'موبایل', render: (r) => r.phone ? <span dir="ltr" className="cell-strong">{r.phone}</span> : <span className="muted">—</span> },
+ { key: 'email', label: 'ایمیل', render: (r) => <span dir="ltr">{r.email || '—'}</span> },
  { key: 'joined', label: 'عضویت' },
  { key: 'teacherStudents', label: 'دانشجو', render: (r) => faNum(r.teacherStudents || 0) },
  { key: 'courses', label: 'کلاس‌ها', render: (r) => faNum(r.courses || 0) },
  { key: 'spent', label: 'مجموع خرید', render: (r) => toman(r.spent || 0) },
  ]}
  rows={list}
- searchKeys={['name', 'email', 'title']}
+ searchKeys={['name', 'email', 'phone', 'username', 'title']}
  actions={(r) => (
  <>
  <button className="icon-btn" title="تبدیل به دانش‌آموز" onClick={() => changeRole(r, 'student', `${r.name} به دانش‌آموز تغییر نقش یافت`)}><Icon name="user" /></button>
@@ -118,6 +137,7 @@ export default function AUsers({ kind }) {
  <h2 style={{ fontSize: 17 }}>مدیریت دانشجوها</h2>
  <span className="muted small">{offline ? 'سرور در دسترس نیست — داده نمونه' : 'کاربران واقعی ثبت‌نام‌شده — می‌توانید نقششان را به مدرس ارتقا دهید'}</span>
  </div>
+ <button className="btn btn-ghost" onClick={() => exportCrm('student')}><Icon name="download" size={16} /> خروجی CRM</button>
  <button className="btn btn-primary" onClick={() => setModal('new')}><Icon name="plus" size={16} /> افزودن دانشجو</button>
  </div>
 
@@ -134,6 +154,7 @@ export default function AUsers({ kind }) {
  { key: 'name', label: 'دانشجو', render: (r) => (
  <div className="cell-user"><Avatar name={r.name} size={34} color="grad-2" /><div><span className="cell-strong">{r.name}</span><span className="muted small" style={{ display: 'block' }} dir="ltr">{r.email}</span></div></div>
  ) },
+ { key: 'phone', label: 'موبایل', render: (r) => r.phone ? <span dir="ltr" className="cell-strong">{r.phone}</span> : <span className="muted">—</span> },
  { key: 'joined', label: 'عضویت' },
  { key: 'courses', label: 'کلاس‌ها', render: (r) => faNum(r.courses || 0) },
  { key: 'orders', label: 'سفارش‌ها', render: (r) => faNum(r.orders || 0) },
@@ -144,10 +165,10 @@ export default function AUsers({ kind }) {
  } },
  ]}
  rows={list}
- searchKeys={['name', 'email']}
+ searchKeys={['name', 'email', 'phone', 'username']}
  actions={(r) => (
  <>
- <button className="icon-btn" title="ارتقا به مدرس" onClick={() => changeRole(r, 'teacher', `${r.name} مدرس شد — در «مدیریت مدرسان» می‌بینید`)}><Icon name="gradcap" /></button>
+ <button className="icon-btn" title="ارتقا به مدرس" onClick={() => changeRole(r, 'teacher', `${r.name} مدرس شد — در «مدیریت مدرسان» می‌بینید`)}><Icon name="cap" /></button>
  <button className="icon-btn" title="ویرایش" onClick={() => setModal(r)}><Icon name="edit" /></button>
  </>
  )}

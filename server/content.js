@@ -645,15 +645,16 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
  /* کاربران واقعی سیستم — قبلاً پنل «مدیریت کاربران» فقط ردیف‌های موک ثابت نشان می‌داد */
  app.get('/api/admin/users', requireAdminC, (req, res) => {
   const q = String(req.query.q || '').trim()
-  const rows = db.prepare(`SELECT u.id, u.name, u.email, u.role, u.title, u.created_at AS createdAt,
+  /* [مهاجرت CRM] شماره موبایل و نام‌کاربری هم برمی‌گردند + جستجو در تلفن/نام‌کاربری */
+  const rows = db.prepare(`SELECT u.id, u.name, u.email, u.phone, u.username, u.role, u.title, u.created_at AS createdAt,
      (SELECT COUNT(*) FROM enrollments e WHERE e.user_id = u.id) AS enrollCount,
      (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.status != 'refunded') AS ordersCount,
      (SELECT COALESCE(SUM(o.amount), 0) FROM orders o WHERE o.user_id = u.id AND o.status = 'paid') AS spent
-   FROM users u ${q ? "WHERE u.name LIKE ? ESCAPE '\\' OR u.email LIKE ? ESCAPE '\\'" : ''}
+   FROM users u ${q ? "WHERE u.name LIKE ? ESCAPE '\\' OR u.email LIKE ? ESCAPE '\\' OR u.phone LIKE ? ESCAPE '\\' OR u.username LIKE ? ESCAPE '\\'" : ''}
    ORDER BY u.created_at DESC LIMIT 300`)
-   .all(...(q ? [`%${q.replace(/[\\%_]/g, '\\$&')}%`, `%${q.replace(/[\\%_]/g, '\\$&')}%`] : []))
+   .all(...(q ? [`%${q.replace(/[\\%_]/g, '\\$&')}%`, `%${q.replace(/[\\%_]/g, '\\$&')}%`, `%${q.replace(/[\\%_]/g, '\\$&')}%`, `%${q.replace(/[\\%_]/g, '\\$&')}%`] : []))
   res.json({ users: rows.map((r) => ({
-   id: r.id, name: r.name, email: r.email, role: r.role, title: r.title,
+   id: r.id, name: r.name, email: r.email, phone: r.phone || '', username: r.username || '', role: r.role, title: r.title,
    courses: r.role === 'teacher'
     ? db.prepare('SELECT COUNT(*) AS n FROM classes WHERE teacher_id = ?').get(r.id).n
     : r.enrollCount,
@@ -663,6 +664,28 @@ try { db.exec('ALTER TABLE tickets ADD COLUMN category TEXT DEFAULT \'سایر\'
    orders: r.ordersCount, spent: r.spent || 0,
    joined: new Date(r.createdAt).toLocaleDateString('fa-IR'),
   })) })
+ })
+
+ /* [CRM] خروجی CSV مشتریان — شماره موبایل ستون اصلی برای پیام‌کوتاه‌های تبلیغاتی؛
+  * فقط ادمین؛ BOM برای بازشدن درست فارسی در اکسل */
+ app.get('/api/admin/users.csv', requireAdminC, (req, res) => {
+  const role = ['student', 'teacher', 'admin'].includes(req.query.role) ? String(req.query.role) : null
+  const rows = db.prepare(`SELECT u.name, u.phone, u.username, u.email, u.role, u.created_at,
+     (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.status = 'paid') AS orders,
+     (SELECT COALESCE(SUM(o.amount), 0) FROM orders o WHERE o.user_id = u.id AND o.status = 'paid') AS spent
+   FROM users u ${role ? 'WHERE u.role = ?' : ''} ORDER BY u.created_at DESC`).all(...(role ? [role] : []))
+  const ROLE_FA = { student: 'دانش‌آموز', teacher: 'مدرس', admin: 'مدیر' }
+  const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+  const lines = [
+    'name,phone,username,email,role,joined,orders,spent',
+    ...rows.map((r) => [
+      r.name, r.phone || '', r.username || '', r.email || '', ROLE_FA[r.role] || r.role,
+      new Date(r.created_at).toLocaleDateString('fa-IR'), r.orders, r.spent || 0,
+    ].map(esc).join(','))
+  ]
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', 'attachment; filename="modaresyar-crm.csv"')
+  res.send('\ufeff' + lines.join('\r\n'))
  })
 
  /* تغییر نقش کاربر (فقط ادمین؛ ادمین نمی‌تواند نقش خودش را کم کند تا قفل بیرون نشود) */

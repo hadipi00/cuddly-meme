@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { DEMO_USERS } from '../config/site'
-import { req, setToken, getToken } from '../services/http'
+import { req, setToken, getToken, setRefresh, getRefresh } from '../services/http'
 
 // ================= استور مرکزی برنامه (ورود، سبد خرید، علاقه‌مندی، کلاس‌ها و ...) =================
 // ورود/ثبت‌نام به بک‌اند واقعی (JWT) وصل است؛ اگر سرور در دسترس نباشد
@@ -47,7 +47,9 @@ export function AppProvider({ children }) {
      setState((s) => (s.user?.id === r.user.id && s.user?.roleLabel === r.user.roleLabel ? s : { ...s, user: r.user, token: getToken() }))
    }).catch((e) => {
      if (!alive) return
-     if (e.status === 401) { setToken(null); setState((s) => ({ ...s, user: null, token: null })) }
+     /* سشن ماندگار: 401 فقط وقتی «واقعی» است که توکن تازه‌سازی هم پاسخ نداده باشد
+        (http.js اول بی‌سروصدا refresh می‌کند و فقط آن‌وقت خطا می‌رسد) */
+     if (e.status === 401) { setToken(null); setRefresh(null); setState((s) => ({ ...s, user: null, token: null })) }
    })
    return () => { alive = false }
    // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,53 +92,120 @@ export function AppProvider({ children }) {
  ...state,
  toasts,
  toast,
- /** ورود واقعی با بک‌اند (JWT) — اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو با نقش URL.
+ /** ورود واقعی با بک‌اند (JWT) — شناسه: نام‌کاربری، ایمیل یا شماره موبایل.
+  *  اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو با نقش URL.
   *  تلاش دوباره ضد «تله حالت دمو» است: اگر لحظه ورود سرور کوتاه ری‌استارت شده باشد،
   *  ورود واقعی به‌جای سشن ساختگی آفلاین انجام می‌شود و سشن دیگر نمی‌پرد. */
- async login(email, password, fallbackRole = 'student') {
+ async login(id, password, fallbackRole = 'student') {
  let r
  try {
- r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ r = await req('/auth/login', { method: 'POST', body: { id, password } })
  } catch (e) {
  if (!e.serverDown) return { ok: false, error: e.message }
  await new Promise((res) => setTimeout(res, 1500))
  try {
- r = await req('/auth/login', { method: 'POST', body: { email, password } })
+ r = await req('/auth/login', { method: 'POST', body: { id, password } })
  } catch (e2) {
  if (e2.serverDown) return loginDemo(fallbackRole)
  return { ok: false, error: e2.message }
  }
  }
  setToken(r.token)
+ if (r.refreshToken) setRefresh(r.refreshToken) // سشن ماندگار یک‌سالهٔ چرخان
  patch(() => ({ user: r.user, token: r.token }))
  toast(`خوش آمدید، ${r.user.name}!`)
  /* [فیکس B26-UI] پرچم اجبار تغییر رمز برای اکانت‌های دمو به فراخوان برمی‌گردد */
  return { ok: true, role: r.user.role, demo: false, mustChangePassword: !!r.user?.mustChangePassword }
  },
- /** ثبت‌نام واقعی (نقش: دانش‌آموز) — اگر سرور قطع باشد → یک تلاش دوباره → بعد حالت دمو */
- async register(name, email, password) {
+ /* ---------------- [مهاجرت CRM] جریان‌های شماره‌محور: OTP، ثبت‌نام، بازیابی رمز ----------------
+  * همه این متدها خطا را به‌صورت { ok:false, error } برمی‌گردانند تا فرم نمایش دهد؛
+  * فقط قطع سرور استثناست (سرور بدون رابط ثبت‌نام پیامکی معنا ندارد — پیام مناسب می‌دهیم) */
+ /** مرحله ۱ — ارسال کد تأیید به شماره (purpose: login | register | reset)
+  *  در حالت دمو (بدون پنل پیامک) سرور devCode هم می‌دهد تا جریان تست‌پذیر باشد */
+ async requestOtp(phone, purpose) {
+ try {
+ const r = await req('/auth/otp/request', { method: 'POST', body: { phone, purpose } })
+ return { ok: true, devCode: r.devCode || '', sent: !!r.sent, expiresIn: r.expiresIn || 120 }
+ } catch (e) {
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — ورود با کد پیامکی فعلاً ممکن نیست' }
+ return { ok: false, error: e.message, wait: e.wait || 0 }
+ }
+ },
+ /** ورود با کد پیامکی — اگر شماره ثبت‌نام نشده باشد notRegistered=true برمی‌گردد */
+ async verifyOtpLogin(phone, code) {
  let r
  try {
- r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
+ r = await req('/auth/otp/verify', { method: 'POST', body: { phone, code, purpose: 'login' } })
  } catch (e) {
- if (!e.serverDown) return { ok: false, error: e.message }
- await new Promise((res) => setTimeout(res, 1500))
- try {
- r = await req('/auth/register', { method: 'POST', body: { name, email, password } })
- } catch (e2) {
- if (e2.serverDown) return loginDemo('student', name)
- return { ok: false, error: e2.message }
- }
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — بعداً تلاش کنید' }
+ return { ok: false, error: e.message, notRegistered: !!e.notRegistered }
  }
  setToken(r.token)
+ if (r.refreshToken) setRefresh(r.refreshToken)
+ patch(() => ({ user: r.user, token: r.token }))
+ toast(`خوش آمدید، ${r.user.name}!`)
+ return { ok: true, role: r.user.role, mustChangePassword: !!r.user?.mustChangePassword }
+ },
+ /** ثبت‌نام — تأیید کد برای شمارهٔ جدید → regToken (۱۰دقیقه‌ای) برای مرحلهٔ مشخصات */
+ async checkRegisterOtp(phone, code) {
+ try {
+ const r = await req('/auth/otp/verify', { method: 'POST', body: { phone, code, purpose: 'register' } })
+ return { ok: true, regToken: r.regToken }
+ } catch (e) {
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — بعداً تلاش کنید' }
+ return { ok: false, error: e.message, alreadyRegistered: !!e.alreadyRegistered }
+ }
+ },
+ /** ثبت‌نام — مرحلهٔ پایانی: نام، نام‌خانوادگی، نام‌کاربری و رمز (بعد از تأیید شماره)
+  *  مرورگر با فرم واقعی + autocomplete این مرحله، رمز را در مدیریت رمز ذخیره می‌کند */
+ async completeRegister({ regToken, firstName, lastName, username, password }) {
+ let r
+ try {
+ r = await req('/auth/register/complete', { method: 'POST', body: { regToken, firstName, lastName, username, password } })
+ } catch (e) {
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — بعداً تلاش کنید' }
+ return { ok: false, error: e.message }
+ }
+ setToken(r.token)
+ if (r.refreshToken) setRefresh(r.refreshToken)
  patch(() => ({ user: r.user, token: r.token }))
  toast(`حساب شما ساخته شد — خوش آمدید، ${r.user.name}!`)
- return { ok: true, role: r.user.role, demo: false }
+ return { ok: true, role: r.user.role }
+ },
+ /** بازیابی رمز — تأیید کد → resetToken؛ بعد resetPassword رمز جدید می‌گذارد */
+ async verifyResetOtp(phone, code) {
+ try {
+ const r = await req('/auth/otp/verify', { method: 'POST', body: { phone, code, purpose: 'reset' } })
+ return { ok: true, resetToken: r.resetToken }
+ } catch (e) {
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — بعداً تلاش کنید' }
+ return { ok: false, error: e.message, notRegistered: !!e.notRegistered }
+ }
+ },
+ /** بازیابی رمز — مرحلهٔ آخر: رمز جدید + ورود خودکار همین دستگاه */
+ async resetPassword(resetToken, password) {
+ let r
+ try {
+ r = await req('/auth/reset-password', { method: 'POST', body: { resetToken, password } })
+ } catch (e) {
+ if (e.serverDown) return { ok: false, error: 'سرور در دسترس نیست — بعداً تلاش کنید' }
+ return { ok: false, error: e.message }
+ }
+ setToken(r.token)
+ if (r.refreshToken) setRefresh(r.refreshToken)
+ patch(() => ({ user: r.user, token: r.token }))
+ toast('رمز عبور عوض شد — با رمز جدید وارد شدید')
+ return { ok: true, role: r.user.role }
  },
  loginDemo,
  logout() {
+ /* سشن ماندگار: توکن تازه‌سازی همین دستگاه هم روی سرور ابطال می‌شود؛
+    سشن دستگاه‌های دیگر دست‌نخورده می‌ماند */
+ const rt = getRefresh()
  setToken(null)
+ setRefresh(null)
  patch(() => ({ user: null, token: null }))
+ if (rt) req('/auth/logout', { method: 'POST', body: { refreshToken: rt } }).catch(() => {})
  },
  /* [فیکس B26-UI] تغییر رمز (اجباری برای اکانت‌های دمو با پرچم mustChangePassword؛
  داوطلبانه برای بقیه) — توکن تازه + کاربر به‌روزشده از سرور جایگزین می‌شود */
@@ -144,6 +213,7 @@ export function AppProvider({ children }) {
  try {
  const r = await req('/auth/change-password', { method: 'POST', body: { current, next } })
  if (r.token) setToken(r.token)
+ if (r.refreshToken) setRefresh(r.refreshToken) // سشن تازهٔ همین دستگاه؛ بقیهٔ دستگاه‌ها ابطال شدند
  patch(() => ({ user: r.user, token: r.token || getToken() }))
  toast('رمز عبور با موفقیت عوض شد')
  return { ok: true }

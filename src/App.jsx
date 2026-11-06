@@ -221,7 +221,10 @@ export default function App() {
  <Route path="/checkout" element={<Public><Checkout /></Public>} />
  <Route path="/order-success" element={<Public><OrderSuccess /></Public>} />
  <Route path="/contact" element={<Public><Contact /></Public>} />
+ {/* [مهاجرت CRM] مسیرهای مستقیم ثبت‌نام و بازیابی رمز — همان صفحه Auth با مود ابتدایی */}
  <Route path="/auth" element={<Auth />} />
+ <Route path="/register" element={<Auth />} />
+ <Route path="/forgot-password" element={<Auth />} />
 
  {/* پنل دانش‌آموز — محافظت‌شده */}
  <Route path="/panel/student" element={<RouteGuard role="student"><StudentPanel /></RouteGuard>}>

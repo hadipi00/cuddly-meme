@@ -15,6 +15,9 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import { db, JWT_SECRET, publicUser, classRow } from './db.js'
+import { createSession, rotateSession, sessionUser, revokeAllForUser, revokeByRawToken } from './sessions.js'
+import { requestOtp, verifyOtp } from './otp.js'
+import { normalizePhone } from './sms.js'
 import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
@@ -103,10 +106,13 @@ const validStart = (s) => {
   return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null
 }
 
-/* ---------------- هلپرهای احراز هویت ---------------- */
-/* [فیکس B12] توکن ۱۰ ساله → ۷ روز؛ سشن با هر /auth/me تمدید می‌شود (اسلایدینگ).
-   کاربر فعال هرگز به دیوار انقضا نمی‌خورد ولی توکنِ مسروقه حداکثر ۷ روز اعتبار دارد */
-const TOKEN_TTL = '7d'
+/* ---------------- هلپرهای احراز هویت ----------------
+ * [فیکس B12 → B30] معماری دومرحله‌ای سشن:
+ *   • توکن دسترسی (Access JWT) کوتاه‌مدت — ۳۰ دقیقه؛ با هر /auth/me تمدید اسلایدی می‌شود
+ *   • توکن تازه‌سازی (Refresh) یک‌ساله با چرخش در server/sessions.js — تا وقتی
+ *     دستگاه/مرورگر عوض نشود سشن هرگز نمی‌پرد؛ با چرخش + کشف سرقت امنیت حفظ می‌شود
+ *   • مسیرهای ناهماهنگ (دانلود با token در query) فقط همین توکن کوتاه‌مدت را می‌پذیرند */
+const TOKEN_TTL = '30m'
 const signToken = (u) => jwt.sign({ uid: u.id, role: u.role }, JWT_SECRET, { expiresIn: TOKEN_TTL })
 
 function authUser(req) {
@@ -134,40 +140,169 @@ const requireRole = (...roles) => (req, res, next) => {
 }
 
 /* ---------------- احراز هویت ---------------- */
-app.post('/api/auth/register', rateLimit(5, 60_000), (req, res) => {
-  const { name, email, password } = req.body || {}
-  if (!name || !String(name).trim()) return res.status(400).json({ error: 'نام را وارد کنید' })
-  if (String(name).trim().length > 60) return res.status(400).json({ error: 'نام خیلی بلند است' })
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'ایمیل معتبر نیست' })
-  if (!password || String(password).length < 6) return res.status(400).json({ error: 'رمز عبور باید حداقل ۶ کاراکتر باشد' })
-  if (String(password).length > 100) return res.status(400).json({ error: 'رمز عبور خیلی بلند است' })
 
-  const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(String(email).toLowerCase())
-  if (exists) return res.status(409).json({ error: 'با این ایمیل قبلاً حساب ساخته شده — وارد شوید' })
+/* [ضد بروت‌فورس] گیت تلاش‌های ناموفق برای هر شناسهٔ مشخص (نام‌کاربری/تلفن/ایمیل)
+ * — مستقل از محدودیت IP؛ هشت خطا در ۱۵ دقیقه = قفل موقت همان شناسه */
+const idFails = new Map() // id → [timestamps]
+const FAIL_WINDOW = 15 * 60_000
+const failGate = (id) => {
+  const t = now()
+  const arr = (idFails.get(id) || []).filter((x) => t - x < FAIL_WINDOW)
+  idFails.set(id, arr)
+  if (idFails.size > 3000) for (const [k, v] of idFails) if (!v.length || t - v[v.length - 1] > FAIL_WINDOW) idFails.delete(k)
+  return arr.length >= 8
+}
+const noteFail = (id) => { const arr = idFails.get(id) || []; arr.push(now()); idFails.set(id, arr) }
+const clearFails = (id) => idFails.delete(id)
+
+/* [مهاجرت CRM] ورود با نام‌کاربری، ایمیل یا شماره موبایل + رمز —
+ * قبلاً فقط ایمیل پذیرفته می‌شد و ثبت‌نام‌های پیامکی اصلاً وجود نداشتند */
+app.post('/api/auth/login', rateLimit(30, 60_000), (req, res) => {
+  const raw = String(req.body?.id ?? req.body?.email ?? '').toLowerCase().trim()
+  const password = String(req.body?.password || '')
+  if (!raw || !password) return res.status(400).json({ error: 'نام کاربری و رمز عبور الزامی است' })
+  if (failGate(raw)) return res.status(429).json({ error: 'تلاش‌های ناموفق زیاد بود — ۱۵ دقیقه بعد تلاش کنید' })
+
+  let u = null
+  const ph = normalizePhone(raw)
+  if (ph) u = db.prepare('SELECT * FROM users WHERE phone = ?').get(ph)
+  else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) u = db.prepare('SELECT * FROM users WHERE email = ?').get(raw)
+  else u = db.prepare('SELECT * FROM users WHERE username = ?').get(raw)
+
+  if (!u || !bcrypt.compareSync(password, u.password_hash)) {
+    noteFail(raw)
+    return res.status(401).json({ error: 'نام کاربری یا رمز عبور اشتباه است' })
+  }
+  clearFails(raw)
+  res.json({ ok: true, token: signToken(u), refreshToken: createSession(u.id), user: publicUser(u) })
+})
+
+/* ---------------- ورود با کد پیامکی (OTP) — سه هدف: ورود/ثبت‌نام/بازیابی رمز ---------------- */
+app.post('/api/auth/otp/request', rateLimit(15, 60_000), async (req, res) => {
+  try {
+    const r = await requestOtp(req.body?.phone, String(req.body?.purpose || 'login'))
+    if (!r.ok) return res.status(r.wait ? 429 : 400).json({ error: r.error, wait: r.wait })
+    /* در حالت دمو (بدون پنل پیامک) devCode برمی‌گردد تا جریان کامل تست‌پذیر باشد */
+    res.json(r)
+  } catch (e) {
+    console.error('[otp] request failed:', e?.stack || e?.message)
+    res.status(500).json({ error: 'خطای سرور در ارسال کد — دوباره تلاش کنید' })
+  }
+})
+
+app.post('/api/auth/otp/verify', rateLimit(30, 60_000), (req, res) => {
+  const { phone, code } = req.body || {}
+  const purpose = String(req.body?.purpose || 'login')
+  const v = verifyOtp(phone, purpose, code)
+  if (!v.ok) return res.status(400).json({ error: v.error, left: v.left })
+
+  if (purpose === 'login') {
+    const u = db.prepare('SELECT * FROM users WHERE phone = ?').get(v.phone)
+    if (!u) return res.status(404).json({ error: 'این شماره ثبت‌نام نشده — ابتدا حساب بسازید', notRegistered: true })
+    return res.json({ ok: true, token: signToken(u), refreshToken: createSession(u.id), user: publicUser(u) })
+  }
+
+  if (purpose === 'register') {
+    const ex = db.prepare('SELECT id FROM users WHERE phone = ?').get(v.phone)
+    if (ex) return res.status(409).json({ error: 'این شماره قبلاً ثبت شده — از «ورود با کد پیامکی» استفاده کنید', alreadyRegistered: true })
+    /* توکن مجوز ثبت‌نام — فقط ۱۰ دقیقه و فقط برای همین هدف */
+    const regToken = jwt.sign({ phone: v.phone, scope: 'register' }, JWT_SECRET, { expiresIn: '10m' })
+    return res.json({ ok: true, regToken })
+  }
+
+  /* purpose === 'reset' — بازیابی رمز */
+  const u = db.prepare('SELECT * FROM users WHERE phone = ?').get(v.phone)
+  if (!u) return res.status(404).json({ error: 'کاربری با این شماره پیدا نشد', notRegistered: true })
+  const resetToken = jwt.sign({ uid: u.id, scope: 'reset' }, JWT_SECRET, { expiresIn: '10m' })
+  res.json({ ok: true, resetToken })
+})
+
+/* ثبت‌نام — مرحلهٔ پایانی: مشخصات پروفایل بعد از تأیید شماره با کد پیامکی.
+ * [امنیت] regToken فقط ۱۰ دقیقه اعتبار دارد و بدون آن ساخت حساب ممکن نیست
+ * یعنی هیچ‌کس بدون کنترل مالکیت شماره نمی‌تواند حساب بسازد */
+app.post('/api/auth/register/complete', rateLimit(10, 60_000), (req, res) => {
+  let payload
+  try { payload = jwt.verify(String(req.body?.regToken || ''), JWT_SECRET) } catch {
+    return res.status(400).json({ error: 'کد تأیید منقضی شده — از اول ثبت‌نام کنید' })
+  }
+  if (payload.scope !== 'register' || !payload.phone) return res.status(400).json({ error: 'توکن ثبت‌نام نامعتبر است' })
+
+  const firstName = String(req.body?.firstName || '').trim()
+  const lastName = String(req.body?.lastName || '').trim()
+  const username = String(req.body?.username || '').toLowerCase().trim()
+  const password = String(req.body?.password || '')
+  if (!firstName || !lastName) return res.status(400).json({ error: 'نام و نام خانوادگی الزامی است' })
+  if (firstName.length > 40 || lastName.length > 40) return res.status(400).json({ error: 'نام خیلی بلند است' })
+  if (!/^[a-z0-9_.]{3,30}$/.test(username)) return res.status(400).json({ error: 'نام کاربری فقط حروف انگلیسی، عدد، نقطه و زیرخط — بین ۳ تا ۳۰ کاراکتر' })
+  if (!password || password.length < 6) return res.status(400).json({ error: 'رمز عبور باید حداقل ۶ کاراکتر باشد' })
+  if (password.length > 100) return res.status(400).json({ error: 'رمز عبور خیلی بلند است' })
+
+  if (db.prepare('SELECT id FROM users WHERE phone = ?').get(payload.phone)) {
+    return res.status(409).json({ error: 'با این شماره قبلاً حساب ساخته شده — وارد شوید' })
+  }
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
+    return res.status(409).json({ error: 'این نام کاربری قبلاً گرفته شده — یکی دیگر انتخاب کنید' })
+  }
 
   const id = 'u-' + randomId()
   const colors = ['grad-0', 'grad-1', 'grad-2', 'grad-3', 'grad-4', 'grad-5']
-  db.prepare('INSERT INTO users (id, name, email, password_hash, role, color, title, created_at) VALUES (?,?,?,?,?,?,?,?)')
-    /* [فیکس B18] bcrypt cost از ۸ به ۱۰ — استاندارد OWASP؛ سخت‌افزار امروزی cost ۸ را سریع هش می‌کند */
-    .run(id, String(name).trim(), String(email).toLowerCase(), bcrypt.hashSync(String(password), 10),
-      'student', colors[Math.floor(Math.random() * colors.length)], 'دانش‌آموز', now())
-
-  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id)
-  res.json({ token: signToken(u), user: publicUser(u) })
-})
-
-app.post('/api/auth/login', rateLimit(10, 60_000), (req, res) => {
-  const { email, password } = req.body || {}
-  if (!email || !password) return res.status(400).json({ error: 'ایمیل و رمز عبور الزامی است' })
-  const u = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email).toLowerCase().trim())
-  if (!u || !bcrypt.compareSync(String(password), u.password_hash)) {
-    return res.status(401).json({ error: 'ایمیل یا رمز عبور اشتباه است' })
+  try {
+    db.prepare('INSERT INTO users (id, name, email, phone, username, password_hash, role, color, title, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(id, `${firstName} ${lastName}`, null, payload.phone, username,
+        /* [فیکس B18] bcrypt cost ۱۰ — استاندارد OWASP */
+        bcrypt.hashSync(password, 10), 'student', colors[Math.floor(Math.random() * colors.length)], 'دانش‌آموز', now())
+  } catch (e) {
+    /* رقابت هم‌زمانی: شماره یا نام‌کاربری بین چک و درج گرفته شده */
+    if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'این شماره یا نام کاربری قبلاً ثبت شده است' })
+    throw e
   }
-  res.json({ token: signToken(u), user: publicUser(u) })
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id)
+  res.json({ ok: true, token: signToken(u), refreshToken: createSession(u.id), user: publicUser(u) })
 })
 
-/* تمدید اسلایدی سشن: هر بار هویت چک می‌شود، یک توکن تازه هم برمی‌گردد تا
-   کاربر فعال هرگز به دیوار انقضا نخورد (سشن واقعاً برای همیشه می‌ماند) */
+/* تازه‌سازی سشن — توکن دسترسیِ ۳۰دقیقه‌ای با توکنِ یک‌سالهٔ چرخان تمدید می‌شود.
+ * [امنیت] چرخش + مهلت هم‌زمانی تب‌ها + کشف استفادهٔ مجدد — جزئیات در sessions.js */
+app.post('/api/auth/refresh', rateLimit(60, 60_000), (req, res) => {
+  const rt = String(req.body?.refreshToken || '')
+  if (!rt) return res.status(400).json({ error: 'توکن تازه‌سازی ارسال نشده' })
+  const r = rotateSession(rt)
+  if (!r) return res.status(401).json({ error: 'سشن منقضی شده — دوباره وارد شوید' })
+  if (r.familyRevoked) {
+    return res.status(401).json({ error: 'سشن به‌دلیل استفادهٔ مشکوک باطل شد — دوباره وارد شوید', revoked: true })
+  }
+  const u = sessionUser(r.token)
+  if (!u) return res.status(401).json({ error: 'سشن منقضی شده — دوباره وارد شوید' })
+  res.json({ ok: true, token: signToken(u), refreshToken: r.token, user: publicUser(u) })
+})
+
+/* بازیابی رمز فراموش‌شده — بعد از تأیید شماره با کد پیامکی (resetToken ۱۰دقیقه‌ای).
+ * [امنیت] بعد از تغییر رمز، همهٔ سشن‌های دستگاه‌های دیگر ابطال می‌شوند */
+app.post('/api/auth/reset-password', rateLimit(10, 60_000), (req, res) => {
+  let payload
+  try { payload = jwt.verify(String(req.body?.resetToken || ''), JWT_SECRET) } catch {
+    return res.status(400).json({ error: 'کد تأیید منقضی شده — دوباره تلاش کنید' })
+  }
+  if (payload.scope !== 'reset' || !payload.uid) return res.status(400).json({ error: 'توکن بازیابی نامعتبر است' })
+  const password = String(req.body?.password || '')
+  if (password.length < 6) return res.status(400).json({ error: 'رمز عبور باید حداقل ۶ کاراکتر باشد' })
+  if (password.length > 100) return res.status(400).json({ error: 'رمز عبور خیلی بلند است' })
+  if (password === '12345678') return res.status(400).json({ error: 'این رمز عمومی دمو است — رمز دیگری انتخاب کنید' })
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid)
+  if (!u) return res.status(404).json({ error: 'کاربر پیدا نشد' })
+  db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 0 WHERE id = ?').run(bcrypt.hashSync(password, 10), u.id)
+  revokeAllForUser(u.id)
+  const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(u.id)
+  res.json({ ok: true, token: signToken(fresh), refreshToken: createSession(u.id), user: publicUser(fresh) })
+})
+
+/* خروج — ابطال خانوادهٔ سشن همین دستگاه (سشن دستگاه‌های دیگر دست‌نخورده می‌ماند) */
+app.post('/api/auth/logout', (req, res) => {
+  const rt = String(req.body?.refreshToken || '')
+  if (rt) revokeByRawToken(rt)
+  res.json({ ok: true })
+})
+
+/* تمدید اسلایدی توکن دسترسی: هر بار هویت چک می‌شود، توکنِ تازه هم برمی‌گردد */
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: publicUser(req.user), token: signToken(req.user) }))
 
 /* [فیکس B26-UI] تغییر رمز اجباری اولین ورود اکانت‌های دمو —
@@ -188,8 +323,10 @@ app.post('/api/auth/change-password', requireAuth, (req, res) => {
   if (next === '12345678') return res.status(400).json({ error: 'این رمز عمومی دمو است — رمز دیگری انتخاب کنید' })
   db.prepare('UPDATE users SET password_hash = ?, must_change_pw = 0 WHERE id = ?')
     .run(bcrypt.hashSync(next, 10), req.user.id)
+  /* [امنیت] تغییر رمز = خروج همهٔ دستگاه‌های دیگر؛ سشن این دستگاه تازه صادر می‌شود */
+  revokeAllForUser(req.user.id)
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
-  res.json({ ok: true, token: signToken(u), user: publicUser(u) })
+  res.json({ ok: true, token: signToken(u), refreshToken: createSession(u.id), user: publicUser(u) })
 })
 
 /* ---------------- کلاس‌های آنلاین ---------------- */
