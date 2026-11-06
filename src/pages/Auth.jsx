@@ -46,8 +46,19 @@ export default function Auth() {
  const nav = useNavigate()
  const loc = useLocation()
 
- /* کاربرِ واردشده دیگر نباید به صفحه ورود برسد — هدایت به پنل خودش */
- useEffect(() => { if (user) nav(`/panel/${user.role}`, { replace: true }) }, [user])
+ /* کاربرِ واردشده دیگر نباید به صفحه ورود برسد — هدایت به پنل خودش
+  * [فیکس «برگشت به داشبورد هنگام refresh کلاس زنده»] وقتی کاربرِ لاگین صفحهٔ محافظت‌شده‌ای
+  * (مثل اتاق کلاس زنده) را refresh می‌کند، RouteGuard در لحظهٔ بوت (قبل از اعتبارسنجی
+  * توکن) او را موقتاً به /auth می‌فرستد و state.from مسیر اصلی را نگه می‌دارد؛
+  * قبلاً اینجا from نادیده گرفته می‌شد و کاربر به‌جای اتاق کلاس، داشبورد باز می‌شد */
+ useEffect(() => {
+   if (!user) return
+   const from = loc.state?.from
+   const target = (from && from.startsWith('/panel/') && (from.startsWith(`/panel/${user.role}`) || user.role === 'admin'))
+     ? from
+     : `/panel/${user.role}`
+   nav(target, { replace: true })
+ }, [user])
 
  const initMode = ['register', 'forgot'].includes(params.get('mode')) ? params.get('mode')
    /* مسیرهای مستقیم /register و /forgot-password هم همین صفحه را باز می‌کنند */

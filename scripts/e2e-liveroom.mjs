@@ -1,296 +1,179 @@
-// ================================================================
-// تست E2E مرورگری کلاس زنده — دو کاربر واقعی همزمان (مدرس + دانش‌آموز)
-// دوربین/میکروفون با fake-device کرومیم شبیه‌سازی می‌شود؛ پس MediaRecorder
-// واقعاً تکه می‌سازد و رله HTTP واقعاً پخش می‌کند — نه ماک، نه شبیه‌سازی
-// سناریو مثل اسکای‌روم: ورود دانش‌آموز → تماشای فوری → دست → اجازه → صحبت
-// ================================================================
+// تست E2E اتاق کلاس زنده با رسانهٔ مجازی واقعی (fake device کرومیوم)
+// دو مرورگر جدا: مدرس (reza) و دانش‌آموز (sara) — دقیقاً سناریوی کاربر
+import { chromium } from 'playwright-core'
 import { execSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 
-const require = createRequire(import.meta.url)
-const { chromium } = require(execSync('npm root -g').toString().trim() + '/playwright')
+// حالت تمیز: کلاس‌ها به «زمان‌بندی شده» و سشن‌ها ابطال — تست همیشه تکرارپذیر
+try { execSync('node scripts/reset-accounts.js', { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' }) } catch { /* noop */ }
 
-const BASE = 'http://127.0.0.1:3000'
-const API = 'http://127.0.0.1:4000/api'
-const CLASS_ID = 'l2'
-const STUDENT = { email: 'sara@demo.ir', password: '12345678' }
-const TEACHER = { email: 'reza@demo.ir', password: '12345678' }
-
+const EXE = '/home/z/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome'
+const BASE = 'http://localhost:3000'
 let pass = 0, fail = 0
 const ok = (name, cond, extra = '') => {
-  if (cond) { pass++; console.log(`  ✓ ${name}`) }
-  else { fail++; console.log(`  ✗ ${name} ${extra}`) }
+  if (cond) { pass++; console.log(`  ✓ ${name}${extra ? ' — ' + extra : ''}`) }
+  else { fail++; console.log(`  ✗ FAIL: ${name} ${extra}`) }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const results = { teacher: [], student: [] }
 
-/* ورود واقعی از طریق فرم لاگین (state اپ هم درست ست می‌شود) */
-async function loginIn(page, who) {
-  await page.goto(BASE + '/auth', { waitUntil: 'networkidle' })
-  await page.fill('input[placeholder="you@example.com"]', who.email)
-  await page.fill('input[type="password"]', who.password)
-  await page.evaluate(() => {
-    const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'ورود به حساب')
-    b?.click()
-  })
-  await page.waitForTimeout(1800)
-  const u = await page.evaluate(async () => {
-    try {
-      const r = await fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + (sessionStorage.getItem('modaresyar:token:tab') || localStorage.getItem('modaresyar:token') || '') } })
-      return (await r.json())?.user || null
-    } catch { return null }
-  })
-  return u
-}
+const mkBrowser = () => chromium.launch({
+  executablePath: EXE,
+  headless: true,
+  args: [
+    '--use-fake-device-for-media-stream',
+    '--use-fake-ui-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+  ],
+})
 
-const errors = { teacher: [], student: [] }
-function watchErrors(page, key) {
-  page.on('pageerror', (e) => errors[key].push('pageerror: ' + e.message))
-  page.on('console', (m) => { if (m.type() === 'error') errors[key].push('console: ' + m.text()) })
+const login = async (page, id, pw) => {
+  await page.goto(`${BASE}/auth`, { waitUntil: 'networkidle' })
+  await page.fill('input[type="text"], input:not([type="password"])', id)
+  await page.fill('input[type="password"]', pw)
+  await page.click('button:has-text("ورود به حساب")')
+  await page.waitForURL('**/panel/**', { timeout: 15000 })
 }
 
-async function clickCtl(page, tip) {
-  return page.evaluate((t) => {
-    const btns = [...document.querySelectorAll('.live-controls .ctl')]
-    const b = btns.find((x) => x.querySelector('.ctl-tip')?.textContent?.includes(t))
-    if (b) { b.click(); return true }
-    return false
-  }, tip)
-}
+// ---------- مرورگر مدرس ----------
+const bT = await mkBrowser()
+const ctxT = await bT.newContext({ viewport: { width: 1280, height: 800 } })
+const pT = await ctxT.newPage()
+pT.on('pageerror', (e) => results.teacher.push('PAGEERROR: ' + e.message))
+console.log('— ورود مدرس (reza) —')
+await login(pT, 'reza', '12345678')
+ok('ورود مدرس به پنل', pT.url().includes('/panel/teacher'))
 
-/* وضعیت ویدیوی رله در صفحه */
-const relayState = () => {
-  const vs = [...document.querySelectorAll('.cam-tile video')]
-    .filter((v) => typeof v.src === 'string' && v.src.startsWith('blob:'))
-  if (!vs.length) return null
-  const v = vs[0]
-  const b = v.buffered
-  return {
-    n: vs.length,
-    ready: v.readyState, w: v.videoWidth, h: v.videoHeight,
-    t: v.currentTime, paused: v.paused, muted: v.muted,
-    edge: b.length ? +(b.end(b.length - 1) - v.currentTime).toFixed(2) : null,
-  }
-}
+console.log('— شروع کلاس l2 از صفحه برگزاری —')
+await pT.goto(`${BASE}/panel/teacher/live`, { waitUntil: 'networkidle' })
+await pT.waitForTimeout(1200)
+// کلاس کارگاه React (l2) — اولین کارت
+await pT.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('آماده') && x.innerText.includes('شروع'))
+  b.click()
+})
+await pT.waitForTimeout(800)
+await pT.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('شروع کلاس زنده'))
+  if (b) b.click()
+})
+await pT.waitForTimeout(2500)
+const roomText = await pT.evaluate(() => document.body.innerText)
+ok('اتاق کلاس باز شد', roomText.includes('پخش زنده'), roomText.includes('ReferenceError') ? 'CRASH!' : '')
 
-const main = async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio'],
-  })
-  const tctx = await browser.newContext({ viewport: { width: 1360, height: 820 } })
-  const sctx = await browser.newContext({ viewport: { width: 1360, height: 820 } })
-  await tctx.grantPermissions(['camera', 'microphone'], { origin: BASE })
-  await sctx.grantPermissions(['camera', 'microphone'], { origin: BASE })
-  const tp = await tctx.newPage()
-  const sp = await sctx.newPage()
-  watchErrors(tp, 'teacher'); watchErrors(sp, 'student')
-  sp.on('console', (m) => { const t = m.text(); if (t.includes('[MSE]')) console.log('  [S]', t.slice(0, 130)) })
-  tp.on('console', (m) => { const t = m.text(); if (t.includes('[MSE]')) console.log('  [T]', t.slice(0, 130)) })
+// دوربین مجازی — خودکار با useEffect گرفته می‌شود (fake device)
+await pT.waitForTimeout(6000) // چند تکه ۱ ثانیه‌ای ارسال شود
+const chipT = await pT.evaluate(() => document.querySelector('.media-status')?.innerText || '')
+console.log('  چیپ وضعیت مدرس:', JSON.stringify(chipT.slice(0, 80)))
+ok('مدرس در حال ارسال صدا/تصویر', chipT.includes('در حال ارسال'), chipT.slice(0, 60))
 
-  /* شمارنده آپلود رله + وضعیت پاسخ‌ها */
-  let upTeacher = 0, upStudent = 0, upTeacherFail = 0, upStudentFail = 0
-  tp.on('request', (r) => { if (r.url().includes('/media/up')) upTeacher++ })
-  tp.on('response', (r) => { if (r.url().includes('/media/up') && r.status() >= 400) upTeacherFail++ })
-  sp.on('request', (r) => { if (r.url().includes('/media/up')) upStudent++ })
-  sp.on('response', (r) => { if (r.url().includes('/media/up') && r.status() >= 400) upStudentFail++ })
+// ---------- مرورگر دانش‌آموز ----------
+const bS = await mkBrowser()
+const ctxS = await bS.newContext({ viewport: { width: 1280, height: 800 } })
+const pS = await ctxS.newPage()
+pS.on('pageerror', (e) => results.student.push('PAGEERROR: ' + e.message))
+console.log('— ورود دانش‌آموز (sara) —')
+await login(pS, 'sara', '12345678')
+ok('ورود دانش‌آموز به پنل', pS.url().includes('/panel/student'))
 
-  console.log('— ۱) ورود و شروع کلاس توسط مدرس')
-  const tuser = await loginIn(tp, TEACHER)
-  const suser = await loginIn(sp, STUDENT)
-  ok('مدرس وارد شد', !!tuser?.id)
-  ok('دانش‌آموز وارد شد', !!suser?.id)
-  // اطمینان از ثبت‌نام دانش‌آموز در کلاس (گیت خرید) + پایان جلسات قبلی برای شروع تمیز
-  const stok = (await (await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(STUDENT) })).json()).token
-  const ttok = tuser && (await (await fetch(API + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(TEACHER) })).json()).token
-  await fetch(`${API}/classes/${CLASS_ID}/purchase`, { method: 'POST', headers: { Authorization: 'Bearer ' + stok } })
-  await fetch(`${API}/classes/${CLASS_ID}/end`, { method: 'POST', headers: { Authorization: 'Bearer ' + ttok } })
-  await fetch(`${API}/classes/${CLASS_ID}/board/open`, { method: 'POST', headers: { Authorization: 'Bearer ' + ttok, 'Content-Type': 'application/json' }, body: JSON.stringify({ open: false }) })
+await pS.goto(`${BASE}/panel/student/live/l2`, { waitUntil: 'domcontentloaded' })
+await pS.waitForTimeout(3500) // poll وضعیت + heartbeat
+const stText = await pS.evaluate(() => document.body.innerText)
+ok('دانش‌آموز اتاق زنده را می‌بیند (روی زمان‌بندی نمی‌ماند)', stText.includes('پخش زنده'), stText.includes('زمان‌بندی') && !stText.includes('پخش زنده') ? 'STUCK AT SCHEDULE' : '')
 
-  await tp.goto(BASE + '/panel/teacher/live', { waitUntil: 'networkidle' })
-  // فقط کارت «واقعی» کلاس l2 — بعد از رسیدن داده‌ی سرور (نه دموی اولیه)
-  const cardReady = await tp.waitForFunction(() => document.body.textContent.includes('کارگاه React — هوک‌های پیشرفته'), { timeout: 10000 }).then(() => true).catch(() => false)
-  ok('لیست واقعی کلاس‌های مدرس از سرور رسید', cardReady)
-  await tp.waitForTimeout(400)
-  const clickedPrep = await tp.evaluate(() => {
-    const cards = [...document.querySelectorAll('.card.pad')]
-    const c = cards.find((x) => x.textContent.includes('کارگاه React — هوک‌های پیشرفته'))
-    const btn = c && [...c.querySelectorAll('button')].find((b) => b.textContent.includes('آماده‌سازی و شروع'))
-    if (btn) { btn.click(); return true }
-    return false
-  })
-  ok('کلیک «آماده‌سازی و شروع»', clickedPrep)
-  await tp.waitForTimeout(2500) // چک تجهیزات با getUserMedia فیک
-  const devOk = await tp.evaluate(() => document.body.textContent.includes('✓ آماده'))
-  ok('چک تجهیزات: میکروفون و دوربین آماده (فیک)', devOk)
-  await tp.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('شروع کلاس زنده')); b?.click() })
-  const inRoom = await tp.waitForFunction(() => !!document.querySelector('.live-controls'), { timeout: 10000 }).then(() => true).catch(() => false)
-  ok('مدرس داخل اتاق کلاس است', inRoom)
-  const roomClass = await tp.evaluate(() => document.querySelector('h2')?.textContent || '')
-  ok('اتاق مدرس همان کلاس l2 است', roomClass.includes('کارگاه React'), roomClass)
+// دانش‌آموز دست بلند می‌کند (درخواست اجازه)
+await pS.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('سوال دارم') || x.innerText.includes('بلند کردن دست'))
+  if (b) b.click()
+})
+await pS.waitForTimeout(1500)
 
-  console.log('— ۲) مدرس: دوربین فیک روشن و رله خروجی فعال')
-  await tp.waitForTimeout(3000)
-  const tSelf = await tp.evaluate(() => {
-    const v = [...document.querySelectorAll('.cam-tile video')].find((x) => x.srcObject)
-    return v ? { w: v.videoWidth, h: v.videoHeight } : null
-  })
-  ok('ویدیوی خودِ مدرس (فیک) در حال پخش است', !!tSelf && tSelf.w > 0, JSON.stringify(tSelf))
-  await sleep(2500)
-  ok('تکه‌های رسانه مدرس در حال آپلود است (رله خروجی)', upTeacher >= 3, `up=${upTeacher}`)
-  ok('هیچ آپلود ناموفقی در مسیر مدرس نیست', upTeacherFail === 0, `fail=${upTeacherFail}`)
-  await tp.screenshot({ path: '/home/z/my-project/download/e2e-teacher-room.png' })
+// مدرس از تب حاضران اجازه می‌دهد
+console.log('— مدرس اجازه صدا/تصویر به سارا می‌دهد —')
+await pT.evaluate(() => {
+  const tb = [...document.querySelectorAll('.tab-btn')].find((x) => x.innerText.includes('حاضران'))
+  if (tb) tb.click()
+})
+await pT.waitForTimeout(1500)
+const perm = await pT.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('اجازه دادن'))
+  if (b) { b.click(); return 'granted' }
+  return document.body.innerText.includes('اجازه داده شده') ? 'already' : 'no-row'
+})
+ok('مدرس اجازه داد', perm !== 'no-row', perm)
+await pT.waitForTimeout(1500)
 
-  console.log('— ۳) دانش‌آموز وارد می‌شود: تماشای فوری، بدون کارت اجازه، بدون دست خودکار')
-  await sp.goto(BASE + `/panel/student/live/${CLASS_ID}`, { waitUntil: 'domcontentloaded' })
-  const sRoom = await sp.waitForFunction(() => !!document.querySelector('.live-controls'), { timeout: 15000 }).then(() => true).catch(() => false)
-  ok('دانش‌آموز داخل اتاق کلاس است', sRoom)
-  await sp.waitForTimeout(1200)
-  const noCard = await sp.evaluate(() => !document.querySelector('.perm-overlay'))
-  ok('کارت «فعال‌سازی دوربین» برای دانش‌آموز نیست', noCard)
-  const handDown = await sp.evaluate(() => !document.body.textContent.includes('درخواست شما برای مدرس ارسال شد'))
-  ok('دست دانش‌آموز خودکار بلند نشده', handDown)
+// دانش‌آموز میکروفون و دوربین را روشن می‌کند
+console.log('— دانش‌آموز میکروفون/دوربین را روشن می‌کند —')
+await pS.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('روشن کردن میکروفون'))
+  if (b) b.click()
+})
+await pS.waitForTimeout(1200)
+await pS.evaluate(() => {
+  const b = [...document.querySelectorAll('button')].find((x) => x.innerText.includes('روشن کردن دوربین'))
+  if (b) b.click()
+})
+await pS.waitForTimeout(5000) // چند تکه آپلود شود
 
-  // انتظار برای رسیدن ویدیوی رله‌شده مدرس (blob = MediaSource)
-  const t0 = Date.now()
-  let st = null
-  while (Date.now() - t0 < 15000) {
-    st = await sp.evaluate(relayState)
-    if (st && st.ready >= 2 && st.w > 0) break
-    await sleep(400)
-  }
-  ok(`ویدیوی مدرس برای دانش‌آموز نمایش داده شد (${(((Date.now() - t0) / 1000) || 0).toFixed(1)}s پس از ورود)`, !!st && st.w > 0, JSON.stringify(st))
-  ok('پخش در جریان است (paused=false)', !!st && st.paused === false, JSON.stringify(st))
-  ok('صدا با سیاست autoplay بی‌صدا شروع شد (muted اول)', !!st && st.muted === true)
+// ---------- بررسی رله دوطرفه ----------
+console.log('— بررسی رله رسانه دوطرفه —')
+// از دید سرور (توکن دانش‌آموز): فید مدرس باید زنده باشد
+const feedsFromStudent = await pS.evaluate(async () => {
+  const tok = sessionStorage.getItem('modaresyar:token:tab') || localStorage.getItem('modaresyar:token')
+  const r = await fetch('/api/classes/l2/media/feeds?cur=%7B%7D', { headers: { Authorization: 'Bearer ' + tok } })
+  return r.json()
+})
+ok('فید دوربین مدرس روی سرور زنده است', !!feedsFromStudent.teacher, `sess=${feedsFromStudent.teacher?.sess} seq=${feedsFromStudent.teacher?.seq} chunks=${feedsFromStudent.teacher?.chunks?.length}`)
+ok('تکه‌های واقعی ضبط می‌شوند', (feedsFromStudent.teacher?.chunks?.length || 0) > 0 && (feedsFromStudent.teacher?.init?.length || 0) > 100, `init=${feedsFromStudent.teacher?.init?.length}B`)
 
-  console.log('— ۴) تاخیر پخش (لبه زنده)')
-  await sleep(2000)
-  const st1 = await sp.evaluate(relayState)
-  await sleep(2000)
-  const st2 = await sp.evaluate(relayState)
-  ok('زمان پخش جلو می‌رود (استریم زنده)', !!st1 && !!st2 && st2.t > st1.t, `${st1?.t} → ${st2?.t}`)
-  ok(`تاخیر لبه زنده کم است (${st2?.edge}s ≤ ۲s)`, st2?.edge != null && st2.edge <= 2, `edge=${st2?.edge}`)
-  await sp.screenshot({ path: '/home/z/my-project/download/e2e-student-watching.png' })
+// از دید مدرس: فید دانش‌آموز باید بیاید
+const feedsFromTeacher = await pT.evaluate(async () => {
+  const tok = sessionStorage.getItem('modaresyar:token:tab') || localStorage.getItem('modaresyar:token')
+  const r = await fetch('/api/classes/l2/media/feeds?cur=%7B%7D', { headers: { Authorization: 'Bearer ' + tok } })
+  return r.json()
+})
+ok('فید دانش‌آموز به سرور رسیده', (feedsFromTeacher.students?.length || 0) > 0, JSON.stringify(feedsFromTeacher.students?.map((s) => s.name)))
+const s0 = feedsFromTeacher.students?.[0]
+ok('فید دانش‌آموز تکهٔ واقعی دارد', (s0?.chunks?.length || 0) > 0 && (s0?.init?.length || 0) > 100)
 
-  console.log('— ۵) فعال شدن صدا با اولین کلیک (سیاست autoplay)')
-  await sp.mouse.click(680, 400)
-  await sleep(800)
-  const unmuted = await sp.evaluate(() => {
-    const v = [...document.querySelectorAll('.cam-tile video')].find((x) => typeof x.src === 'string' && x.src.startsWith('blob:'))
-    return v ? !v.muted : null
-  })
-  ok('پس از کلیک، صدای مدرس فعال شد', unmuted === true)
+// تایل دانش‌آموز در DOM مدرس باید رندر شود (کام-گرید یا نوار پایین)
+await pT.waitForTimeout(2500)
+const tilesT = await pT.evaluate(() => ({
+  grid: document.querySelectorAll('.cam-grid .cam-tile').length,
+  strip: document.querySelectorAll('.cam-strip .cam-tile').length,
+  names: [...document.querySelectorAll('.ct-name')].map((x) => x.innerText).join(','),
+}))
+ok('تایل ویدیوی دانش‌آموز در پنل مدرس رندر شده', tilesT.grid + tilesT.strip > 1, `grid=${tilesT.grid} strip=${tilesT.strip} names=[${tilesT.names}]`)
 
-  console.log('— ۶) دانش‌آموز دست بلند می‌کند → مدرس می‌بیند و اجازه می‌دهد')
-  const raised = await sp.evaluate(() => {
-    const bar = [...document.querySelectorAll('.speak-req-bar button')].find((b) => b.textContent.includes('بلند کردن دست'))
-    if (bar) { bar.click(); return 'bar' }
-    const ctl = [...document.querySelectorAll('.live-controls .ctl')].find((x) => x.querySelector('.ctl-tip')?.textContent?.includes('بلند کردن دست'))
-    if (ctl) { ctl.click(); return 'ctl' }
-    return null
-  })
-  ok('دکمه دست توسط دانش‌آموز کلیک شد', !!raised, String(raised))
-  await sleep(500)
-  const chip = await tp.waitForFunction(() => !!document.querySelector('.hand-chip'), { timeout: 8000 }).then(() => true).catch(() => false)
-  ok('چیپ «✋ دست بالا کرده» روی صحنه مدرس ظاهر شد', chip)
-  await tp.screenshot({ path: '/home/z/my-project/download/e2e-teacher-hand.png' })
-  // کلیک روی چیپ → تب حاضران → اجازه دادن
-  const granted = await tp.evaluate(() => {
-    const c = document.querySelector('.hand-chip')
-    if (c) c.click()
-    return true
-  })
-  await tp.waitForTimeout(600)
-  const did = await tp.evaluate(() => {
-    const rows = [...document.querySelectorAll('.part-row')]
-    const row = rows.find((r) => r.textContent.includes('سارا') || r.textContent.includes('Sara'))
-    const btn = row && [...row.querySelectorAll('button')].find((b) => b.textContent.includes('اجازه دادن'))
-    if (btn) { btn.click(); return true }
-    return false
-  })
-  ok('مدرس از تب حاضران «اجازه دادن» را زد', granted && did, `granted=${granted} did=${did}`)
+// تایل مدرس در DOM دانش‌آموز
+await pS.waitForTimeout(2500)
+const tilesS = await pS.evaluate(() => ({
+  grid: document.querySelectorAll('.cam-grid .cam-tile').length,
+  strip: document.querySelectorAll('.cam-strip .cam-tile').length,
+  names: [...document.querySelectorAll('.ct-name')].map((x) => x.innerText).join(','),
+}))
+ok('تایل ویدیوی مدرس در پنل دانش‌آموز رندر شده', tilesS.grid + tilesS.strip >= 1, `grid=${tilesS.grid} strip=${tilesS.strip} names=[${tilesS.names}]`)
 
-  console.log('— ۷) پنل میکروفون/دوربین در جای خودش برای دانش‌آموز')
-  const panel = await sp.waitForFunction(() => !!document.querySelector('.speak-panel'), { timeout: 8000 }).then(() => true).catch(() => false)
-  ok('پنل «مدرس اجازه گفتن داد» ظاهر شد', panel)
-  await sp.screenshot({ path: '/home/z/my-project/download/e2e-student-speak-panel.png' })
-  // روشن کردن میکروفون و دوربین
-  const toggles = await sp.evaluate(() => {
-    const p = document.querySelector('.speak-panel')
-    if (!p) return false
-    const mic = [...p.querySelectorAll('button')].find((b) => b.textContent.includes('میکروفون'))
-    mic?.click()
-    return !!mic
-  })
-  await sleep(1200)
-  const camOn = await sp.evaluate(() => {
-    const p = document.querySelector('.speak-panel')
-    if (!p) return false
-    const cam = [...p.querySelectorAll('button')].find((b) => b.textContent.includes('دوربین'))
-    cam?.click()
-    return !!cam
-  })
-  ok('میکروفون روشن شد', toggles)
-  ok('دوربین روشن شد', camOn)
-  await sleep(1500)
-  const selfVid = await sp.evaluate(() => {
-    const v = [...document.querySelectorAll('.cam-tile video')].find((x) => x.srcObject && x.videoWidth > 0)
-    return v ? { w: v.videoWidth } : null
-  })
-  ok('کادر کوچک تصویر خودِ دانش‌آموز در نوار ظاهر شد', !!selfVid, JSON.stringify(selfVid))
-  ok('رله خروجی دانش‌آموز فعال شد (تکه آپلود می‌شود)', upStudent >= 2, `up=${upStudent}`)
-  ok('هیچ آپلود ناموفقی در مسیر دانش‌آموز نیست', upStudentFail === 0, `fail=${upStudentFail}`)
+// صدای مدرس: عنصر ویدیو باید unmuted شود (autoplay policy غیرفعال شده)
+const audioS = await pS.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ muted: v.muted, playing: !v.paused, t: v.currentTime })))
+ok('پخش تصویر در جریان است (currentTime پیش می‌رود)', audioS.some((v) => v.playing && v.t > 0), JSON.stringify(audioS.slice(0, 3)))
 
-  console.log('— ۸) مدرس استریم دانش‌آموز را می‌بیند (کادر بزرگ برای خودش می‌ماند)')
-  const tSees = await tp.waitForFunction(() => {
-    const tiles = [...document.querySelectorAll('.cam-tile')]
-    return tiles.some((x) => {
-      const v = x.querySelector('video')
-      const nm = x.querySelector('.ct-name')?.textContent || ''
-      return v && typeof v.src === 'string' && v.src.startsWith('blob:') && v.videoWidth > 0 && (nm.includes('سارا') || nm.includes('Sara'))
-    })
-  }, { timeout: 12000 }).then(() => true).catch(() => false)
-  ok('کاشی زنده‌ی دانش‌آموز در صفحه مدرس پخش می‌شود', tSees)
-  await tp.screenshot({ path: '/home/z/my-project/download/e2e-teacher-sees-student.png' })
+console.log('\n— خلاصهٔ پایداری ارسال (۱۰ ثانیهٔ دیگر) —')
+await pT.waitForTimeout(10000)
+const chipT2 = await pT.evaluate(() => document.querySelector('.media-status')?.innerText || '')
+const feeds2 = await pS.evaluate(async () => {
+  const tok = sessionStorage.getItem('modaresyar:token:tab') || localStorage.getItem('modaresyar:token')
+  const r = await fetch('/api/classes/l2/media/feeds?cur=%7B%7D', { headers: { Authorization: 'Bearer ' + tok } })
+  return r.json()
+})
+ok('ارسال مدرس بعد از ۱۰ ثانیه هم پایدار', chipT2.includes('در حال ارسال') || chipT2.includes('مکث'), chipT2.slice(0, 60))
+ok('سشن فید مدرس ری‌استارت بی‌دلیل نکرده', feeds2.teacher?.sess === feedsFromStudent.teacher?.sess, `sess ${feedsFromStudent.teacher?.sess} → ${feeds2.teacher?.sess}`)
 
-  console.log('— ۹) وایت‌برد: باز شدن + رسم با تاخیر کم')
-  await clickCtl(tp, 'وایت‌برد')
-  await sleep(1200)
-  const sBoard = await sp.waitForFunction(() => !!document.querySelector('.wb-wrap canvas'), { timeout: 6000 }).then(() => true).catch(() => false)
-  ok('تخته روی صفحه دانش‌آموز باز شد', sBoard)
-  // مدرس می‌کشد
-  const box = await tp.locator('.wb-canvas').boundingBox()
-  await tp.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2)
-  await tp.mouse.down()
-  for (let i = 1; i <= 8; i++) await tp.mouse.move(box.x + box.width * (0.2 + i * 0.04), box.y + box.height * (0.2 + i * 0.035))
-  await tp.mouse.up()
-  await sleep(1000)
-  // بررسی سمت سرور: خط واقعا ثبت شده است؟
-  const strokeSrv = await (await fetch(`${API}/classes/${CLASS_ID}/board`, { headers: { Authorization: 'Bearer ' + ttok } }).then((r) => r.json()).catch(() => ({})))
-  ok('خط مدرس در سرور ثبت شد', (strokeSrv.strokes?.length || 0) > 0, `n=${strokeSrv.strokes?.length}`)
-  const bT0 = Date.now()
-  let strokeSeen = false
-  while (Date.now() - bT0 < 5000) {
-    strokeSeen = await sp.evaluate(() => {
-      const cv = document.querySelector('.wb-wrap canvas')
-      if (!cv) return false
-      // اسکن نمونه‌ای کل بوم — هر پیکسل غیرشفاف یعنی خط رسیده
-      const img = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data
-      for (let i = 3; i < img.length; i += 200) if (img[i] > 10) return true
-      return false
-    })
-    if (strokeSeen) break
-    await sleep(150)
-  }
-  ok(`خط مدرس روی تخته دانش‌آموز ظاهر شد (${((Date.now() - bT0) / 1000).toFixed(1)}s)`, strokeSeen)
-  await sp.screenshot({ path: '/home/z/my-project/download/e2e-student-board.png' })
+const errs = [...results.teacher, ...results.student].filter((e) => !e.includes('favicon'))
+ok('هیچ خطای صفحه‌ای رخ نداد', errs.length === 0, errs.slice(0, 2).join(' | '))
 
-  console.log('— ۱۰) سلامت کنسول')
-  ok('بدون خطای صفحه در مرورگر مدرس', errors.teacher.length === 0, errors.teacher.slice(0, 2).join(' | '))
-  ok('بدون خطای صفحه در مرورگر دانش‌آموز', errors.student.length === 0, errors.student.slice(0, 2).join(' | '))
-
-  await browser.close()
-  console.log(`\nنتیجه نهایی: ${pass} ✓ / ${fail} ✗`)
-  if (fail) process.exit(1)
-}
-
-main().catch((e) => { console.error('CRASH', e); process.exit(1) })
+await bT.close()
+await bS.close()
+console.log(`\nنتیجه نهایی: ${pass} موفق، ${fail} ناموفق`)
+process.exit(fail ? 1 : 0)

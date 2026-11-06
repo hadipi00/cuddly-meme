@@ -403,7 +403,12 @@ function createFeedPlayer(fmt, cd) {
         if (p.firstPushAt && t - p.firstPushAt > 8000 && t - p.lastPushAt < 12000) fallbackToBlob('no-decode-since-join')
         return
       }
-      if (t - lastBufChangeAt > 6000 && t - (p.lastRebuildAt || 0) > 6000 && t - lastRecoverAt > 6000) fallbackToBlob('buffered-stalled')
+      /* [فیکس هماهنگ با back-pressure فرستنده] «رکود بافر» فقط وقتی ترمیم می‌خواهد که
+       * تکه‌ها هنوز در حال رسیدن‌اند (lastPush تازه). اگر مکث فرستنده باشد (صف آپلود پُر /
+       * اینترنت کند)، بافر رشد نمی‌کند ولی خرابی پلیر نیست — فال‌بک اینجا پلیر سالم را
+       * به پلیر لگ‌دار Blob می‌فرستاد و تصویر چشمک‌زن/سیاه می‌شد. سکوت طولانی فرستنده
+       * خودش با feedAlive سرور و حذف فید بعد از ۱۵ ثانیه هندل می‌شود */
+      if (t - lastBufChangeAt > 6000 && t - (p.lastRebuildAt || 0) > 6000 && t - lastRecoverAt > 6000 && t - p.lastPushAt < 8000) fallbackToBlob('buffered-stalled')
     } catch { /* noop */ }
   }
   p.keepT = setInterval(() => {
@@ -804,6 +809,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    screen, rec: null, stopping: false, init: true, chain: Promise.resolve(),
    fmt: 'webm', cd: '', micOn: true, brIdx: 0, lat: [], good: 0, lastBrAt: 0, lastRebuildAt: 0,
    stats: { n: 0, bytes: 0, lastOkAt: 0, lastErrAt: 0, errs: 0, recent: [] },
+   /* [فیکس «چند ثانیه ارسال بعد متوقف/سیاه»] مهار عقب‌ماندگی صف آپلود —
+    * queued = تعداد تکه‌های منتظر در زنجیره؛ pausedByBacklog = رکوردر به‌خاطر صف پُر مکث کرده */
+   queued: 0, pausedByBacklog: false,
  })
  const camChRef = useRef(mkCh(false))
  const scrChRef = useRef(mkCh(true))
@@ -825,6 +833,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [fsActive, setFsActive] = useState(false)
  const [pseudoFs, setPseudoFs] = useState(false)
  const roomRef = useRef(null)
+ /* [فیکس چیدمان موبایل] چت در موبایل/فول‌اسکرین پیش‌فرض جمع است — صحنه (تخته/صفحه/دوربین)
+  * همه‌چیز است و گفتگو با دکمهٔ پایین صحنه به‌صورت شیت باز می‌شود */
+ const [mobileChat, setMobileChat] = useState(false)
+ const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches)
+ useEffect(() => {
+   const mq = window.matchMedia('(max-width: 900px)')
+   const h = (e) => setIsNarrow(e.matches)
+   try { mq.addEventListener('change', h) } catch { mq.addListener?.(h) }
+   return () => { try { mq.removeEventListener('change', h) } catch { mq.removeListener?.(h) } }
+ }, [])
+ const chatFoldable = isNarrow || fsActive || pseudoFs
  const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
  /* دوربین/میکروفون/اشتراک صفحه فقط در «بافت امن» (HTTPS یا localhost) کار می‌کند —
   * رایج‌ترین علت واقعی «هیچی برای دانش‌آموز نمی‌آید» همین است؛ پس صریح اعلام می‌شود */
@@ -864,6 +883,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [sending, setSending] = useState(false)
  const chatRef = useRef(null)
  const lastIdRef = useRef(0)
+ /* شمارش پیام‌های دیده‌نشده وقتی چت جمع است — نشان روی دکمهٔ بازکردن
+  * [فیکس] باید بعد از تعریف messages باشد — وگرنه TDZ ReferenceError کل اتاق را می‌کشد */
+ const seenMsgsRef = useRef(0)
+ const [unreadChat, setUnreadChat] = useState(0)
+ useEffect(() => {
+   if (mobileChat || !chatFoldable) { seenMsgsRef.current = messages.length; setUnreadChat(0) }
+   else if (messages.length > seenMsgsRef.current) setUnreadChat(messages.length - seenMsgsRef.current)
+ }, [messages, mobileChat, chatFoldable])
 
  const canSyncBoard = () => Date.now() - boardLocalTsRef.current > 3000
  const canSyncLock = () => Date.now() - lockLocalTsRef.current > 3000
@@ -1026,16 +1053,20 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  /* ---------- فرستنده رله — پله‌های بیت‌ریت تطبیقی [فیکس F36-d] ----------
   * اگر آپلود تکه‌ها کند باشد (میانگین > ۱٫۱۵ ثانیه)، یک پله کیفیت پایین آمده و
   * رکوردر با بیت‌ریت کمتر از نو ساخته می‌شود؛ با شبکه سریع‌تر بعد از ~۱۵ تکهٔ
-  * سریع، یک پله بالا می‌رود. سقف تغییر: هر ۹ ثانیه یک بار (ضد نوسان) */
- const BR_STEPS = [1_100_000, 800_000, 560_000, 400_000, 280_000]
- const SCREEN_BR_STEPS = [900_000, 650_000, 450_000, 300_000, 220_000]
+  * سریع، یک پله بالا می‌رود. سقف تغییر: هر ۹ ثانیه یک بار (ضد نوسان)
+  * [فیکس موبایل] پله اول ۱٫۱م به ۸۵۰k رسید — آپلود همزمان دو کانال روی اینترنت
+  * موبایل (دوربین+صفحه) سبب انسداد صف و مرگ کانال دوربین می‌شد */
+ const BR_STEPS = [850_000, 600_000, 420_000, 280_000, 180_000]
+ const SCREEN_BR_STEPS = [700_000, 500_000, 350_000, 240_000, 160_000]
 
  const uploadChunk = async (blob, isInit, fmt, cd, ch) => {
    if (!classId) return false
    const k = isTeacher ? 'teacher' : 'student'
    const q = `?k=${k}&init=${isInit ? 1 : 0}&mic=${ch.micOn ? 1 : 0}&cam=${camRef.current && !ch.screen ? 1 : 0}&screen=${ch.screen ? 1 : 0}&fmt=${fmt || 'webm'}&cd=${encodeURIComponent(cd || '')}`
-   for (let i = 0; i < 3; i++) {
-     /* تایم‌اوت ۵ ثانیه — هیچ درخواستی حق ندارد زنجیره‌ی ارسال را برای همیشه گروگان بگیرد */
+   for (let i = 0; i < 2; i++) {
+     /* تایم‌اوت ۵ ثانیه — هیچ درخواستی حق ندارد زنجیره‌ی ارسال را برای همیشه گروگان بگیرد
+      * [فیکس موبایل] ۳ تلاش × ۵ثانیه = ۱۵ثانیه چرخهٔ هر تکه — صف عقب می‌ماند و همه‌چیز فریز؛
+      * حالا ۲ تلاش — خطای سریع‌تر یعنی ترمیم سریع‌تر */
      const ac = new AbortController()
      const tid = setTimeout(() => ac.abort(), 5000)
      const t0 = Date.now()
@@ -1121,8 +1152,18 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      const isInit = ch.init
      ch.init = false
      const blob = e.data
-     ch.chain = ch.chain.then(() => uploadChunk(blob, isInit, ch.fmt, ch.cd, ch)).then((ok) => {
-       if (!ok && ch.rec === rec && !ch.stopping) {
+     /* [فیکس ریشه‌ای «ارسال چند ثانیه بعد قطع/صفحه سیاه»] قبلاً زنجیرهٔ آپلود بی‌مهار بود:
+      * روی اینترنت کند، MediaRecorder هر ثانیه تکه می‌ساخت ولی آپلود هر کدام تا ۱۰+ ثانیه
+      * طول می‌کشید → صف بی‌نهایت رشد می‌کرد → حافظه و تاخیر منفجر، تکه‌ها کهنه،
+      * گیرنده در چرخهٔ reset/rebuild گیر می‌کرد و تصویر سیاه می‌شد.
+      * حالا back-pressure واقعی: با پُر شدن صف، رکوردر «مکث» می‌کند (بدون شکستن سشن —
+      * گیرنده فقط یک مکث کوتاه می‌بیند) و با خالی شدن صف ادامه می‌دهد */
+     ch.queued += 1
+     ch.chain = ch.chain.then(async () => {
+       const okRes = await uploadChunk(blob, isInit, ch.fmt, ch.cd, ch)
+       ch.queued = Math.max(0, ch.queued - 1)
+       throttleChannel(ch, rec)
+       if (!okRes && ch.rec === rec && !ch.stopping) {
          /* هرگز تکه‌ی وسط استریم را به‌جای init نمی‌فرستیم — رکوردر واقعاً از نو
             ساخته می‌شود تا تکه‌ی بعدی «هدرِ واقعی» داشته باشد (خود-ترمیمی) */
          const t = Date.now()
@@ -1132,9 +1173,26 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          }
        }
        adaptBitrate(ch)
-     }).catch(() => {})
+     }).catch(() => { ch.queued = Math.max(0, ch.queued - 1) })
+     throttleChannel(ch, rec)
    }
    rec.onerror = () => { /* ادامه — تکه بعدی */ }
+ }
+
+ /** مهار عقب‌ماندگی صف آپلود — مکث/ادامهٔ رکوردر (بدون سشن جدید، بدون ری‌بیلد گیرنده)
+  * آستانه‌ها: ≥۴ تکهٔ منتظر = مکث تولید؛ ≤۱ = ادامه. تکه ~۱ ثانیه‌ای است پس این یعنی
+  * حداکثر ~۳-۴ ثانیه جلوتر از شبکه تولید می‌کنیم — هیچ تکه کهنه‌ای به گیرنده نمی‌رسد */
+ const throttleChannel = (ch, rec) => {
+   if (!ch.rec || ch.stopping || ch.rec !== rec) return
+   try {
+     if (ch.queued >= 4 && rec.state === 'recording') {
+       rec.pause()
+       ch.pausedByBacklog = true
+     } else if (ch.queued <= 1 && rec.state === 'paused' && ch.pausedByBacklog) {
+       rec.resume()
+       ch.pausedByBacklog = false
+     }
+   } catch { /* noop */ }
  }
 
  /** ساخت/بازسازی استریم خروجی دوربین+میکروفون — بعد از هر تغییر ترکیب */
@@ -1147,6 +1205,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  const startChannel = (ch) => {
    if (!classId || ch.rec) return
+   ch.pausedByBacklog = false // رکوردر تازه — هیچ مکثی از سشن قبلی به ارث نمی‌رسد
    const recMime = pickRecMime() // { mime, fmt } — سافاری mp4، بقیه webm
    if (!recMime) return
    let tracks, micOn
@@ -2335,6 +2394,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const st = camChRef.current.stats
  const nowMs = Date.now()
  const outFresh = st.lastOkAt > 0 && nowMs - st.lastOkAt < 3000
+ const camPaused = !!camChRef.current.pausedByBacklog // مکث عمدی به‌خاطر اینترنت کند ≠ قطعی
  const sendingMedia = isTeacher && !!(localStream || screen)
  const rateKbps = Math.round(st.recent.reduce((a, x) => a + x[1], 0) / 4 / 1024)
  const httpsUrl = (() => { try { const u = new URL(window.location.href); if (u.protocol === 'http:') u.protocol = 'https:'; return u.toString() } catch { return '' } })()
@@ -2369,6 +2429,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  sendingMedia ? (
  outFresh ? (
  <span className="media-chip ok"><i className="dot" /> در حال ارسال {screen && localStream ? 'صفحه + دوربین' : screen ? 'اشتراک صفحه' : 'صدا/تصویر'} به دانش‌آموزان — {faNum(rateKbps)} کیلوبایت/ثانیه • {faNum(st.n)} تکه ✓</span>
+ ) : camPaused ? (
+ <span className="media-chip warn"><i className="dot" /> اینترنت ارسال کند است — برای جلوگیری از قطعی، تصویر لحظه‌ای مکث و خودکار ادامه پیدا می‌کند…</span>
  ) : (
  <span className="media-chip warn"><i className="dot" /> ارسال با وقفه افتاده — به‌صورت خودکار از سر گرفته می‌شود…</span>
  )
@@ -2386,7 +2448,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  )}
  </div>
 
- <div className={`live-grid ${pseudoFs ? 'pseudo-fs' : ''}`} ref={roomRef}>
+ <div className={`live-grid ${pseudoFs ? 'pseudo-fs' : ''} ${chatFoldable ? (mobileChat ? 'chat-open foldable' : 'chat-fold foldable') : ''}`} ref={roomRef}>
  <div className="live-stage">
  <div className={`live-view ${watchingBoard ? 'board' : watchingScreen || watchingFeed ? 'screen' : 'camera'}`}>
  <span className="live-label"><i className="live-red-dot" /> {watchingBoard ? 'وایت‌برد مشترک' : watchingScreen ? (isTeacher ? 'اشتراک صفحه شما' : 'اشتراک صفحه مدرس') : watchingFeed ? 'ویدیوی زنده مدرس' : 'کلاس زنده'}</span>
@@ -2604,6 +2666,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </div>
  </div>
 
+ {/* [فیکس چیدمان موبایل] نوار بازکردن گفتگو — فقط وقتی چت جمع است (موبایل/فول‌اسکرین).
+     صحنه (تخته/اشتراک صفحه/دوربین) تمام عرض می‌شود و چت به‌صورت شیت باز می‌شود */}
+ {chatFoldable && !mobileChat && (
+   <button className="chat-fold-bar" onClick={() => { setMobileChat(true); setTab('chat') }}>
+     <Icon name="chat" size={16} />
+     <span>گفتگو و حاضران {unreadChat > 0 ? `— ${faNum(unreadChat)} پیام جدید` : ''}</span>
+     {unreadChat > 0 && <span className="fold-badge">{faNum(unreadChat)}</span>}
+     <span className="fold-hint">نمایش</span>
+   </button>
+ )}
+
  <div className="live-side">
  <div className="card" style={{ flex: 1 }}>
  <div className="side-tabs">
@@ -2611,6 +2684,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <button className={`tab-btn ${tab === 'parts' ? 'on' : ''}`} onClick={() => setTab('parts')}>
  حاضران ({faNum(participants.length)}){handsUp > 0 ? ` • ✋${faNum(handsUp)}` : ''}
  </button>
+ {chatFoldable && mobileChat && (
+   <button className="sheet-close" onClick={() => setMobileChat(false)} aria-label="بستن گفتگو">
+     <Icon name="x" size={16} />
+   </button>
+ )}
  </div>
  {tab === 'chat' ? (
  <>

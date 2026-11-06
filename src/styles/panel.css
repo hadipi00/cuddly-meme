@@ -358,19 +358,68 @@
 }
 
 /* ---------- تمام‌صفحه کلاس [فیکس F36-b] — کل اتاق: صحنه + چت + کنترل‌ها ---------- */
-.live-grid:fullscreen { background: #020617; padding: 12px; border-radius: 0; }
-.live-grid:-webkit-full-screen { background: #020617; padding: 12px; border-radius: 0; }
+.live-grid:fullscreen { background: #020617; padding: 12px; border-radius: 0; grid-template-columns: 1fr; }
+.live-grid:-webkit-full-screen { background: #020617; padding: 12px; border-radius: 0; grid-template-columns: 1fr; }
 .live-grid:fullscreen .live-stage, .live-grid:-webkit-full-screen .live-stage { border-color: rgba(148, 163, 184, 0.22); }
 .live-grid:fullscreen .live-view, .live-grid:-webkit-full-screen .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
 .live-grid:fullscreen .chat-body, .live-grid:-webkit-full-screen .chat-body { max-height: none; flex: 1; }
 .live-grid:fullscreen .part-list, .live-grid:-webkit-full-screen .part-list { max-height: none; flex: 1; }
+/* [فیکس چیدمان فول‌اسکرین] چت در فول‌اسکرین پیش‌فرض مخفی است — «بیشتر صفحه برای تخته/صفحه/دوربین».
+   با نوار «گفتگو و حاضران» زیر صحنه به‌صورت شیت باز می‌شود */
+.live-grid.foldable:fullscreen .live-side, .live-grid.foldable:-webkit-full-screen .live-side { display: none; }
 /* شبه‌فول‌اسکرین — وقتی مرورگر (قاب iframe بدون allow / iOS Safari روی div) اجازه
    Fullscreen API نمی‌دهد؛ قبلاً این کلاس در CSS بود ولی هیچ‌وقت از JS ست نمی‌شد */
-.live-grid.pseudo-fs { position: fixed; inset: 0; z-index: 1400; background: #020617; padding: 12px; border-radius: 0; overflow: auto; }
+.live-grid.pseudo-fs { position: fixed; inset: 0; z-index: 1400; background: #020617; padding: 12px; border-radius: 0; overflow: auto; grid-template-columns: 1fr; }
 .live-grid.pseudo-fs .live-stage { border-color: rgba(148, 163, 184, 0.22); }
 .live-grid.pseudo-fs .live-view { aspect-ratio: auto; flex: 1; min-height: 0; }
 .live-grid.pseudo-fs .chat-body { max-height: none; flex: 1; }
 .live-grid.pseudo-fs .part-list { max-height: none; flex: 1; }
+.live-grid.foldable.pseudo-fs .live-side { display: none; }
+
+/* ---------- [فیکس چیدمان موبایل] چت جمع‌شدنی + شیت بازشدن ----------
+ * موبایل و فول‌اسکرین: صحنه قهرمان است؛ چت با نوار «گفتگو و حاضران» باز می‌شود */
+.chat-fold-bar {
+  grid-column: 1 / -1;
+  display: none; align-items: center; justify-content: center; gap: 9px;
+  padding: 12px; border-radius: 13px; border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.07); color: var(--muted); font-size: 12.5px; font-weight: 700;
+  cursor: pointer; transition: 0.2s;
+}
+.chat-fold-bar:hover { color: var(--text); border-color: rgba(45, 212, 191, 0.45); background: rgba(45, 212, 191, 0.06); }
+.chat-fold-bar .fold-badge {
+  background: #fb7185; color: #fff; font-size: 11px; font-weight: 800; min-width: 20px; height: 20px;
+  border-radius: 99px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px;
+}
+.chat-fold-bar .fold-hint {
+  margin-inline-start: auto; font-size: 11px; color: var(--teal); border: 1px solid rgba(45, 212, 191, 0.35);
+  padding: 3px 12px; border-radius: 99px; background: rgba(45, 212, 191, 0.1);
+}
+.live-grid.foldable.chat-fold .chat-fold-bar { display: flex; }
+/* موبایل: چت جمع — پنل کنار کاملاً مخفی تا صحنه همه‌چیز باشد */
+@media (max-width: 900px) {
+  .live-grid.foldable.chat-fold .live-side { display: none; }
+}
+/* شیت گفتگو — لایهٔ شناور روی صحنه؛ صحنه زیر آن دست‌نخورده می‌ماند.
+   [فیکس] کارت‌های سایت نیمه‌شفاف‌اند (var(--card) = rgba ۵٪) — روی صحنه زنده
+   کنترل‌ها از زیرش پیدا می‌شدند؛ شیت باید کاملاً مات باشد */
+.live-grid.foldable.chat-open .live-side {
+  display: flex; position: fixed; inset-inline: 10px; bottom: 12px; top: auto;
+  max-height: min(62vh, 520px); z-index: 1500; border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.55);
+}
+.live-grid.foldable.chat-open .live-side .card {
+  background: #0b1526;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  backdrop-filter: none;
+}
+[data-theme='light'] .live-grid.foldable.chat-open .live-side .card { background: #f1f5f9; }
+[data-theme='blu'] .live-grid.foldable.chat-open .live-side .card { background: #0c1a2e; }
+.side-tabs .sheet-close {
+  width: 38px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); border: 1px solid var(--line); background: rgba(148, 163, 184, 0.06);
+}
+.side-tabs .sheet-close:hover { color: var(--red); border-color: rgba(251, 113, 133, 0.4); }
+.side-tabs:has(.sheet-close) { grid-template-columns: 1fr 1fr 42px; }
 body.fs-lock { overflow: hidden; }
 .live-view.board { background: linear-gradient(160deg, var(--live-a), var(--live-b)); }
 
@@ -564,11 +613,12 @@ body.fs-lock { overflow: hidden; }
  .wb-toolbar { padding: 6px 8px; gap: 5px; top: 6px; }
  .wb-locknote { font-size: 10.5px; padding: 4px 10px; max-width: calc(100% - 14px); text-align: center; line-height: 1.6; }
  .cam-strip { bottom: 8px; inset-inline-start: 8px; }
- /* پنل گفتگو و نوار درخواست در موبایل — بالای نوار کنترل، همه‌ی عرض */
- .speak-panel { bottom: 10px; gap: 6px; padding: 0 8px; }
+ .cam-strip .cam-tile { min-width: 120px; }
+ /* پنل گفتگو و نوار درخواست در موبایل — بالای نوار کاشی‌های دوربین (بدون هم‌پوشانی) */
+ .speak-panel { bottom: 100px; gap: 6px; padding: 0 8px; }
  .speak-panel .sp-hint { font-size: 11px; padding: 7px 12px; white-space: normal; text-align: center; }
  .speak-panel .btn { min-height: 38px; font-size: 12px; }
- .speak-req-bar { bottom: 10px; }
+ .speak-req-bar { bottom: 100px; }
  .hand-chip { font-size: 10.5px; padding: 6px 12px; top: 46px; max-width: calc(100% - 20px); white-space: normal; text-align: center; line-height: 1.6; }
 
  /* کارت دسترسی دوربین */
