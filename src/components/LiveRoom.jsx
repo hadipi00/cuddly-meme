@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom'
 import { DataIcon } from '../utils/icons'
 import Icon from './Icon'
 import { Avatar } from './ui'
-import { Modal } from './Modal'
 import { useApp } from '../store/AppContext'
 import { faNum } from '../utils/format'
 import { req, authedFetch, getToken } from '../services/http'
@@ -109,7 +108,7 @@ function createFeedPlayer(fmt, cd) {
     mime, fmt, cd, el: null, objUrl: null, ms: null, sb: null, sess: null,
     queue: [], alive: true, keepT: null, broken: false, pid: ++FEED_PID, lastRebuildAt: 0,
     sbFails: 0, rebuilds: 0, recovers: 0, pendingRebuild: false, mode: 'mse',
-    firstPushAt: 0, lastPushAt: 0,
+    firstPushAt: 0, lastPushAt: 0, wantReset: false,
   }
   /* [دیباگ F37-e] لاگ سبک برای تشخیص گیرکردن پلیر در مرورگر واقعی */
   const dbg = (ev, extra = '') => {
@@ -189,10 +188,11 @@ function createFeedPlayer(fmt, cd) {
     try { p.onNeedReset?.() } catch { /* noop */ }
   }
 
-  const rebuild = (sess) => {
+  const rebuild = (sess, force = false) => {
     /* ضد توفان — rebuild همگام زنجیره‌ای ممنوع؛ حداقل ۷۰۰ms فاصله
-       (هم‌اندازه‌ی تکه‌ها). اگر زودتر خواسته شود، برای push بعدی صف می‌شود */
-    if (Date.now() - (p.lastRebuildAt || 0) < 700) { p.pendingRebuild = true; return }
+       (هم‌اندازه‌ی تکه‌ها). اگر زودتر خواسته شود، برای push بعدی صف می‌شود.
+       فقط reset صریح سرور (hardReset) با force=true از این قید عبور می‌کند */
+    if (!force && Date.now() - (p.lastRebuildAt || 0) < 700) { p.pendingRebuild = true; return }
     /* [فیکس F37-e] شمارنده با هر «پیشرفت واقعی بافر» صفر می‌شود (نگهبان) —
        پس این آستانه فقط برای زنجیره‌ی ترمیم‌های بی‌نتیجه است، نه عمر پلیر */
     if (p.rebuilds > 3) { fallbackToBlob('too-many-rebuilds'); return }
@@ -265,6 +265,11 @@ function createFeedPlayer(fmt, cd) {
     p.attach = (...a) => bp.attach(...a)
     p.liveEdge = () => {}
     p.destroy = () => { p.alive = false; bp.destroy() }
+    /* [فیکس F39 — ریشه‌ی «سیاهی برای همیشه بعد از fallback»] رویNeedReset به‌تنهایی
+     * کافی نیست — اگر میان یک poll در حال اجرا شلیک شود، همان poll با lastSeq کرسر
+     * را دوباره پر می‌کند → سرور هیچ‌وقت init نمی‌فرستد → پلیر Blob برای همیشه
+     * بدون هدر می‌ماند و سیاه می‌شود. پرچم wantReset در applyFeed «قطعی» مصرف می‌شود */
+    p.wantReset = true
     try { p.onNeedReset?.() } catch { /* noop */ } // کرسر صفر → سرور init تازه بفرستد
   }
 
@@ -306,18 +311,16 @@ function createFeedPlayer(fmt, cd) {
   /** شروع از سر (گپ یا تازه‌وارد) — همیشه MediaSource تازه ساخته می‌شود؛
    *  چون init دوباره می‌آید و افزودن دوباره‌ی init به SourceBuffer قبلی، دکودر را
    *  برای همیشه می‌شکند (باگ «تصویر بعد از یک گپ دیگر نمی‌آید»)
-   *  [فیکس F37-d] اما اگر «همین سشن» هنوز سالم در حال پخش است، هاردریست ممنوع —
-   *  هر reset تکراری سرور (پس از هر breakStream) یک rebuild تازه می‌ساخت و
-   *  حلقه‌ی مرگ rebuild/reset می‌ساخت. خروجی false یعنی «ریست لازم نبود» */
+   *  [فیکس F39 — ریشه‌ی «باز کردن تخته صدا/تصویر را برای همیشه سیاه می‌کند»]
+   *  دستهٔ reset سرور «همیشه» یک init تازه دارد و init فقط به SourceBuffer
+   *  خالیِ تازه می‌توان اضافه شد؛ پس rebuild اینجا «اجباری» است.
+   *  شرط skip قدیمی (sess یکسان && تازه) بعد از جابه‌جایی کاشی صحنه↔نوار init را
+   *  دور می‌ریخت → تکه‌های بی‌هدر → decode-error → حلقهٔ بی‌پایان ترمیم → سیاهی ابدی.
+   *  ضدتوفان داخل rebuild با force=true اینجا bypass می‌شود؛ حلقه‌ی مرگ هم با
+   *  نگهبان rebuilds>3 → فال‌بک Blob و صفرشدن شمارنده با پیشرفت واقعی بافر کنترل است */
   p.hardReset = (sess) => {
-    /* fresh = rebuild همین چند صدهزارم ثانیه پیش انجام شده و sourceopen هنوز در راه است */
-    const fresh = Date.now() - (p.lastRebuildAt || 0) < 1200
-    if (p.sess === sess && (p.sb || fresh) && !p.broken) {
-      dbg('hardReset-skip', `sess=${sess} sb=${!!p.sb} fresh=${fresh}`)
-      return false
-    }
     p.queue = []
-    rebuild(sess)
+    rebuild(sess, true)
     return true
   }
   /* [فیکس F37-e] attach — قانون یک‌MS-یک‌عنصر:
@@ -408,13 +411,35 @@ function createFeedPlayer(fmt, cd) {
        * اینترنت کند)، بافر رشد نمی‌کند ولی خرابی پلیر نیست — فال‌بک اینجا پلیر سالم را
        * به پلیر لگ‌دار Blob می‌فرستاد و تصویر چشمک‌زن/سیاه می‌شد. سکوت طولانی فرستنده
        * خودش با feedAlive سرور و حذف فید بعد از ۱۵ ثانیه هندل می‌شود */
-      if (t - lastBufChangeAt > 6000 && t - (p.lastRebuildAt || 0) > 6000 && t - lastRecoverAt > 6000 && t - p.lastPushAt < 8000) fallbackToBlob('buffered-stalled')
+      /* [فیکس F39 — «متوقف شد بعد سیاهی»] تکه‌ها می‌رسند ولی بافر ۶ ثانیه رشد نکرده:
+       * پایپ‌لاین آپند مرده است. به‌جای پرش مستقیم به Blob (که قبلاً بدون init تازه
+       * برای همیشه سیاه می‌شد)، اول «ریست کامل» می‌خواهیم — کرسر صفر → سرور init تازه
+       * می‌فرستد → rebuild با SourceBuffer نو. اگر چند بار بی‌نتیجه بود، همان
+       * نگهبان rebuilds>3 → فال‌بک Blob (که حالا خودش با wantReset init می‌گیرد) */
+      if (t - lastBufChangeAt > 6000 && t - (p.lastRebuildAt || 0) > 6000 && t - lastRecoverAt > 6000 && t - p.lastPushAt < 8000) {
+        dbg('buffer-stall-reset')
+        p.queue = []
+        p.wantReset = true
+        try { p.onNeedReset?.() } catch { /* noop */ }
+        rebuild(p.sess, true)
+      }
     } catch { /* noop */ }
   }
   p.keepT = setInterval(() => {
     bind() // [فیکس F37-e] پل مسیر «rebuild قبل از attach» — اتصال تنها وقتی MS هنوز باز است
     p.liveEdge()
     watchdog()
+    /* [دیباگ F39] نمای زندهٔ داخل پلیر برای عیب‌یابی «متوقف شد/سیاهی» در کنسول مرورگر */
+    try {
+      if (typeof window !== 'undefined') {
+        window.__feeds = window.__feeds || {}
+        window.__feeds[p.pid] = {
+          mode: p.mode, upd: !!p.sb?.updating, q: p.queue.length,
+          end: (() => { try { const b = p.el?.buffered; return b?.length ? +b.end(b.length - 1).toFixed(1) : -1 } catch { return -1 } })(),
+          cur: p.el ? +(p.el.currentTime || 0).toFixed(1) : -1, rs: p.el?.readyState ?? -1,
+        }
+      }
+    } catch { /* noop */ }
   }, 700)
   return p
 }
@@ -540,8 +565,10 @@ function createTicker(ms, fn) {
 }
 
 /** ویدیوی یک شرکت‌کننده با استریم محلی — ویدیو همیشه mount می‌ماند؛
- *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود) */
-function VideoTile({ stream, self, name, camOn, color, big }) {
+ *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود)
+ *  [فیکس F39] onFlip — دکمهٔ شناور تعویض دوربین (جلو/عقب) روی کاشی خودم؛
+ *  تعویض دوربین در موبایل باید «یک لمسِ روی تصویر» باشد نه دفن در نوار کنترل */
+function VideoTile({ stream, self, name, camOn, color, big, onFlip }) {
   const ref = useRef(null)
   const hasVid = !!stream && stream.getVideoTracks().length > 0
   useEffect(() => {
@@ -563,6 +590,7 @@ function VideoTile({ stream, self, name, camOn, color, big }) {
       )}
       <span className="ct-name">{name}{self ? ' (شما)' : ''}</span>
       {stream && !hasVid ? null : camOn === false && <span className="ct-off"><Icon name="camera" size={11} /> خاموش</span>}
+      {onFlip && <button className="tile-flip" onClick={onFlip} aria-label="تعویض دوربین (جلو/عقب)" title="تعویض دوربین (جلو/عقب)"><Icon name="camFlip" size={14} /></button>}
     </div>
   )
 }
@@ -776,7 +804,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [recording, setRecording] = useState(false)
  const [recSecs, setRecSecs] = useState(0)
  const [hand, setHand] = useState(false)
- const [endedModal, setEndedModal] = useState(false)
+ const [endedModal, setEndedModal] = useState(false) // [فیکس F39] تایید خروج/پایان — حالا داخل عنصر فول‌اسکرین رندر می‌شود
  const [tab, setTab] = useState('chat')
  const [, setTick] = useState(0)
 
@@ -843,11 +871,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    try { mq.addEventListener('change', h) } catch { mq.addListener?.(h) }
    return () => { try { mq.removeEventListener('change', h) } catch { mq.removeListener?.(h) } }
  }, [])
- const chatFoldable = isNarrow || fsActive || pseudoFs
+ /* [فیکس F39 — درخواست صریح کاربر] چت در فول‌اسکرین (واقعی یا شبه) «کلاً» وجود ندارد —
+  * نه نوار، نه شیت، نه پنل. فقط خارج از فول‌اسکرین نمایش داده می‌شود؛
+  * در موبایلِ غیرفول‌اسکرین با نوار پایین به‌صورت شیت باز می‌شود */
+ const chatFoldable = isNarrow && !fsActive && !pseudoFs
+ /* ورود به فول‌اسکرین → شیت گفتگو اگر باز است بسته شود */
+ useEffect(() => { if (fsActive || pseudoFs) setMobileChat(false) }, [fsActive, pseudoFs])
  const [inIframe] = useState(() => { try { return window.self !== window.top } catch { return true } })
  /* دوربین/میکروفون/اشتراک صفحه فقط در «بافت امن» (HTTPS یا localhost) کار می‌کند —
   * رایج‌ترین علت واقعی «هیچی برای دانش‌آموز نمی‌آید» همین است؛ پس صریح اعلام می‌شود */
  const [secure] = useState(() => typeof window === 'undefined' || window.isSecureContext !== false)
+ /* [فیکس F39] اشتراک صفحه فقط روی مرورگرهای دسکتاپ ممکن است — مرورگرهای موبایل
+  * getDisplayMedia ندارند؛ دکمهٔ بی‌فایدهٔ موبایل حذف می‌شود تا کاربر گمراه نشود */
+ const [canShareScreen] = useState(() => typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia)
 
  /* ---------- وایت‌برد ---------- */
  const [strokes, setStrokes] = useState([])
@@ -1283,25 +1319,35 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        p.onNeedReset = () => { if (key === 't' || key === 'ts') cur[key] = null; else delete cur.s[key] } // فقط کرسرِ همین فید صفر شود
        players.set(key, p)
      }
+     /* [فیکس F39 — ریشه‌ی «سیاهی برای همیشه»] پرچم wantReset (پس از fallback یا
+      * stall-reset) باید «قطعی» کرسر را صفر کند؛ رویNeedReset به‌تنهایی با poll در
+      * حال اجرا ریس دارد و دست‌کم گرفته می‌شود. این دسته (بدون init) هم دور ریخته
+      * می‌شود تا تکه‌های بی‌هدر به پلیرِ در انتظار init فشار نیایند */
+     if (p.wantReset) {
+       p.wantReset = false
+       p.queue = []
+       try { window.__liveLog?.push(`applyFeed|${key}|WANT-RESET-cursor-null`) } catch { /* noop */ }
+       return { seq: null, dead: true }
+     }
      const resetApplied = f.reset ? p.hardReset(f.sess) : false
      /* [فیکس F37-d] اگر هاردریست «لازم نبود» (همان سشنِ سالم)، دسته‌ی init+تکه‌های
         تکراری نباید push شود — افزودن دوباره‌ی init به SourceBuffer زنده دکودر را می‌شکند
         و همان تکه‌ها هم قبلاً پخش شده‌اند. فقط دسته‌ی بعد از ریستِ واقعی push می‌شود */
      try { window.__liveLog?.push(`applyFeed|${key}|reset=${f.reset ? 1 : 0}|applied=${resetApplied ? 1 : 0}|broken=${p.broken ? 1 : 0}|sess=${f.sess}`) } catch { /* noop */ }
      if (f.reset && !resetApplied) {
-       return f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null
+       return { seq: f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null, dead: false }
      }
      /* [فیکس F37-d] باگ ریشه‌ای کرسر: breakStream کرسر را صفر می‌کرد ولی «همین poll»
         بلافاصله بعد از applyFeed کرسر را دوباره q=lastSeq می‌کرد → صفر شدن هیچ‌وقت
         به poll بعد نمی‌رسید → سرور هیچ‌وقت reset+init نمی‌فرستاد → SourceBuffer
         شکسته برای همیشه می‌ماند و تصویر فریز می‌شد. حالا پلیرِ شکسته کرسر null
         برمی‌گرداند تا سرور قطعاً reset+init بفرستد و خودترمیمی کامل شود */
-     if (p.broken) { try { window.__liveLog?.push(`applyFeed|${key}|BROKEN-cursor-null`) } catch { /* noop */ } return null }
+     if (p.broken) { try { window.__liveLog?.push(`applyFeed|${key}|BROKEN-cursor-null`) } catch { /* noop */ } return { seq: null, dead: true } }
      if (f.init) p.push(f.sess, f.init)
      for (const c of f.chunks) p.push(f.sess, c.b64)
      /* کرسر فقط تا «آخرین تکه‌ی واقعاً تحویل‌شده» جلو می‌رود — نه seq سرور؛
         وگرنه تکه‌های بریده‌شده برای همیشه گم می‌شوند */
-     return f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null
+     return { seq: f.chunks.length ? f.chunks[f.chunks.length - 1].seq : null, dead: false }
    }
 
    const loop = async () => {
@@ -1328,14 +1374,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
         if (r.teacherScreen) cur.ts = { s: r.teacherScreen.sess, q: r.teacherScreen.seq }
       } else if (r.teacher) {
         touch('t')
-        const lastSeq = applyFeed('t', r.teacher)
+        const rf1 = applyFeed('t', r.teacher)
         next.t = { sess: r.teacher.sess, mic: r.teacher.mic, cam: r.teacher.cam, screen: r.teacher.screen, fmt: r.teacher.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('t')?.pid }
         /* [فیکس F37-d] پلیر شکسته → کرسر «واقعاً» صفر شود — قبلاً fallback به
            cur.t?.q قدیمی بود و سرور هیچ‌وقت reset نمی‌فرستاد → پلیر مرده می‌ماند
            [فیکس F37-e] پاسخ بدون تکه‌ی جدید (n:0) دیگر کرسر را صفر نمی‌کند —
            قبلاً «q: lastSeq ?? 0» هر poll بی‌تکه را به q=0 تبدیل می‌کرد → سرور
            stale می‌دید و بی‌نهایت reset+init می‌فرستاد (طوفان reset و داده‌ی تکراری) */
-        cur.t = players.get('t')?.broken ? null : { s: r.teacher.sess, q: lastSeq != null ? lastSeq : (cur.t?.q ?? 0) }
+        cur.t = rf1.dead ? null : { s: r.teacher.sess, q: rf1.seq != null ? rf1.seq : (cur.t?.q ?? 0) }
       }
       /* [فیکس F37-d] مرگ لحظه‌ای فید (رکود ضبط فرستنده) — کرسر نگه داشته می‌شود؛
        * sess خودش حافظ‌ی ریست است: اگر فرستنده واقعاً از نو شروع کرده باشد sess++
@@ -1344,17 +1390,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        /* [فیکس F36-c] فید مستقل اشتراک صفحه مدرس — موازی با دوربین (کلید 'ts') */
        if (!isTeacher && r.teacherScreen) {
          touch('ts')
-         const lastSeq2 = applyFeed('ts', r.teacherScreen)
+         const rf2 = applyFeed('ts', r.teacherScreen)
          next.ts = { sess: r.teacherScreen.sess, mic: r.teacherScreen.mic, cam: false, screen: true, fmt: r.teacherScreen.fmt, name: classInfo?.teacher || 'مدرس', color: 'grad-0', pv: players.get('ts')?.pid }
          /* [فیکس F37-e] حفظ کرسر در پاسخ‌های بی‌تکه — مثل فید دوربین */
-         cur.ts = players.get('ts')?.broken ? null : { s: r.teacherScreen.sess, q: lastSeq2 != null ? lastSeq2 : (cur.ts?.q ?? 0) }
+         cur.ts = rf2.dead ? null : { s: r.teacherScreen.sess, q: rf2.seq != null ? rf2.seq : (cur.ts?.q ?? 0) }
        }
        for (const sf of r.students || []) {
          touch(sf.uid)
-         const lastSeq = applyFeed(sf.uid, sf)
+         const rf3 = applyFeed(sf.uid, sf)
          next[sf.uid] = { sess: sf.sess, mic: sf.mic, cam: sf.cam, screen: sf.screen, fmt: sf.fmt, name: sf.name || 'هم‌کلاسی', color: 'grad-2', pv: players.get(sf.uid)?.pid }
          /* [فیکس F37-e] حفظ کرسر در پاسخ‌های بی‌تکه — مثل فید دوربین */
-         cur.s[sf.uid] = players.get(sf.uid)?.broken ? null : { s: sf.sess, q: lastSeq != null ? lastSeq : (cur.s[sf.uid]?.q ?? 0) }
+         cur.s[sf.uid] = rf3.dead ? null : { s: sf.sess, q: rf3.seq != null ? rf3.seq : (cur.s[sf.uid]?.q ?? 0) }
        }
        for (const k of Object.keys(cur.s)) if (!(k in next) && nowMs - (lastSeen.get(k) || 0) > 15_000) delete cur.s[k]
        /* [فیکس F37-d] پلیر فقط بعد از ۱۵ ثانیه غیبت کامل فید کشته می‌شود — نه با هر
@@ -1787,30 +1833,26 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setCam(v)
  }
 
- /* ---------- تعویض دوربین [فیکس F37-b] — بازنویسی کامل ----------
-  * باگ گزارش کاربر: «چرخش دوربین درست کار نمی‌کند». ریشه:
-  * ۱) روی دسکتاپِ تک‌دوربین، محدودیت facingMode:{ideal} همان وبکم قبلی را برمی‌گرداند
-  *    ولی شرط ردِ «همان دوربین» فقط وقتی اجرا می‌شد که محدودیت facingMode «نداشته باشد»
-  *    → همان دوربین دوباره باز می‌شد، استریم ری‌بیلد می‌شد و پیام قلابی «دوربین عوض شد» می‌آمد.
-  * ۲) سافاری deviceId را در getSettings نمی‌دهد → مقایسه deviceId همیشه بی‌اثر بود.
-  * حالا:
-  *  • تشخیص «همان دوربین» با deviceId یا label (هر کدام که در دسترس باشد)
-  *  • تناقض facingMode (پرسیدیم عقب، جلو داد) هم رد می‌شود
-  *  • explicitId: انتخاب مستقیم از «انتخابگر دوربین»
-  *  • اگر واقعاً دوربین دیگری نیست → پیام صادقانه، بدون ری‌بیلد استریم */
+ /* ---------- تعویض دوربین [فیکس F39 — بازنویسی برای موبایل] ----------
+  * باگ گزارش کاربر: «تعویض دوربین در موبایل انجام نمیشه / نمیتونم با دوربین جلو ضبط کنم». ریشه:
+  * درخواست دوربین جدید در حالی که ترک دوربین قبلی هنوز «زنده» است — iOS سافاری و
+  * خیلی از گوشی‌های اندروید فقط یک دوربین را هم‌زمان باز می‌کنند؛ getUserMedia
+  * دوم NotReadableError می‌دهد → همهٔ گزینه‌ها شکست → «دوربین عوض نشد».
+  * حالا در دستگاه لمسی اول دوربین قبلی «آزاد» می‌شود، بعد دوربین جدید گرفته می‌شود؛
+  * اگر هیچ گزینه‌ای باز نشد، خودکار دوربین قبلی پس گرفته می‌شود تا کاربر بی‌تصویر نماند */
  const switchCam = async (explicitId) => {
    if (switchingRef.current) return
    if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
    const cur = localStreamRef.current
    if (!cur?.getVideoTracks().length) { startMedia(); return }
    switchingRef.current = true
-   const track = cur.getVideoTracks()[0]
-   const settings = track.getSettings?.() || {}
+   const oldTrack = cur.getVideoTracks()[0]
+   const oldSettings = oldTrack.getSettings?.() || {}
    const isTouch = (navigator.maxTouchPoints || 0) > 0
-   /* شناسه/برچسب دوربین فعلی — سافاری deviceId نمی‌دهد ولی label بعد از اجازه دارد */
-   const curId = explicitId ? '' : (camDeviceIdRef.current || settings.deviceId || '')
-   const curLabel = explicitId ? '' : (track.label || '')
-   const curFacing = facingRef.current || settings.facingMode || 'user'
+   /* شناسه/برچسب دوربین فعلی — «قبل از» آزادسازی ترک خوانده می‌شود؛ بعد از stop خالی است */
+   const curId = explicitId ? '' : (camDeviceIdRef.current || oldSettings.deviceId || '')
+   const curLabel = explicitId ? '' : (oldTrack.label || '')
+   const curFacing = facingRef.current || oldSettings.facingMode || 'user'
    const flip = curFacing === 'environment' ? 'user' : 'environment'
    const base = { width: { ideal: 1280 }, height: { ideal: 720 } }
    const candidates = []
@@ -1843,42 +1885,73 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      return false
    }
 
+   /* [فیکس موبایل] اول رکوردر مکث و دوربین قبلی آزاد می‌شود تا دوربین جدید بتواند باز شود */
+   const releaseFirst = isTouch
+   if (releaseFirst) {
+     try { const r = camChRef.current.rec; if (r && r.state === 'recording') r.pause() } catch { /* noop */ }
+     try { oldTrack.stop() } catch { /* noop */ }
+   }
+
+   let nv = null
+   let usedVideo = null
    for (const video of candidates) {
      try {
        const g = await navigator.mediaDevices.getUserMedia({ video, audio: false })
-       const nv = g.getVideoTracks()[0]
-       if (!nv) { g.getTracks().forEach((t) => t.stop()); continue }
-       /* [فیکس F37-b] اگر همان دوربین قبلی برگشت — بدون توجه به نوع محدودیت —
-          «تغییر قلابی» ممنوع؛ گزینه بعدی امتحان می‌شود */
-       if (sameCam(nv)) { g.getTracks().forEach((t) => t.stop()); continue }
+       const t = g.getVideoTracks()[0]
+       if (!t) { g.getTracks().forEach((x) => x.stop()); continue }
+       /* اگر همان دوربین قبلی برگشت — بدون توجه به نوع محدودیت — «تغییر قلابی» ممنوع */
+       if (sameCam(t)) { g.getTracks().forEach((x) => x.stop()); continue }
        /* تناقض facingMode: دقیق «عقب» خواستیم ولی ترک گزارش «جلو» می‌دهد */
        const wantF = video.facingMode
-       const gotF = nv.getSettings?.().facingMode
+       const gotF = t.getSettings?.().facingMode
        if (wantF && typeof wantF === 'object' && wantF.exact && gotF && gotF !== wantF.exact) {
-         g.getTracks().forEach((t) => t.stop()); continue
+         g.getTracks().forEach((x) => x.stop()); continue
        }
-       const old = localStreamRef.current?.getVideoTracks()[0]
-       const audio = localStreamRef.current?.getAudioTracks()[0]
-       old?.stop()
-       const nextStream = new MediaStream([...(audio ? [audio] : []), nv])
-       nv.enabled = camRef.current // وضعیت روشن/خاموش دوربین حفظ شود
-       /* جهتِ درخواستی ترجیح دارد — گزارش settings روی برخی گوشی‌ها undefined است */
-       facingRef.current = nv.getSettings?.().facingMode || ('facingMode' in video
-         ? (typeof video.facingMode === 'string' ? video.facingMode : (video.facingMode?.exact || video.facingMode?.ideal || flip))
-         : curFacing)
-       camDeviceIdRef.current = nv.getSettings?.().deviceId || ''
-       setCamDeviceId(camDeviceIdRef.current)
-       localStreamRef.current = nextStream
-       setLocalStream(nextStream)
-       rebuildOutgoing()
-       rememberDevices()
-       toast(isTouch ? (facingRef.current === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد') : 'دوربین عوض شد', 'success')
-       switchingRef.current = false
-       return
+       nv = t
+       usedVideo = video
+       break
      } catch { /* گزینه بعدی */ }
    }
-   /* هیچ دوربین دیگری واقعاً پیدا نشد — صادقانه بگو، استریم را به‌هم نزن */
-   toast(camDevices.length > 1 ? 'تغییر به آن دوربین ممکن نشد — از انتخابگر دوربین استفاده کنید' : 'دوربین دیگری روی این دستگاه پیدا نشد', 'info')
+
+   if (!nv) {
+     /* هیچ دوربین دیگری باز نشد — دوربین قبلی پس گرفته شود تا کاربر بی‌تصویر نماند */
+     toast(camDevices.length > 1 ? 'تغییر به آن دوربین ممکن نشد — دوربین قبلی دوباره وصل شد' : 'دوربین دیگری روی این دستگاه پیدا نشد', 'info')
+     if (releaseFirst) {
+       try {
+         const g = await gumVideo(curFacing, false)
+         const back = g.getVideoTracks()[0]
+         if (back) {
+           back.enabled = camRef.current
+           facingRef.current = back.getSettings?.().facingMode || curFacing
+           camDeviceIdRef.current = back.getSettings?.().deviceId || ''
+           setCamDeviceId(camDeviceIdRef.current)
+           const audio = localStreamRef.current?.getAudioTracks()[0]
+           localStreamRef.current = new MediaStream([...(audio ? [audio] : []), back])
+           setLocalStream(localStreamRef.current)
+         }
+       } catch { /* دوربین دیگر در دسترس نیست — رکوردر متوقف می‌ماند */ }
+       rebuildOutgoing()
+       rememberDevices()
+     }
+     switchingRef.current = false
+     return
+   }
+
+   /* دسکتاپ: ترک قبلی بعد از موفقیت دوربین جدید آزاد می‌شود (بدون سیاهی بین‌راهی) */
+   if (!releaseFirst) { try { oldTrack.stop() } catch { /* noop */ } }
+   const audio = localStreamRef.current?.getAudioTracks()[0]
+   nv.enabled = camRef.current // وضعیت روشن/خاموش دوربین حفظ شود
+   /* جهتِ درخواستی ترجیح دارد — گزارش settings روی برخی گوشی‌ها undefined است */
+   facingRef.current = nv.getSettings?.().facingMode || ('facingMode' in (usedVideo || {})
+     ? (typeof usedVideo.facingMode === 'string' ? usedVideo.facingMode : (usedVideo.facingMode?.exact || usedVideo.facingMode?.ideal || flip))
+     : curFacing)
+   camDeviceIdRef.current = nv.getSettings?.().deviceId || ''
+   setCamDeviceId(camDeviceIdRef.current)
+   localStreamRef.current = new MediaStream([...(audio ? [audio] : []), nv])
+   setLocalStream(localStreamRef.current)
+   rebuildOutgoing()
+   rememberDevices()
+   toast(isTouch ? (facingRef.current === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد') : 'دوربین عوض شد', 'success')
    switchingRef.current = false
  }
 
@@ -2100,7 +2173,33 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const endClassNow = () => {
    setEndedModal(false)
    if (isTeacher && recording) stopRecording() // فایل ضبط قبل از پایان، ذخیره شود
+   exitFullscreenNow()
    endLive(classId)
+ }
+ /** خروج دانش‌آموز از کلاس — قطع رسانه + پیمایش به صفحهٔ کلاس
+  *  [فیکس F39] قبلاً فقط مودال بیرون عنصر فول‌اسکرین بود و دکمه «کار نمی‌کرد» */
+ const exitClassNow = () => {
+   setEndedModal(false)
+   exitFullscreenNow()
+   stopChannel(camChRef.current)
+   stopChannel(scrChRef.current)
+   localStreamRef.current?.getTracks().forEach((t) => t.stop())
+   screenTrackRef.current?.stop()
+   req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
+   toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info')
+   nav(`/panel/student/classes/${classId}`)
+ }
+ /** خروج از فول‌اسکرین واقعی/شبه — قبل از پایان/خروج تا صفحهٔ بعدی عادی رندر شود */
+ const exitFullscreenNow = () => {
+   try {
+     const doc = document
+     if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+       if (doc.exitFullscreen) doc.exitFullscreen()?.catch?.(() => {})
+       else doc.webkitExitFullscreen?.()
+     }
+   } catch { /* noop */ }
+   setPseudoFs(false)
+   try { document.body.classList.remove('fs-lock') } catch { /* noop */ }
  }
  /** برگزاری جلسه جدید برای کلاسی که قبلاً تمام شده */
  const restartClass = () => {
@@ -2365,8 +2464,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const tFeed = !isTeacher ? feedInfo.t : null           // استریم دوربین/صدای مدرس (برای دانش‌آموز)
  const sFeeds = Object.entries(feedInfo).filter(([k]) => k !== 't' && k !== 'ts') // استریم دانش‌آموزانِ دارای اجازه
  const watchingBoard = board
- const watchingScreen = isTeacher ? screen : !!tsFeed
- const watchingFeed = !isTeacher && !watchingScreen && !!tFeed
+ /* [فیکس F39 — ریشه‌ی «باز کردن تخته صدا و تصویر را سیاه می‌کند»] وقتی تخته باز است
+  * صحنه تخته را نشان می‌دهد، نه فید را — پس watchingFeed/watchingScreen باید false
+  * شوند تا کاشی‌ها از نوار پایین «حذف» نشوند. قبلاً این شرط‌ها تخته را نمی‌دیدند →
+  * با باز شدن تخته، صدا و تصویر مدرس هیچ‌جا رندر نمی‌شد (صحنه تخته + نوار بدون کاشی) */
+ const watchingScreen = isTeacher ? screen : (!watchingBoard && !!tsFeed)
+ const watchingFeed = !isTeacher && !watchingScreen && !watchingBoard && !!tFeed
  const stageBusy = watchingBoard || watchingScreen || watchingFeed
 
  /* [فیکس F37-a] باگ بحرانی «دانش‌آموز صفحه را نمی‌بیند»: سرور برای فید اشتراک
@@ -2386,6 +2489,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    ...sFeeds.map(([uid, f]) => ({ key: uid, relay: true, f })),
  ]
  const canDraw = user && (!boardLocked || isTeacher)
+ /* [فیکس F39] دکمهٔ تعویض دوربین روی کاشی خودم — وقتی دستگاه بیش از یک دوربین دارد
+  *  یا دستگاه لمسی است (دوربین جلو/عقب)؛ تعویض باید یک لمسِ روی تصویر باشد */
+ const canFlip = !!localStream && (camDevices.length > 1 || (navigator.maxTouchPoints || 0) > 0)
 
  const ctl = (on) => `ctl ${on ? 'on' : ''}`
  const roleLabel = (r) => (r === 'teacher' ? 'مدرس' : r === 'admin' ? 'مدیر' : '')
@@ -2523,7 +2629,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      {allTiles.length ? allTiles.map((t) => (
        t.relay
          ? feedTile(t.key, t.f, allTiles.length <= 2)
-         : <VideoTile key={t.key} stream={t.stream} self={t.self} name={t.name} camOn={t.camOn} color={t.color} big={allTiles.length <= 2} />
+         : <VideoTile key={t.key} stream={t.stream} self={t.self} name={t.name} camOn={t.camOn} color={t.color} big={allTiles.length <= 2} onFlip={t.self && canFlip ? () => switchCam() : undefined} />
      )) : (
        <div className="live-tile">
          <Avatar name={classInfo?.teacher || 'مدرس'} color="grad-0" size={110} />
@@ -2596,7 +2702,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    <div className="cam-strip">
      {(localStream || !isTeacher) && (
        <div style={{ width: 128, flexShrink: 0 }}>
-         <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} />
+         <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} onFlip={canFlip ? () => switchCam() : undefined} />
        </div>
      )}
      {tFeed && !watchingFeed && feedTile('t', tFeed, false)}
@@ -2632,7 +2738,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    ))}
  </select>
  )}
- {isTeacher && (
+ {isTeacher && canShareScreen && (
  <button className={ctl(screen)} onClick={toggleScreenShare} aria-pressed={screen}>
  <Icon name="monitor" /> <span className="ctl-tip">{screen ? 'قطع اشتراک صفحه' : 'اشتراک صفحه سیستم'}</span>
  </button>
@@ -2664,6 +2770,36 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </button>
  )}
  </div>
+
+ {/* [فیکس F39] تایید پایان/خروج — داخل عنصر اتاق (roomRef) رندر می‌شود تا در
+     فول‌اسکرین واقعی و شبه‌فول‌اسکرین هم دیده شود؛ مودال قبلی بیرونِ عنصر
+     فول‌اسکرین بود و دکمه‌های پایان/خروج عملاً «کار نمی‌کردند» */}
+ {endedModal && (
+ <div className="room-confirm" onClick={(e) => { if (e.target === e.currentTarget) setEndedModal(false) }}>
+ <div className="room-confirm-card">
+ <div className="perm-ico" style={{ background: 'rgba(251,113,133,0.13)', color: 'var(--red)', borderColor: 'rgba(251,113,133,0.3)' }}>
+ <Icon name="logout" size={26} />
+ </div>
+ <b style={{ fontSize: 15.5 }}>{isTeacher ? 'پایان کلاس' : 'خروج از کلاس'}</b>
+ {isTeacher ? (
+ <p className="muted small" style={{ lineHeight: 1.9 }}>
+ مدت جلسه: <b dir="ltr">{mm}:{ss}</b> • {faNum(participants.length)} حاضر • {faNum(messages.length)} پیام<br />
+ کلاس برای همهٔ دانش‌آموزان پایان می‌یابد — ادامه می‌دهید؟
+ </p>
+ ) : (
+ <p className="muted small" style={{ lineHeight: 1.9 }}>از کلاس خارج می‌شوید؟ حضور و غیاب شما ثبت شده است.</p>
+ )}
+ <div className="modal-actions">
+ {isTeacher ? (
+ <button className="btn btn-primary" onClick={endClassNow}>ثبت و پایان</button>
+ ) : (
+ <button className="btn btn-primary" onClick={exitClassNow}>بله، خارج شو</button>
+ )}
+ <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت به کلاس</button>
+ </div>
+ </div>
+ </div>
+ )}
  </div>
 
  {/* [فیکس چیدمان موبایل] نوار بازکردن گفتگو — فقط وقتی چت جمع است (موبایل/فول‌اسکرین).
@@ -2734,42 +2870,6 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </div>
  </div>
  </div>
-
- {/* پایان کلاس */}
- <Modal open={endedModal} title={isTeacher ? 'پایان کلاس' : 'خروج از کلاس'} onClose={() => setEndedModal(false)}>
- {isTeacher ? (
- <>
- <p className="muted small mb16">خلاصه جلسه برای ثبت در پنل:</p>
- <div className="stat-cards" style={{ gridTemplateColumns: 'repeat(3,1fr)', marginBottom: 18 }}>
- <div className="card stat-card" style={{ padding: 14 }}><b className="sc-val">{mm}:{ss}</b><span className="sc-label">مدت کلاس</span></div>
- <div className="card stat-card" style={{ padding: 14 }}><b className="sc-val">{faNum(participants.length)}</b><span className="sc-label">حاضران</span></div>
- <div className="card stat-card" style={{ padding: 14 }}><b className="sc-val">{faNum(messages.length)}</b><span className="sc-label">پیام گفتگو</span></div>
- </div>
- <div className="modal-actions">
- <button className="btn btn-primary" onClick={endClassNow}>ثبت و پایان</button>
- <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت به کلاس</button>
- </div>
- </>
- ) : (
- <>
- <p className="muted small">از کلاس خارج می‌شوید؟ حضور و غیاب شما ثبت شده است.</p>
- <div className="modal-actions">
- <button className="btn btn-primary" onClick={() => {
-   setEndedModal(false)
-   stopChannel(camChRef.current)
-   stopChannel(scrChRef.current)
-   localStreamRef.current?.getTracks().forEach((t) => t.stop())
-   screenTrackRef.current?.stop()
-   req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
-   toast('از کلاس خارج شدید — حضور شما ثبت شد', 'info')
-   /* خروج واقعی از اتاق — قبلاً کاربر بعد از «خارج شو» در همان اتاق می‌ماند */
-   nav(`/panel/student/classes/${classId}`)
- }}>بله، خارج شو</button>
- <button className="btn btn-ghost" onClick={() => setEndedModal(false)}>بازگشت</button>
- </div>
- </>
- )}
- </Modal>
  </div>
  )
 }
