@@ -27,6 +27,10 @@ const { timingSafeEqual } = crypto
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
+/* [فیکس امنیتی S1] اعتماد به یک هاب پراکسی (Caddy/Vite/Nginx) — بدون این،
+   req.ip در production همیشه IP پروکسی می‌شد و کل کاربران با هم یک سبد
+   rate-limit مشترک می‌گرفتند (۵ فرم تماس در دقیقه برای «همهٔ سایت»!). */
+app.set('trust proxy', 1)
 app.use(cors())
 // برای تصویر پس‌زمینه وایت‌برد (base64) лимیت بالاتر لازم است
 app.use(express.json({ limit: '12mb' }))
@@ -42,11 +46,36 @@ const b64 = (buf) => Buffer.from(buf).toString('base64')
 process.on('uncaughtException', (err) => console.error('[crash-guard] uncaughtException:', err?.stack || err))
 process.on('unhandledRejection', (err) => console.error('[crash-guard] unhandledRejection:', err?.stack || err))
 
-/* ---------------- هدرهای امنیتی پایه ---------------- */
+/* ---------------- هدرهای امنیتی پایه ----------------
+   [فیکس امنیتی S2] هدرهای ضدکلیک‌جکینگ و CSP — سایت عمومی و در گوگل ایندکس می‌شود؛
+   CSP با توجه به SPA همین پروژه تنظیم شده: اسکریپت اینلاین فقط برای bootstrap تم و
+   JSON-LD سئو، رسانهٔ کلاس زنده Blob/MSE، فونت و تصویر سلف‌هاست. */
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), geolocation=()')
+  /* ضدکلیک‌جکینگ — سایت هرگز در iframe نباید بلاک می‌شود */
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "img-src 'self' data: blob:",
+      "style-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline'",
+      "media-src 'self' blob: mediastream:",
+      "connect-src 'self'",
+      "font-src 'self'",
+      "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; ')
+  )
+  /* HSTS فقط روی HTTPS — در dev/local بی‌اثر است و مزاحم نمی‌شود */
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https'
+  if (isHttps) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   next()
 })
 
@@ -1039,7 +1068,8 @@ app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api'
 
 /* [فیکس F27] دریافت خطاهای crash فرانت‌اند (ErrorBoundary) — قبلاً خطاهای
    production کاملاً بی‌ردپا بودند. لاگ در کنسول سرور کافی است (بدون PII) */
-app.post('/api/client-errors', express.json({ limit: '16kb' }), (req, res) => {
+/* [فیکس امنیتی S3] rate limit روی گزارش خطا — ضد اسپمِ لاگ سرور */
+app.post('/api/client-errors', rateLimit(30, 60_000), express.json({ limit: '16kb' }), (req, res) => {
   const { message, stack, path } = req.body || {}
   console.error(`[client-error] ${path || '?'} :: ${String(message || '').slice(0, 300)}\n${String(stack || '').slice(0, 1200)}`)
   res.json({ ok: true })

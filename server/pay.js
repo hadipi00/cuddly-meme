@@ -63,8 +63,13 @@ if (payMode() !== 'mock' && !process.env.PUBLIC_BASE_URL)
 
 /* origin درخواست جاری — در حالت mock مبنای ریدایرکت‌ها (همان جایی که مرورگر است) */
 export const reqOrigin = (req) => {
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http'
-  const host = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${process.env.PORT || 4000}`
+  /* [فیکس امنیتی S4] ضد Host-header injection — مقدار هدرها هرگز مستقیم در
+     redirectUrl ساخته‌شده برای مرورگر نمی‌رود: فقط https/http و فقط کاراکترهای
+     مجاز hostname؛ در غیر این صورت به PUBLIC_BASE (منبع معتبر) برمی‌گردیم. */
+  const proto = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' ? 'https' : 'http'
+  const hostRaw = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+  const host = /^[a-zA-Z0-9.\-\[\]:]+$/.test(hostRaw) ? hostRaw : ''
+  if (!host) return PUBLIC_BASE
   return `${proto}://${host}`
 }
 
@@ -334,9 +339,12 @@ export async function startZarinPayment({ user, lines, total, description, meta,
   let redirectUrl = null
   if (payMode() === 'mock') {
     /* درگاه آزمایشی محلی — همان قرارداد callback (Authority/Status)؛
-       مقصد ریدایرکت = origin مرورگرِ شروع‌کننده پرداخت */
+       [فیکس امنیتی S4] مقصد ریدایرکت عمداً **مسیر نسبی** است: قبلاً base از
+       هدرهای درخواست (X-Forwarded-Host/Host) ساخته می‌شد و مهاجم می‌توانست با
+       هدر جعلی، redirectUrl را به دامنهٔ خودش بفرستد (فیشینگ درگاه).
+       مسیر نسبی همیشه روی همان اصلی که مرورگر در آن است رزولو می‌شود. */
     authority = 'MOCK' + Math.random().toString(36).slice(2, 12).toUpperCase()
-    redirectUrl = `${origin || PUBLIC_BASE}/api/pay/mock-gateway?authority=${authority}&code=${code}&amount=${total}`
+    redirectUrl = `/api/pay/mock-gateway?authority=${authority}&code=${code}&amount=${total}`
   } else {
     let phone = '', email = ''
     try { const m = JSON.parse(meta || '{}'); phone = normalizePhone(m.phone) || ''; email = m.email || '' } catch { }

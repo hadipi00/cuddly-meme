@@ -213,9 +213,14 @@ export { JWT_SECRET }
    [فیکس B26] با DISABLE_SEED=1 در env، داده‌های دمو (با رمز عمومی) ساخته نمی‌شوند —
    برای deploy واقعی؛ در حالت عادی دمو باقی می‌ماند */
 const SEED_DISABLED = process.env.DISABLE_SEED === '1'
+/* [فیکس امنیتی S5] ایمنی production — با NODE_ENV=production داده‌های دمو
+   (رمز عمومی «12345678» برای همهٔ نقش‌ها!) به‌طور پیش‌فرض ساخته نمی‌شوند؛
+   اگر واقعاً خواستید در production دموی اولیه داشته باشید، ALLOW_SEED=1 بگذارید. */
+const IS_PROD = process.env.NODE_ENV === 'production'
+const SEED_ALLOWED_IN_PROD = process.env.ALLOW_SEED === '1'
 const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n
-if (userCount === 0 && SEED_DISABLED) {
-  console.log('[db] seeding disabled via DISABLE_SEED=1 — production mode: no demo accounts')
+if (userCount === 0 && (SEED_DISABLED || (IS_PROD && !SEED_ALLOWED_IN_PROD))) {
+  console.log('[db] seeding skipped — production mode: no demo accounts (برای ساخت ادمین واقعی، ثبت‌نام اولین کاربر را از API بگیرید و نقش را مستقیم در DB ارتقا دهید، یا ALLOW_SEED=1 بگذارید)')
 } else if (userCount === 0) {
   console.log('[db] seeding initial data…')
   const now = Date.now()
