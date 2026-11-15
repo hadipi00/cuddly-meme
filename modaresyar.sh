@@ -7,7 +7,10 @@ set -uo pipefail
 
 SERVICE="modaresyar"
 DEST="${MODARESYAR_DEST:-/opt/modaresyar}"
-BK_DIR="/root/${SERVICE}-backups"
+# [حالت روت] بکاپ‌ها در /root؛ در اجرای غیر-روت (فقط تست) در $HOME
+BK_BASE="/root"
+[ "$(id -u)" != 0 ] && BK_BASE="${HOME:-/tmp}"
+BK_DIR="${BK_BASE}/${SERVICE}-backups"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

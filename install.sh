@@ -2,7 +2,7 @@
 # =====================================================================
 #  مدرس‌یار (ModaresYar) — نصب‌کنندهٔ آسان برای سرور Debian/Ubuntu
 # =====================================================================
-#  اجرا (با دسترسی روت، داخل پوشهٔ سورس):
+#  اجرا (با کاربر روت، داخل پوشهٔ سورس — sudo لازم نیست، همه‌چیز روت اجرا می‌شود):
 #      bash install.sh
 #
 #  این اسکریپت:
@@ -60,8 +60,21 @@ if [ "${1:-}" = "--uninstall" ]; then
     systemctl daemon-reload 2>/dev/null || true
     ok "سرویس systemd حذف شد"
   fi
+  # توقف پروسهٔ بدون-systemd (حالت تست) — قبلاً فقط systemctl بسته می‌شد و
+  # پروسهٔ node روی پورت باقی می‌ماند
+  if [ -f "$DEST/${SERVICE}.pid" ]; then
+    P="$(cat "$DEST/${SERVICE}.pid" 2>/dev/null || true)"
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+      kill "$P" 2>/dev/null || true
+      for _ in $(seq 1 5); do kill -0 "$P" 2>/dev/null || break; sleep 1; done
+      ok "پروسهٔ بدون-systemd متوقف شد (pid=$P)"
+    fi
+  fi
   if [ -d "$DEST/server/data" ] || [ -d "$DEST/server/uploads" ]; then
-    BK="/root/${SERVICE}-backups/uninstall-$(date +%Y%m%d-%H%M%S)"
+    # [حالت روت] بکاپ‌ها در /root نگه داشته می‌شوند؛ در اجرای غیر-روت (فقط تست) در $HOME
+    BK_BASE="/root"
+    [ "$IS_ROOT" != 1 ] && BK_BASE="${HOME:-/tmp}"
+    BK="${BK_BASE}/${SERVICE}-backups/uninstall-$(date +%Y%m%d-%H%M%S)"
     if mkdir -p "$BK" 2>/dev/null; then
       tar -czf "$BK/data-and-uploads.tar.gz" -C "$DEST/server" data uploads 2>/dev/null || true
       ok "بکاپ دیتابیس: $BK/data-and-uploads.tar.gz"
@@ -87,7 +100,7 @@ printf '  ╚══════════════════════�
 printf '%s' "$C_0"
 
 if [ "$IS_ROOT" != 1 ] && [ "${MODARESYAR_ALLOW_NON_ROOT:-0}" != "1" ]; then
-  die "این اسکریپت باید با دسترسی روت اجرا شود:  sudo bash install.sh"
+  die "این اسکریپت باید با کاربر روت اجرا شود:  bash install.sh   (sudo لازم نیست — روی سرور فقط با روت کار می‌کنیم)"
 fi
 
 [ -f "$SRC/package.json" ] || die "فایل package.json در $(pwd) پیدا نشد — این اسکریپت را داخل پوشهٔ سورس مدرس‌یار اجرا کنید"
@@ -186,11 +199,13 @@ fi
 port_busy "$PORT" && die "پورت $PORT اشغال است — سرویس دیگری روی این پورت هست (در $DEST/.env مقدار PORT را عوض کنید)"
 
 mkdir -p "$DEST"
+# [حالت فقط-روت] --no-same-owner: مالکیت همهٔ فایل‌ها قطعی روت می‌شود — اگر سورس با
+# uid دیگری آپلود/اکسترکت شده باشد، مالکیت قاطی به /opt منتقل نمی‌شود
 tar -C "$SRC" -cf - \
   --exclude='node_modules' --exclude='server/data' --exclude='server/uploads' \
   --exclude='dist' --exclude='.git' --exclude='.env' --exclude='.zscripts' \
   --exclude='*.log' --exclude='upload' --exclude='*.pid' \
-  . | tar -C "$DEST" -xf -
+  . | tar -C "$DEST" --no-same-owner -xf -
 ok "سورس کپی شد (دیتابیس/آپلودهای قبلی حفظ شدند)"
 
 # =====================================================================
