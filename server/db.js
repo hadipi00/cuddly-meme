@@ -131,6 +131,14 @@ try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFA
 /* [فیکس B26-UI] پرچم «اجبار تغییر رمز اولین ورود» برای اکانت‌های دموی با رمز عمومی */
 try { db.exec('ALTER TABLE users ADD COLUMN must_change_pw INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
+/* بایگانی فایل ضبط جلسه روی سرور — آپلود پاره‌پاره از اتاق کلاس (الگوی Egress سبک):
+ * rec_file = نام فایل در server/uploads/recordings • rec_size/rec_mime = مشخصات فایل.
+ * recording_url پس از بایگانی، خودکار به URL پلتفرمی همان فایل اشاره می‌کند
+ * (معلم می‌تواند بعداً لینک دیتاسنتر خارجی را جایگزین کند). */
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN rec_file TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN rec_size INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+try { db.exec('ALTER TABLE class_sessions ADD COLUMN rec_mime TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
+
 /* ---------------- [مهاجرت CRM] ستون‌های تلفن و نام کاربری ----------------
  * شماره موبایل ستون فقرات CRM مشتریان + ورود با کد پیامکی است؛
  * username هم برای ورود سریع «نام کاربری + رمز» لازم است. */

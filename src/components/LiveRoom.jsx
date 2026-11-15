@@ -6,6 +6,7 @@ import { Avatar } from './ui'
 import { useApp } from '../store/AppContext'
 import { faNum } from '../utils/format'
 import { req, authedFetch, getToken } from '../services/http'
+import { openCamera, openMic, listMediaDevices, applySink, loadDevPrefs, saveDevPrefs } from '../lib/devices'
 
 /**
  * اتاق کلاس زنده — رله رسانه با «دو کانال مستقل» (بدون WebRTC)
@@ -568,7 +569,7 @@ function createTicker(ms, fn) {
  *  خاموشی دوربین فقط یک لایه روی تصویر می‌گذارد (تا srcObject با باز/بستن از دست نرود)
  *  [فیکس F39] onFlip — دکمهٔ شناور تعویض دوربین (جلو/عقب) روی کاشی خودم؛
  *  تعویض دوربین در موبایل باید «یک لمسِ روی تصویر» باشد نه دفن در نوار کنترل */
-function VideoTile({ stream, self, name, camOn, color, big, onFlip }) {
+function VideoTile({ stream, self, name, camOn, color, big, onFlip, sink }) {
   const ref = useRef(null)
   const hasVid = !!stream && stream.getVideoTracks().length > 0
   useEffect(() => {
@@ -577,7 +578,8 @@ function VideoTile({ stream, self, name, camOn, color, big, onFlip }) {
       if (v.srcObject !== stream) v.srcObject = stream
       v.play?.().catch(() => {})
     }
-  }, [stream, camOn])
+    if (v && !self) applySink(v, sink) // خروجی صدا — فقط برای کاشی‌های دیگران
+  }, [stream, camOn, sink, self])
   return (
     <div className={`cam-tile ${big ? 'big' : ''} ${self ? 'self' : ''}`}>
       {stream && hasVid ? (
@@ -626,13 +628,14 @@ if (typeof document !== 'undefined' && !pendingUnmute.armed) {
  *     پس تصویر مدرس قطعاً نمایش داده می‌شود (باگ اصلی «هیچی برای دانش‌آموز نمی‌آمد»)
  *  ۲) صدا با اولین لمس/کلیک کاربر فعال می‌شود (سیاست autoplay مرورگرها)
  *  ۳) پلیر یا MSE است یا بلابی (پشتیبانی همه مرورگرها از جمله iOS قدیمی) */
-function RelayVideo({ player, name, color, camOff, screen, big }) {
+function RelayVideo({ player, name, color, camOff, screen, big, sink }) {
   const ref = useRef(null)
   const [needTap, setNeedTap] = useState(false)
   useEffect(() => {
     const v = ref.current
     if (!v || !player || !player.alive) return // پلیر مرده → منتظر پلیر تازه از polling
     player.attach(v)
+    applySink(v, sink) // انتخاب اسپیکر کاربر — با هر تغییر دوباره اعمال می‌شود
     /* فعال‌سازی صدا: اگر کاربر قبلاً تعامل کرده مستقیم وصل می‌شود؛
      * وگرنه بی‌صدا شروع کن (autoplay بی‌صدا همیشه مجاز است) تا اولین لمس */
     const unmute = () => {
@@ -649,7 +652,7 @@ function RelayVideo({ player, name, color, camOff, screen, big }) {
       setNeedTap(true)
     }
     return () => { pendingUnmute.delete(unmute) }
-  }, [player, camOff])
+  }, [player, camOff, sink])
   const unmuteNow = () => {
     const v = ref.current
     if (!v) return
@@ -787,7 +790,68 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
   )
 }
 
-export default function LiveRoom({ variant = 'teacher', classInfo }) {
+/**
+ * مودال «تنظیمات دستگاه» — الگوی کاویمو: تعویض زندهٔ دوربین، میکروفون و اسپیکر
+ * در میانهٔ کلاس، بدون خروج از اتاق. تعویض دستگاه با همان زنجیرهٔ fallback امن
+ * تعویض دوربین/میکروفون انجام می‌شود؛ خروجی صدا با setSinkId لحظه‌ای اعمال می‌شود.
+ */
+function DevModal({ onClose, camDevices, camDeviceId, micDevices, micDeviceId, spkrs, spkId,
+  onSwitchCam, onSwitchMic, onSwitchSpk, autoRec, onToggleAutoRec, isTeacher, counts }) {
+  return (
+    <div className="dev-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="dev-modal">
+        <div className="between mb12">
+          <b style={{ fontSize: 15 }}><Icon name="settings" size={16} /> تنظیمات دستگاه</b>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} aria-label="بستن"><Icon name="x" size={15} /></button>
+        </div>
+        <p className="muted small" style={{ lineHeight: 1.9, marginTop: -4 }}>
+          دستگاه‌ها بدون قطع شدن کلاس عوض می‌شوند — تصویر برای دانش‌آموزان با چند ثانیه تأخیر به کیفیت جدید می‌رود.
+          {counts ? <b> • {faNum(counts.v)} دوربین / {faNum(counts.a)} میکروفون شناسایی شده</b> : null}
+        </p>
+
+        <label className="dev-field">
+          <span><Icon name="camera" size={14} /> دوربین</span>
+          <select className="input" value={camDeviceId} onChange={(e) => onSwitchCam(e.target.value)} dir="ltr">
+            {!camDeviceId && <option value="">— انتخاب نشده —</option>}
+            {camDevices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `دوربین ${faNum(i + 1)}`}</option>)}
+          </select>
+        </label>
+
+        <label className="dev-field">
+          <span><Icon name="mic" size={14} /> میکروفون</span>
+          <select className="input" value={micDeviceId} onChange={(e) => onSwitchMic(e.target.value)} dir="ltr">
+            {!micDeviceId && <option value="">— انتخاب نشده —</option>}
+            {micDevices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `میکروفون ${faNum(i + 1)}`}</option>)}
+          </select>
+        </label>
+
+        {spkrs.length > 0 && (
+          <label className="dev-field">
+            <span><Icon name="volume" size={14} /> خروجی صدا (اسپیکر/هدفون)</span>
+            <select className="input" value={spkId} onChange={(e) => onSwitchSpk(e.target.value)} dir="ltr">
+              {!spkId && <option value="">پیش‌فرض سیستم</option>}
+              {spkrs.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `اسپیکر ${faNum(i + 1)}`}</option>)}
+            </select>
+          </label>
+        )}
+
+        {isTeacher && (
+          <button className={`dev-autorec ${autoRec ? 'on' : ''}`} onClick={onToggleAutoRec}>
+            <Icon name="activity" size={15} />
+            <span>ضبط خودکار جلسه — در پایان، فایل روی سرور بایگانی و لینکش برای دانش‌آموزان ثبت می‌شود</span>
+            <b>{autoRec ? 'روشن' : 'خاموش'}</b>
+          </button>
+        )}
+
+        <p className="muted" style={{ fontSize: 10.5, marginTop: 4 }}>
+          وب‌کم یا میکروفون تازه وصل کردید؟ بستن این مودال و باز کردن دوباره، لیست را تازه می‌کند (دستگاه جدید خودکار شناسایی می‌شود).
+        </p>
+      </div>
+    </div>
+  )
+}
+
+export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  const isTeacher = variant === 'teacher'
  const { user, toast, startLive, endLive } = useApp()
  const nav = useNavigate()
@@ -827,6 +891,24 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  const [camDevices, setCamDevices] = useState([])
  const [camDeviceId, setCamDeviceId] = useState('')
  const camDeviceIdRef = useRef('')
+
+ /* ---------- انتخاب دستگاه‌ها (الگوی کاویمو) — میکروفون/اسپیکر + مودال تنظیمات ----------
+  * انتخاب‌های صفحهٔ پیش‌تست تجهیزات اینجا مصرف می‌شوند؛ داخل کلاس هم از مودال
+  * «تنظیمات دستگاه» (دکمهٔ چرخ‌دنده) قابل تعویض است — بدون خروج از کلاس */
+ const pref = useRef({ ...(loadDevPrefs()), ...(devPrefs || {}) })
+ const [micDevices, setMicDevices] = useState([])
+ const [micDeviceId, setMicDeviceId] = useState('')
+ const micDeviceIdRef = useRef('')
+ const [spkrs, setSpkrs] = useState([])
+ const [spkId, setSpkId] = useState(pref.current.spk || '')
+ const spkIdRef = useRef(''); spkIdRef.current = spkId
+ const [devModal, setDevModal] = useState(false)
+ const micSwitchingRef = useRef(false)
+ /* ضبط خودکار جلسه (از پیش‌تست یا ذخیرهٔ قبلی) */
+ const autoRecRef = useRef(pref.current.autoRec !== false)
+ const recAutoDoneRef = useRef(false)
+ /* آپلود ضبط به سرور — { active, prog, err, done: {url, size} } */
+ const [recUpload, setRecUpload] = useState({ active: false, prog: 0, err: null, done: null })
 
  /* ---------- رله رسانه — فرستنده (دو کانال مستقل: دوربین + صفحه) ---------- */
  /* [فیکس F36-c] کانال‌ها: cam = دوربین+میکروفون، scr = اشتراک صفحه (+صدای تب).
@@ -974,36 +1056,26 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setMediaDiag(d)
  }
 
- /** گرفتن دوربین با facingMode دقیق (جلو/عقب موبایل) + زنجیره fallback
-  *  دوربین دقیق → facingMode عادی → هر دوربینی — تا هیچ‌وقت «پیدا نشدن» دروغ نگوید */
- const gumVideo = async (facing, wantAudio = true) => {
-   const base = { width: { ideal: 1280 }, height: { ideal: 720 } }
-   const tries = []
-   if (facing) {
-     tries.push({ ...base, facingMode: { exact: facing } })
-     tries.push({ ...base, facingMode: facing })
-   }
-   tries.push(base)
-   let lastErr = null
-   for (const video of tries) {
-     try {
-       return await navigator.mediaDevices.getUserMedia({
-         video,
-         audio: wantAudio ? { echoCancellation: true, noiseSuppression: true } : false,
-       })
-     } catch (e) { lastErr = e }
-   }
-   throw lastErr
- }
+ /** گرفتن دوربین با deviceId دقیق / facingMode + زنجیره fallback
+  *  دوربین دقیق → facingMode → هر دوربین — تا هیچ‌وقت «پیدا نشدن» دروغ نگوید
+  *  (منطق در lib/devices — مشترک با صفحهٔ پیش‌تست تجهیزات) */
+ const gumVideo = async (facing, wantAudio = true, deviceId = '') =>
+   openCamera({ deviceId: deviceId || undefined, facing, wantAudio })
 
  const rememberDevices = () => {
    navigator.mediaDevices.enumerateDevices()
      .then((ds) => {
        const cams = ds.filter((d) => d.kind === 'videoinput' && d.deviceId)
+       const mics = ds.filter((d) => d.kind === 'audioinput' && d.deviceId)
+       const spk = ds.filter((d) => d.kind === 'audiooutput' && d.deviceId)
        devicesRef.current = cams
        setCamDevices(cams) // [فیکس F37-b] انتخابگر دوربین نیاز به state دارد، نه فقط ref
+       setMicDevices(mics) // انتخابگر میکروفون — مودال تنظیمات دستگاه
+       setSpkrs(spk) // انتخاب اسپیکر — فقط کروم‌پایه‌ها
        const st = localStreamRef.current?.getVideoTracks()[0]?.getSettings?.()
        if (st?.deviceId) { camDeviceIdRef.current = st.deviceId; setCamDeviceId(st.deviceId) }
+       const sa = localStreamRef.current?.getAudioTracks()[0]?.getSettings?.()
+       if (sa?.deviceId) { micDeviceIdRef.current = sa.deviceId; setMicDeviceId(sa.deviceId) }
      })
      .catch(() => {})
  }
@@ -1024,7 +1096,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    setPermBusy(true)
    try {
-     const s = await gumVideo(facingRef.current)
+     /* دستگاه انتخابی کاربر در پیش‌تست/مودال تنظیمات — با fallback کامل */
+     const s = await gumVideo(facingRef.current, true, prefCamId())
      localStreamRef.current?.getTracks().forEach((t) => t.stop())
      const vt = s.getVideoTracks()[0]
      if (vt) { facingRef.current = vt.getSettings?.().facingMode || facingRef.current; vt.enabled = camRef.current }
@@ -1043,13 +1116,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setPermBusy(false)
  }
 
+ /** deviceId دوربین انتخابی — انتخاب پیش‌تست/مودال؛ بعد از هر تعویض به‌روز می‌شود */
+ const prefCamId = () => camDeviceIdRef.current || pref.current.cam || ''
+
  /* تلاش خودکار اول — فقط برای مدرس؛ دانش‌آموز باید اول از مدرس اجازه بگیرد */
  useEffect(() => {
    let cancelled = false
    if (!isTeacher) return
    if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    navigator.mediaDevices.getUserMedia({
-     video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+     /* دستگاه انتخابی کاربر در پیش‌تست تجهیزات — دقیق؛ با شکست، fallback در rebuildOutgoing */
+     video: { deviceId: prefCamId() ? { exact: prefCamId() } : undefined, facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
      audio: { echoCancellation: true, noiseSuppression: true },
    }).then((s) => {
      if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
@@ -1062,6 +1139,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      rememberDevices()
    }).catch(async (e) => {
      if (cancelled) return
+     /* deviceId دقیق نپذیرفته شد (دستگاه جابه‌جا شده) → یک بار بدون محدودیت */
+     try {
+       const s2 = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: true, noiseSuppression: true } })
+       if (cancelled) { s2.getTracks().forEach((t) => t.stop()); return }
+       localStreamRef.current = s2
+       setLocalStream(s2)
+       setMediaErr(null)
+       rebuildOutgoing()
+       rememberDevices()
+       return
+     } catch { /* خطای اصلی گزارش می‌شود */ }
      setMediaErr(classifyMediaErr(e))
      await collectMediaDiag(e)
    })
@@ -1755,7 +1843,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    setSending(false)
  }
 
- /* ---------- عملیات رسانه ---------- */
+  /* ---------- عملیات رسانه ---------- */
+
+ /* تغییر وضعیت «ضبط خودکار جلسه» — از مودال تنظیمات دستگاه؛ اگر کلاس زنده است
+  * و ضبط هنوز شروع نشده، همین لحظه هم شروع می‌شود */
+ const toggleAutoRecPref = () => {
+   const nv = !autoRecRef.current
+   autoRecRef.current = nv
+   pref.current.autoRec = nv
+   saveDevPrefs({ autoRec: nv })
+   if (nv && isTeacher && live?.status === 'live' && !recording && !recRef.current && (localStreamRef.current || screenTrackRef.current)) startRecording()
+   toast(nv ? 'ضبط خودکار جلسه روشن شد' : 'ضبط خودکار جلسه خاموش شد', 'info')
+ }
+
 
  /* درخواست اجازه صدا/تصویر از مدرس — فقط با کلیک خود دانش‌آموز (دست بلند کردن)؛
     ورود به کلاس هیچ‌وقت خودکار دست را بلند نمی‌کند */
@@ -1946,6 +2046,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      ? (typeof usedVideo.facingMode === 'string' ? usedVideo.facingMode : (usedVideo.facingMode?.exact || usedVideo.facingMode?.ideal || flip))
      : curFacing)
    camDeviceIdRef.current = nv.getSettings?.().deviceId || ''
+   pref.current.cam = camDeviceIdRef.current
+   saveDevPrefs({ cam: camDeviceIdRef.current })
    setCamDeviceId(camDeviceIdRef.current)
    localStreamRef.current = new MediaStream([...(audio ? [audio] : []), nv])
    setLocalStream(localStreamRef.current)
@@ -1953,6 +2055,41 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    rememberDevices()
    toast(isTouch ? (facingRef.current === 'environment' ? 'دوربین عقب فعال شد' : 'دوربین جلو فعال شد') : 'دوربین عوض شد', 'success')
    switchingRef.current = false
+ }
+
+ /* ---------- تعویض میکروفون [جدید — الگوی کاویمو] ----------
+  * ترک صدای قبلی آزاد و میکروفون انتخابی گرفته می‌شود؛ رله با rebuildOutgoing
+  * سشن تازه می‌سازد (گیرنده‌ها با init تازه خودترمیم می‌شوند — همان جریان تعویض دوربین) */
+ const switchMic = async (explicitId) => {
+   if (micSwitchingRef.current) return
+   if (!isTeacher && !canSpeakRef.current) { requestSpeakPermission(); return }
+   micSwitchingRef.current = true
+   try {
+     const old = localStreamRef.current?.getAudioTracks()[0]
+     const g = await openMic({ deviceId: explicitId || undefined })
+     const at = g.getAudioTracks()[0]
+     if (!at) throw new Error('no-track')
+     at.enabled = micRef.current
+     if (old) {
+       try { old.stop() } catch { /* noop */ }
+       try { localStreamRef.current?.removeTrack(old) } catch { /* noop */ }
+     }
+     if (localStreamRef.current) localStreamRef.current.addTrack(at)
+     else { localStreamRef.current = g; setLocalStream(g) }
+     micDeviceIdRef.current = at.getSettings?.().deviceId || explicitId || ''
+     setMicDeviceId(micDeviceIdRef.current)
+     pref.current.mic = micDeviceIdRef.current
+     saveDevPrefs({ mic: micDeviceIdRef.current })
+     setMediaErr(null)
+     setMediaSkipped(false)
+     setMediaDiag((d) => ({ ...d, audioCount: 1, lastError: null }))
+     rebuildOutgoing()
+     rememberDevices()
+     toast('میکروفون عوض شد', 'success')
+   } catch {
+     toast('تغییر میکروفون ممکن نشد — میکروفون قبلی فعال ماند', 'error')
+   }
+   micSwitchingRef.current = false
  }
 
 /* ---------- تمام‌صفحه [فیکس F36-b] ----------
@@ -2020,11 +2157,42 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
 
  /* ---------- ضبط واقعی کلاس (MediaRecorder) ----------
   * تصویر (اشتراک صفحه اگر فعال باشد، وگرنه دوربین) + صدای میکروفون ضبط می‌شود؛
-  * در پایان، فایل ویدیو روی دستگاه مدرس دانلود می‌شود. */
+  * در پایان، فایل دو جا می‌رود:
+  *   ۱) آپلود پاره‌پاره (تکه‌های ۳ مگابایتی) به سرور → بایگانی جلسهٔ همان کلاس
+  *      → لینک مستقیم پلتفرمی برای دانش‌آموزان همان جلسه ثبت می‌شود
+  *   ۲) دانلود روی دستگاه مدرس (همیشه — حتی اگر آپلود شکست بخورد) */
  const stopRecording = () => {
    const rec = recRef.current
    if (rec && rec.state !== 'inactive') { try { rec.stop() } catch { /* noop */ } }
    else setRecording(false)
+ }
+
+ /** آپلود پاره‌پارهٔ فایل ضبط به سرور — مقاوم: هر تکه ۳ تلاش دارد؛ آفست واقعی سرور
+  *  بعد از هر تکه برگردانده می‌شود تا هیچ تکه‌ای دو بار یا جاافتاده ثبت نشود */
+ const uploadRecording = async (blob) => {
+   const s = await req(`/classes/${classId}/recordings/init`, { method: 'POST', body: { size: blob.size, mime: blob.type || '', startedAt: recStartRef.current || 0 } })
+   const sid = s.sid
+   let off = 0
+   const CH = 3 * 1024 * 1024
+   while (off < blob.size) {
+     const piece = blob.slice(off, Math.min(blob.size, off + CH))
+     let ok = false
+     for (let i = 0; i < 3 && !ok; i++) {
+       try {
+         const res = await authedFetch(`/api/classes/${classId}/recordings/${sid}/part?off=${off}`, {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/octet-stream' },
+           body: piece,
+         })
+         if (res.ok) { const j = await res.json(); off = Number(j.off) || (off + piece.size); ok = true }
+       } catch { /* شبکه — تلاش دوباره */ }
+       if (!ok) await new Promise((r) => setTimeout(r, 400 * (i + 1)))
+     }
+     if (!ok) throw new Error('part-failed')
+     setRecUpload((u) => ({ ...u, prog: Math.min(99, Math.round((off / Math.max(1, blob.size)) * 100)) }))
+   }
+   const fin = await req(`/classes/${classId}/recordings/${sid}/finish`, { method: 'POST' })
+   return fin
  }
 
  const startRecording = () => {
@@ -2047,7 +2215,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 1_500_000 } : undefined)
      recChunksRef.current = []
      rec.ondataavailable = (e) => { if (e.data?.size) recChunksRef.current.push(e.data) }
-     rec.onstop = () => {
+     rec.onstop = async () => {
        recSourceRef.current?.removeEventListener?.('ended', stopRecording)
        recSourceRef.current = null
        recRef.current = null
@@ -2055,6 +2223,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
        const blob = new Blob(recChunksRef.current, { type })
        recChunksRef.current = []
        const ext = type.includes('mp4') ? 'mp4' : 'webm' // سافاری mp4 ضبط می‌کند — پسوند درست
+       /* ۱) آپلود به سرور (بایگانی جلسه + لینک مستقیم دانش‌آموزها) — پس‌زمینه؛
+             اگر طولانی شد کاربر منتظر نمی‌ماند، پیشرفت در نوار وضعیت دیده می‌شود */
+       if (blob.size > 8 * 1024 * 1024 && classId) {
+         setRecUpload({ active: true, prog: 0, err: null, done: null })
+         uploadRecording(blob).then((r) => {
+           setRecUpload({ active: false, prog: 100, err: null, done: { url: r.url, size: blob.size } })
+           toast('ضبط جلسه روی سرور ذخیره شد — لینک مستقیم برای دانش‌آموزان همین جلسه ثبت شد ✓', 'success')
+         }).catch(() => {
+           setRecUpload((u) => ({ ...u, active: false, err: true }))
+           toast('آپلود ضبط به سرور ناموفق بود — فایل روی دستگاه شما ذخیره شده؛ بعداً دوباره تلاش کنید یا لینک دیتاسنتر را در «مدیریت کلاس» ثبت کنید', 'error')
+         })
+       }
+       /* ۲) دانلود محلی روی دستگاه مدرس — همیشه (الگوی قبلی حفظ شد) */
        try {
          const url = URL.createObjectURL(blob)
          const a = document.createElement('a')
@@ -2067,7 +2248,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
          setTimeout(() => URL.revokeObjectURL(url), 120_000)
        } catch { /* noop */ }
        setRecording(false)
-       toast('فایل ضبط دانلود شد — لینک مستقیم آن را در «مدیریت کلاس» برای دانش‌آموزها ثبت کنید', 'info')
+       toast('ضبط تمام شد — هم روی دستگاه شما دانلود شد و هم در حال بایگانی روی سرور است', 'info')
      }
      rec.onerror = () => { setRecording(false); toast('ضبط با خطا متوقف شد', 'error') }
      rec.start(2000)
@@ -2077,7 +2258,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
      setRecSecs(0)
      setRecording(true)
      if (vTrack) vTrack.addEventListener('ended', stopRecording)
-     toast('ضبط شروع شد — فایل ویدیو روی همین دستگاه شما ذخیره می‌شود', 'info')
+     toast('ضبط شروع شد — در پایان، فایل روی دستگاه شما ذخیره و روی سرور بایگانی می‌شود', 'info')
    } catch { toast('شروع ضبط ممکن نشد', 'error') }
  }
 
@@ -2087,6 +2268,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
    const t = setInterval(() => setRecSecs((s) => s + 1), 1000)
    return () => clearInterval(t)
  }, [recording])
+
+ /* ---------- ضبط خودکار جلسه [جدید — الگوی Egress ولی سمت دستگاه مدرس] ----------
+  * با زنده شدن کلاس و آماده بودن رسانه، ضبط خودکار شروع می‌شود (اگر کاربر در
+  * پیش‌تست/مودال روشن گذاشته باشد) — یک بار در هر جلسه؛ پایان کلاس خودش متوقف می‌کند */
+ useEffect(() => {
+   if (!isTeacher || live?.status !== 'live' || recAutoDoneRef.current) return
+   if (!autoRecRef.current) { recAutoDoneRef.current = true; return }
+   if (recording || recRef.current) return
+   if (!localStreamRef.current && !screenTrackRef.current) return
+   recAutoDoneRef.current = true
+   startRecording()
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [isTeacher, live?.status, recording])
 
  /* ---------- اشتراک صفحه (مدرس) — فید مستقل [فیکس F36-c] ----------
   * قبلاً تصویر صفحه جای ترک دوربین را در «همان یک رکوردر» می‌گرفت؛ نتیجه:
@@ -2480,7 +2674,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
   * RelayVideo با «عنصر ویدیوی کاملاً تازه» remount می‌شود (قانون یک‌MS-یک‌عنصر:
   * MediaSource بازی هرگز به عنصر دوم وصل نمی‌شود؛ پایپ‌لاین تمیز = بدون sb-error) */
  const feedTile = (key, f, big) => (
-   <RelayVideo key={`${key}:${f.pv ?? 0}`} player={feedPlayersRef.current.get(key)} name={f.name} color={f.color} camOff={!f.cam && !f.screen} screen={f.screen} big={big} />
+   <RelayVideo key={`${key}:${f.pv ?? 0}`} player={feedPlayersRef.current.get(key)} name={f.name} color={f.color} camOff={!f.cam && !f.screen} screen={f.screen} big={big} sink={spkId} />
  )
 
  /* کاشی‌های حالت عادی: رسانه خودم + استریم دانش‌آموزان (برای مدرس) یا استریم بقیه (برای دانش‌آموز) */
@@ -2549,8 +2743,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  ) : tFeed ? (
  <span className="media-chip ok"><i className="dot" /> پخش زندهٔ مدرس فعال است ✓ (صدا/تصویر) — برای شنیدن صدا یک بار صفحه را لمس/کلیک کنید</span>
  ) : (
- <span className="media-chip warn"><i className="dot" /> در انتظار پخش زندهٔ مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه، همین‌جا نمایش داده می‌شود</span>
- )
+<span className="media-chip warn"><i className="dot" /> در انتظار پخش زندهٔ مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه، همین‌جا نمایش داده می‌شود</span>
+)
+)}
+ {isTeacher && recUpload.active && (
+   <span className="media-chip warn live-pulse"><i className="dot" /> در حال بایگانی ضبط روی سرور — {faNum(recUpload.prog)}٪ (اتصال را قطع نکنید)</span>
+ )}
+ {isTeacher && recUpload.err && (
+   <span className="media-chip err"><i className="dot" /> بایگانی ضبط ناموفق بود — فایل روی دستگاه شما دانلود شده؛ می‌توانید لینک دیتاسنتر را در «جزئیات کلاس» ثبت کنید</span>
+ )}
+ {isTeacher && recUpload.done && (
+   <span className="media-chip ok"><i className="dot" /> ضبط بایگانی شد ✓ — لینک مستقیم برای دانش‌آموزان جلسه ثبت شد (مدیریت: «جزئیات کلاس»)</span>
  )}
  </div>
 
@@ -2701,13 +2904,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  {stageBusy && (localStream || !isTeacher || tFeed || tsFeed || sFeeds.length > 0) && (
    <div className="cam-strip">
      {(localStream || !isTeacher) && (
-       <div style={{ width: 128, flexShrink: 0 }}>
+       <div style={{ width: 176, flexShrink: 0 }}>
          <VideoTile stream={localStream} self name={me} camOn={cam} color={user?.color || 'grad-3'} onFlip={canFlip ? () => switchCam() : undefined} />
        </div>
      )}
-     {tFeed && !watchingFeed && (<div style={{ width: 128, flexShrink: 0 }}>{feedTile('t', tFeed, false)}</div>)}
-     {tsFeed && !watchingScreen && (<div style={{ width: 128, flexShrink: 0 }}>{feedTile('ts', tsFeed, false)}</div>)}
-     {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 128, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
+     {tFeed && !watchingFeed && (<div style={{ width: 176, flexShrink: 0 }}>{feedTile('t', tFeed, false)}</div>)}
+     {tsFeed && !watchingScreen && (<div style={{ width: 176, flexShrink: 0 }}>{feedTile('ts', tsFeed, false)}</div>)}
+     {sFeeds.map(([uid, f]) => <div key={uid} style={{ width: 176, flexShrink: 0 }}>{feedTile(uid, f, false)}</div>)}
    </div>
  )}
  </div>
@@ -2751,6 +2954,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  <button className={ctl(fsActive || pseudoFs)} onClick={toggleFs} aria-pressed={fsActive || pseudoFs}>
  <Icon name={fsActive || pseudoFs ? 'minimize' : 'maximize'} /> <span className="ctl-tip">{fsActive || pseudoFs ? 'خروج از تمام‌صفحه' : 'نمایش تمام‌صفحه'}</span>
  </button>
+ {/* تنظیمات دستگاه — تعویض زندهٔ دوربین/میکروفون/اسپیکر (الگوی کاویمو) */}
+ <button className={ctl(devModal)} onClick={() => { rememberDevices(); setDevModal(true) }} aria-label="تنظیمات دستگاه">
+ <Icon name="settings" /> <span className="ctl-tip">تنظیمات دستگاه — دوربین/میکروفون/اسپیکر</span>
+ </button>
  {isTeacher ? (
  <button className={ctl(recording)} onClick={() => (recording ? stopRecording() : startRecording())}>
  <Icon name="activity" /> <span className="ctl-tip">{recording ? 'توقف و ذخیره ضبط' : 'ضبط کلاس'}</span>
@@ -2770,6 +2977,26 @@ export default function LiveRoom({ variant = 'teacher', classInfo }) {
  </button>
  )}
  </div>
+
+ {/* مودال تنظیمات دستگاه — داخل عنصر اتاق تا در فول‌اسکرین هم دیده شود */}
+ {devModal && (
+ <DevModal
+   onClose={() => setDevModal(false)}
+   camDevices={camDevices}
+   camDeviceId={camDeviceId}
+   micDevices={micDevices}
+   micDeviceId={micDeviceId}
+   spkrs={spkrs}
+   spkId={spkId}
+   onSwitchCam={(id) => switchCam(id)}
+   onSwitchMic={(id) => switchMic(id)}
+   onSwitchSpk={(id) => { setSpkId(id); saveDevPrefs({ spk: id }) }}
+   autoRec={autoRecRef.current}
+   onToggleAutoRec={toggleAutoRecPref}
+   isTeacher={isTeacher}
+   counts={{ v: camDevices.length, a: micDevices.length }}
+ />
+ )}
 
  {/* [فیکس F39] تایید پایان/خروج — داخل عنصر اتاق (roomRef) رندر می‌شود تا در
      فول‌اسکرین واقعی و شبه‌فول‌اسکرین هم دیده شود؛ مودال قبلی بیرونِ عنصر

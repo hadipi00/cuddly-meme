@@ -22,7 +22,7 @@ import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
 import { registerPayRoutes, startZarinPayment, payMode, reqOrigin } from './pay.js'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync, renameSync, unlinkSync, statSync, createReadStream } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
@@ -739,6 +739,7 @@ app.get('/api/classes/:id/detail', requireAuth, (req, res) => {
   if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای دیدن جزئیات کلاس باید در آن ثبت‌نام کنید' })
 
   const sessions = db.prepare(`SELECT s.id, s.started_at AS startedAt, s.ended_at AS endedAt, s.dur, s.recording_url AS recordingUrl,
+      s.rec_file AS recFile, s.rec_size AS recSize, s.rec_mime AS recMime,
       (SELECT COUNT(*) FROM class_materials m WHERE m.session_id = s.id) AS materialsCount
     FROM class_sessions s WHERE s.class_id = ? ORDER BY s.started_at DESC LIMIT 60`).all(c.id)
   const materials = db.prepare(`SELECT id, session_id AS sessionId, title, url, created_at AS createdAt
@@ -763,6 +764,146 @@ app.post('/api/classes/:id/sessions/:sid/recording', requireRole('teacher', 'adm
   if (!url) return res.status(400).json({ error: 'لینک باید با http:// یا https:// شروع شود' })
   db.prepare('UPDATE class_sessions SET recording_url = ? WHERE id = ?').run(url, s.id)
   res.json({ ok: true, url })
+})
+
+/* ---------------- بایگانی ضبط جلسات روی سرور (الگوی Egress سبک) ----------------
+ * اتاق کلاس فایل ضبط معلم را «پاره‌پاره» (تکه‌های ۳ مگابایتی) آپلود می‌کند:
+ *   init → part?off=N (چند بار) → finish → لینک پلتفرمی برای همان جلسه ثبت می‌شود
+ * دانش‌آموزِ ثبت‌نام‌شده فقط «پخش» دارد؛ دانلود فقط با مدرس/ادمین + تیکت ۲دقیقه‌ای
+ * (الگوی همان تیکت SSE — توکن JWT هرگز در URL نمی‌ماند). */
+const RECORDINGS_DIR = join(__dirname, 'uploads', 'recordings')
+try { mkdirSync(RECORDINGS_DIR, { recursive: true }) } catch { /* هست */ }
+const recPending = new Map() // sessionId → { path, size, total, mime, classId }
+const recExt = (mime) => (String(mime || '').toLowerCase().includes('mp4') ? 'mp4' : 'webm')
+
+const getRecClass = (req) => {
+  const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return { err: [404, 'کلاس پیدا نشد'] }
+  if (!canControl(c, req.user)) return { err: [403, 'فقط مدرس همان کلاس به ضبط‌ها دسترسی دارد'], c }
+  return { c }
+}
+
+app.post('/api/classes/:id/recordings/init', requireRole('teacher', 'admin'), (req, res) => {
+  const { c, err } = getRecClass(req)
+  if (err) return res.status(err[0]).json({ error: err[1] })
+  /* جلسهٔ مقصد = آخرین جلسهٔ ثبت‌شدهٔ همین کلاس (ضبط همیشه بعد از پایان/حین جلسه است) */
+  const s = db.prepare('SELECT id FROM class_sessions WHERE class_id = ? ORDER BY started_at DESC LIMIT 1').get(c.id)
+  if (!s) return res.status(400).json({ error: 'هنوز جلسه‌ای برای این کلاس ثبت نشده — ضبط پس از شروع کلاس قابل بایگانی است' })
+  const total = Math.max(0, Math.min(2_500_000_000, Number(req.body?.size) || 0))
+  const mime = String(req.body?.mime || '').slice(0, 60)
+  const tmp = join(RECORDINGS_DIR, `part-${c.id}-${s.id}-${Date.now()}.part`)
+  try { unlinkSync(tmp) } catch { /* نیست */ }
+  recPending.set(s.id, { path: tmp, size: 0, total, mime, classId: c.id })
+  res.json({ ok: true, sid: s.id, off: 0 })
+})
+
+app.post('/api/classes/:id/recordings/:sid/part', requireRole('teacher', 'admin'), express.raw({ type: 'application/octet-stream', limit: '6mb' }), (req, res) => {
+  const { c, err } = getRecClass(req)
+  if (err) return res.status(err[0]).json({ error: err[1] })
+  const sid = Number(req.params.sid) || 0
+  const pend = recPending.get(sid)
+  if (!pend || pend.classId !== c.id) return res.status(404).json({ error: 'آپلودی برای این جلسه در جریان نیست' })
+  const off = Number(req.query.off) || 0
+  if (off !== pend.size) return res.status(409).json({ error: 'آفست ناهمخوان — از آخرین آفست سرور ادامه دهید', off: pend.size })
+  const buf = Buffer.from(req.body || Buffer.alloc(0))
+  if (!buf.length) return res.status(400).json({ error: 'تکه خالی است' })
+  appendFileSync(pend.path, buf)
+  pend.size += buf.length
+  res.json({ ok: true, off: pend.size })
+})
+
+app.post('/api/classes/:id/recordings/:sid/finish', requireRole('teacher', 'admin'), (req, res) => {
+  const { c, err } = getRecClass(req)
+  if (err) return res.status(err[0]).json({ error: err[1] })
+  const sid = Number(req.params.sid) || 0
+  const pend = recPending.get(sid)
+  if (!pend || pend.classId !== c.id) return res.status(404).json({ error: 'آپلودی برای این جلسه در جریان نیست' })
+  if (pend.size < 1024) {
+    try { unlinkSync(pend.path) } catch { /* نیست */ }
+    recPending.delete(sid)
+    return res.status(400).json({ error: 'فایل ضبط خیلی کوتاه بود — بایگانی ثبت نشد' })
+  }
+  const finalName = `rec-${c.id}-${sid}-${Date.now()}.${recExt(pend.mime)}`
+  renameSync(pend.path, join(RECORDINGS_DIR, finalName))
+  const url = `/api/classes/${c.id}/recordings/${sid}/file`
+  /* لینک مستقیم دانش‌آموزان فقط اگر قبلاً لینک دیتاسنتر خارجی ثبت نشده باشد */
+  db.prepare(`UPDATE class_sessions SET rec_file=?, rec_size=?, rec_mime=?,
+      recording_url = CASE WHEN recording_url IS NULL OR recording_url = '' THEN ? ELSE recording_url END
+    WHERE id = ?`).run(finalName, pend.size, pend.mime, url, sid)
+  recPending.delete(sid)
+  res.json({ ok: true, url, size: pend.size, hosted: true })
+})
+
+/** حذف فایل بایگانی — فقط مدرس/ادمین؛ لینک خارجی دست‌نخورده می‌ماند */
+app.delete('/api/classes/:id/recordings/:sid/file', requireRole('teacher', 'admin'), (req, res) => {
+  const { c, err } = getRecClass(req)
+  if (err) return res.status(err[0]).json({ error: err[1] })
+  const sid = Number(req.params.sid) || 0
+  const s = db.prepare('SELECT id, rec_file FROM class_sessions WHERE id = ? AND class_id = ?').get(sid, c.id)
+  if (!s?.rec_file) return res.status(404).json({ error: 'فایل بایگانی‌شده‌ای برای این جلسه نیست' })
+  const p = join(RECORDINGS_DIR, s.rec_file)
+  try { unlinkSync(p) } catch { /* از قبل نیست */ }
+  db.prepare(`UPDATE class_sessions SET rec_file='', rec_size=0, rec_mime='',
+      recording_url = CASE WHEN recording_url LIKE '/api/classes/%/recordings/%/file' THEN '' ELSE recording_url END
+    WHERE id = ?`).run(sid)
+  res.json({ ok: true })
+})
+
+/** پخش/دانلود فایل ضبط — پخش برای ثبت‌نام‌شده‌ها، دانلود فقط مدرس/ادمین با تیکت */
+app.get('/api/classes/:id/recordings/:sid/file', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  const sid = Number(req.params.sid) || 0
+  const s = db.prepare('SELECT id, rec_file, rec_size, rec_mime, started_at FROM class_sessions WHERE id = ? AND class_id = ?').get(sid, c.id)
+  if (!s?.rec_file) return res.status(404).json({ error: 'فایل بایگانی‌شده‌ای برای این جلسه نیست' })
+  const isManager = canControl(c, req.user)
+  if (!isManager && !classAccess(c, req.user)) return res.status(403).json({ error: 'برای پخش ضبط باید در کلاس ثبت‌نام کنید' })
+  /* دانلود (dl=1) فقط مدیریت کلاس — و به‌خاطر لینک مستقیم، با تیکت ۲دقیقه‌ای */
+  if (req.query.dl) {
+    if (!isManager) return res.status(403).json({ error: 'دانلود فقط توسط مدرس کلاس' })
+    const uid = sseTicketUser(req.query.st)
+    if (!uid || uid !== req.user.id) return res.status(401).json({ error: 'لینک دانلود منقضی شده — دوباره تلاش کنید' })
+  }
+  /* امنیت مسیر: نام فایل همیشه الگوی سروری است — هر ورودی مشکوک رد می‌شود */
+  if (!/^rec-[a-z0-9-]+\.(webm|mp4)$/i.test(s.rec_file)) return res.status(400).json({ error: 'نام فایل نامعتبر است' })
+  const fPath = join(RECORDINGS_DIR, s.rec_file)
+  let fsize = 0
+  try { fsize = statSync(fPath).size } catch { return res.status(404).json({ error: 'فایل روی دیسک نیست — ممکن است حذف شده باشد' }) }
+  const ctype = recExt(s.rec_mime) === 'mp4' ? 'video/mp4' : 'video/webm'
+  const cRow = db.prepare('SELECT title FROM classes WHERE id = ?').get(c.id)
+  const fname = `${String(cRow?.title || 'modaresyar').replace(/\s+/g, '-')}-session-${sid}.${recExt(s.rec_mime)}`.slice(0, 120)
+  res.setHeader('Content-Type', ctype)
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Cache-Control', 'private, max-age=0')
+  const range = String(req.headers.range || '')
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range)
+  if (m && (m[1] !== '' || m[2] !== '')) {
+    let start = m[1] === '' ? null : Number(m[1])
+    let end = m[2] === '' ? null : Number(m[2])
+    if (start === null) { const n = Number(m[2]); start = Math.max(0, fsize - n); end = fsize - 1 }
+    if (end === null || end >= fsize) end = fsize - 1
+    if (start > end || start >= fsize) return res.status(416).set('Content-Range', `bytes */${fsize}`).end()
+    res.status(206)
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fsize}`)
+    res.setHeader('Content-Length', String(end - start + 1))
+    if (req.query.dl) res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"`)
+    const st2 = createReadStream(fPath, { start, end })
+    st2.on('error', () => { try { res.end() } catch { /* noop */ } })
+    return st2.pipe(res)
+  }
+  res.setHeader('Content-Length', String(fsize))
+  if (req.query.dl) res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"`)
+  const st = createReadStream(fPath)
+  st.on('error', () => { try { res.end() } catch { /* noop */ } })
+  st.pipe(res)
+})
+
+/** تیکت دانلود ۲دقیقه‌ای — صفحهٔ مدرس می‌سازد و لینک مستقیم می‌دهد (بدون JWT در URL) */
+app.get('/api/classes/:id/recordings/:sid/ticket', requireRole('teacher', 'admin'), (req, res) => {
+  const { c, err } = getRecClass(req)
+  if (err) return res.status(err[0]).json({ error: err[1] })
+  const exp = now() + 2 * 60_000
+  res.json({ st: `${exp}.${req.user.id}.${sseTicketSign(exp, req.user.id)}`, exp })
 })
 
 /** افزودن فایل/جزوه به کلاس (یا به یک جلسه خاص) — فقط مدرس همان کلاس */

@@ -68,6 +68,7 @@ const P = {
  camFlip: <><path d="M20 5h-3.2L15 3H9L7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z" /><path d="M9.5 13a2.5 2.5 0 0 0 4.6 1.4M14.5 13a2.5 2.5 0 0 0-4.6-1.4" /><path d="M9.6 9.6 8.4 11.4M14.4 16.4l1.2-1.8" /></>,
  unlock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></>,
 image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></>,
+volume: <><path d="M11 5 6 9H2v6h4l5 4z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /><path d="M19 5a9 9 0 0 1 0 14" /></>,
 }
 
 export default function Icon({ name, size = 20, className = '', filled = false, ...rest }) {

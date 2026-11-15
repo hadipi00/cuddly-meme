@@ -32,6 +32,7 @@ export default function TClassDetail() {
  const [mat, setMat] = useState({ title: '', url: '', sessionId: '' })
  const [savingMat, setSavingMat] = useState(false)
  const [removingMat, setRemovingMat] = useState(false)
+ const [deletingRec, setDeletingRec] = useState(false)
 
  const load = () => {
  req(`/classes/${classId}/detail`).then((r) => {
@@ -71,6 +72,33 @@ export default function TClassDetail() {
  if (!e.serverDown) toast(e.message || 'ثبت لینک ناموفق بود', 'error')
  }
  setSavingRec(null)
+ }
+
+ /* دانلود فایل بایگانی‌شدهٔ جلسه از سرور — با تیکت ۲دقیقه‌ای (JWT در URL نمی‌ماند) */
+ const downloadRecFile = async (s) => {
+ try {
+ const t = await req(`/classes/${classId}/recordings/${s.id}/ticket`)
+ const url = `/api/classes/${classId}/recordings/${s.id}/file?dl=1&st=${encodeURIComponent(t.st)}`
+ window.open(url, '_blank')
+ toast('دانلود شروع می‌شود — فایل از سرور گرفته می‌شود', 'success')
+ } catch (e) {
+ if (!e.serverDown) toast(e.message || 'ساخت لینک دانلود ناموفق بود', 'error')
+ }
+ }
+
+ /* حذف فایل بایگانی روی سرور — لینک خارجی ثبت‌شده (دیتاسنتر) دست‌نخورده می‌ماند */
+ const deleteRecFile = async (s) => {
+ if (deletingRec) return
+ if (!window.confirm('فایل بایگانی‌شدهٔ این جلسه روی سرور حذف شود؟ (لینک دیتاسنتر خارجی باقی می‌ماند)')) return
+ setDeletingRec(true)
+ try {
+ await req(`/classes/${classId}/recordings/${s.id}/file`, { method: 'DELETE' })
+ toast('فایل بایگانی حذف شد', 'info')
+ load()
+ } catch (e) {
+ if (!e.serverDown) toast(e.message || 'حذف ناموفق بود', 'error')
+ }
+ setDeletingRec(false)
  }
 
  const addMaterial = async (e) => {
@@ -131,21 +159,22 @@ export default function TClassDetail() {
  </div>
  <div className="row g8 mt16 wrap">
  <Link to="/panel/teacher/live" className="btn btn-primary btn-sm"><Icon name="video" size={14} /> برگزاری کلاس زنده</Link>
- <span className="muted small" style={{ alignSelf: 'center' }}>برای ضبط، داخل کلاس زنده دکمه «ضبط کلاس» را بزنید — فایل روی دستگاه شما دانلود می‌شود.</span>
+ <span className="muted small" style={{ alignSelf: 'center' }}>ضبط کلاس در پایان جلسه هم روی دستگاه شما دانلود می‌شود و هم خودکار روی سرور بایگانی می‌گردد — لینک پخش برای دانش‌آموزان همان جلسه ثبت می‌شود.</span>
  </div>
  </div>
 
  <div className="grids g2">
- {/* ---------- جلسات برگزارشده + ثبت لینک ضبط ---------- */}
+ {/* ---------- جلسات برگزارشده + بایگانی/لینک ضبط ---------- */}
  <div className="card pad">
- <h3 className="mb8"><Icon name="play" size={16} /> جلسات برگزارشده — لینک ضبط</h3>
+ <h3 className="mb8"><Icon name="play" size={16} /> جلسات برگزارشده — ضبط‌ها</h3>
  <p className="muted small mb16">
- فایل ضبط‌شده را در سرویس خودتان (مثلاً آپارات با لینک مستقیم <b dir="ltr">aparat.com/v/xxxx</b>) آپلود کنید و
- لینک را اینجا ثبت کنید؛ دانش‌آموز ویدیو را داخل سایت و به‌صورت وب‌ویو می‌بیند.
+ فایل ضبط هر جلسه در پایان کلاس خودکار روی سرور بایگانی می‌شود (قابل دانلود از همین‌جا).
+ اگر می‌خواهید ویدیو روی دیتاسنتر/سرویس خودتان باشد، فایل را آنجا آپلود و لینک مستقیم را ثبت کنید —
+ لینک خارجی جای لینک پلتفرم را می‌گیرد و دانش‌آموز همان را می‌بیند.
  </p>
  {sessions.length === 0 ? (
  <p className="muted small" style={{ textAlign: 'center', padding: 18, border: '1px dashed var(--line)', borderRadius: 12 }}>
- هنوز جلسه‌ای پایان یافته است — بعد از اولین برگزاری، اینجا برای ثبت ضبط ظاهر می‌شود.
+ هنوز جلسه‌ای پایان یافته است — بعد از اولین برگزاری، اینجا برای ضبط‌ها ظاهر می‌شود.
  </p>
  ) : (
  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -155,22 +184,43 @@ export default function TClassDetail() {
  <b className="small">جلسه {faDate(s.startedAt)}</b>
  <span className="badge b-gray" dir="ltr"><Icon name="clock" size={11} /> {durFmt(s.dur)}</span>
  </div>
- {s.recordingUrl ? (
+ {/* فایل بایگانی‌شده روی سرور — دانلود + پیش‌نمایش + حذف */}
+ {s.recFile && (
+ <div className="row g8 wrap mt12" style={{ background: 'rgba(45,212,191,0.07)', border: '1px solid rgba(45,212,191,0.25)', borderRadius: 12, padding: 10 }}>
+ <button className="btn btn-primary btn-sm" onClick={() => setVideo({ title: `ضبط جلسه ${faDate(s.startedAt)}`, url: `/api/classes/${classId}/recordings/${s.id}/file` })}>
+ <Icon name="play" filled size={13} /> پخش ضبط
+ </button>
+ <button className="btn btn-ghost btn-sm" onClick={() => downloadRecFile(s)}>
+ <Icon name="download" size={13} /> دانلود از سرور
+ </button>
+ <button className="btn btn-ghost btn-sm" style={{ color: 'var(--red)' }} disabled={deletingRec} onClick={() => deleteRecFile(s)}>
+ <Icon name="trash" size={13} /> حذف فایل
+ </button>
+ <span className="badge b-teal" style={{ display: 'inline-flex', alignItems: 'center' }}>
+ <Icon name="check" size={11} /> بایگانی روی سرور • {faNum(((s.recSize || 0) / 1048576).toFixed(1))} مگابایت
+ </span>
+ </div>
+ )}
+ {s.recordingUrl && !s.recordingUrl.startsWith('/api/classes/') ? (
  <div className="row g8 wrap mt12">
  <button className="btn btn-primary btn-sm" onClick={() => setVideo({ title: `ضبط جلسه ${faDate(s.startedAt)}`, url: s.recordingUrl })}>
  <Icon name="play" filled size={13} /> پیش‌نمایش ضبط
  </button>
  <span className="muted small" dir="ltr" style={{ alignSelf: 'center', maxWidth: '100%', overflowWrap: 'anywhere' }}>{s.recordingUrl}</span>
  </div>
- ) : (
- <span className="badge b-gray mt12" style={{ display: 'inline-flex', marginTop: 10 }}><Icon name="video" size={11} /> لینک ضبط ثبت نشده</span>
- )}
+ ) : null}
+ {!s.recFile && !s.recordingUrl ? (
+ <span className="badge b-gray mt12" style={{ display: 'inline-flex', marginTop: 10 }}><Icon name="video" size={11} /> ضبط ثبت نشده — در کلاس زنده «ضبط کلاس» را روشن کنید</span>
+ ) : null}
+ {!s.recordingUrl && s.recFile ? (
+ <span className="badge b-gray mt12" style={{ display: 'inline-flex' }}><Icon name="globe" size={11} /> لینک پلتفرمی فعال است — برای دیتاسنتر خارجی لینک ثبت کنید</span>
+ ) : null}
  <div className="row g8 mt12 wrap">
  <input
  className="input"
  style={{ flex: 1, minWidth: 200 }}
  dir="ltr"
- placeholder="https://www.aparat.com/v/xxxxx"
+ placeholder="لینک دیتاسنتر خارجی — https://www.aparat.com/v/xxxxx"
  value={recDraft[s.id] ?? ''}
  onChange={(e) => setRecDraft((d) => ({ ...d, [s.id]: e.target.value }))}
  onKeyDown={(e) => { if (e.key === 'Enter') saveRecording(s.id) }}

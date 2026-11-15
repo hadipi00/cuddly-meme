@@ -39,13 +39,19 @@ export function toEmbedUrl(url) {
 const DIRECT_FILE = /\.(mp4|webm|ogv|ogg|m4v|mov)(\?.*)?$/i
 
 export default function VideoModal({ open, title, url, onClose }) {
-  /* لینک غیر http(s) هرگز رندر نمی‌شود (ضد XSS از طریق recordingUrl وارده از پنل) */
-  const safeUrl = /^https?:\/\//i.test(String(url || '')) ? url : null
+  /* لینک غیر http(s) هرگز رندر نمی‌شود (ضد XSS از طریق recordingUrl وارده از پنل)
+   * استثنای امن: مسیرهای نسبیِ خودِ پلتفرم (/api/…) — فایل ضبط بایگانی‌شدهٔ سرور؛
+   * یعنی ضبط کلاس داخل سایت پخش می‌شود بدون نیاز به آپلود خارجی. */
+  const isPlatformPath = /^\/api\/classes\/[a-z0-9-]+\/recordings\/\d+\/file(\?.*)?$/i.test(String(url || ''))
+  const safeUrl = isPlatformPath
+    ? String(url)
+    : (/^https?:\/\//i.test(String(url || '')) ? url : null)
   const kind = useMemo(() => {
     if (!safeUrl) return null
+    if (isPlatformPath) return 'file'
     if (DIRECT_FILE.test(safeUrl)) return 'file'
     return toEmbedUrl(safeUrl) ? 'embed' : 'iframe'
-  }, [safeUrl])
+  }, [safeUrl, isPlatformPath])
   const src = useMemo(() => (kind === 'embed' ? toEmbedUrl(safeUrl) : safeUrl), [kind, safeUrl])
 
   return (

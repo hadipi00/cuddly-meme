@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BellRing, CreditCard, ShieldCheck, Video } from 'lucide-react'
 import LiveRoom from '../../components/LiveRoom'
+import LivePreJoin from '../../components/LivePreJoin'
 import Icon from '../../components/Icon'
 import { liveClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
@@ -24,6 +25,9 @@ export default function SLiveRoom() {
  const [cls, setCls] = useState(() => liveClasses.find((l) => l.id === classId) || null)
  const [missing, setMissing] = useState(false)
  const [buying, setBuying] = useState(false)
+ /* بررسی تجهیزات قبل از ورود به اتاق — «ورود» بعد از پیش‌تست اتفاق می‌افتد */
+ const [joined, setJoined] = useState(false)
+ const [devPrefs, setDevPrefs] = useState(null)
 
  /* اطلاعات کلاس از بک‌اند واقعی — شامل وضعیت ثبت‌نام (iAmIn) */
  useEffect(() => {
@@ -154,9 +158,20 @@ export default function SLiveRoom() {
    )
  }
 
- /* زنده — ورود به اتاق کلاس */
+ /* زنده — صفحهٔ بررسی تجهیزات (پیش‌نمایش دوربین/میکروفون — الگوی کاویمو)، بعد ورود به اتاق */
  if (session?.startedAt) {
-   return <LiveRoom variant="student" classInfo={cls} />
+   if (!joined) {
+     return (
+       <LivePreJoin
+         role="student"
+         classTitle={cls.title}
+         teacher={cls.teacher}
+         onJoin={(p) => { setDevPrefs(p); setJoined(true) }}
+         onSkip={(p) => { setDevPrefs({ ...p, hasVideo: false, hasAudio: false }); setJoined(true) }}
+       />
+     )
+   }
+   return <LiveRoom variant="student" classInfo={cls} devPrefs={devPrefs} />
  }
 
  /* اتاق انتظار — شمارش معکوس تا شروع */

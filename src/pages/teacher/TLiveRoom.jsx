@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Radio } from 'lucide-react'
 import Icon from '../../components/Icon'
 import LiveRoom from '../../components/LiveRoom'
+import LivePreJoin from '../../components/LivePreJoin'
 import { teacherClasses } from '../../data/mock'
 import { useApp } from '../../store/AppContext'
 import { DAYS, faNum } from '../../utils/format'
@@ -14,29 +15,14 @@ import { req } from '../../services/http'
  * (بج «در حال برگزاری» + تایمر + دکمه ورود در برنامه هفتگی و داشبورد آن‌ها ظاهر می‌شود).
  */
 export default function TLiveRoom() {
- const { toast, liveSessions, endLive, startLive } = useApp()
+ const { user, toast, liveSessions, endLive, startLive } = useApp()
  const [active, setActive] = useState(null)
  const [preparing, setPreparing] = useState(null) // کلاسی که در حال آماده‌سازی است
+ const [devPrefs, setDevPrefs] = useState(null) // دستگاه‌های انتخابی در صفحهٔ پیش‌تست تجهیزات
  const [myClasses, setMyClasses] = useState(teacherClasses) // fallback: دمو
  const [loaded, setLoaded] = useState(false) // تا کلاس‌های واقعی از سرور نیامده، دمو شروع‌پذیر نیست
  const [authErr, setAuthErr] = useState(false) // [فیکس] خطای احراز هویت ≠ قطعی سرور
  const now = useNow(1000)
-
- /* چک واقعی تجهیزات (getUserMedia) برای صفحه آماده‌سازی — بالای early-returnها */
- const [devCheck, setDevCheck] = useState(null) // {mic, cam} | 'denied'
- useEffect(() => {
-   if (!preparing) return
-   let stream
-   setDevCheck(null)
-   if (!navigator.mediaDevices?.getUserMedia) { setDevCheck('denied'); return }
-   navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-     .then((s) => {
-       stream = s
-       setDevCheck({ mic: s.getAudioTracks().length > 0, cam: s.getVideoTracks().length > 0 })
-     })
-     .catch(() => setDevCheck('denied'))
-   return () => stream?.getTracks().forEach((t) => t.stop())
- }, [preparing])
 
  /* کلاس‌های این مدرس از بک‌اند واقعی — [فیکس F8] لیست خالیِ «موفق» دیگر با دمو
     اشتباه گرفته نمی‌شود: پاسخ سرور اومده → همان خالی نمایش داده می‌شود («هنوز
@@ -63,7 +49,7 @@ export default function TLiveRoom() {
  return () => { alive = false }
  }, [])
 
- if (active) return <LiveRoom variant="teacher" classInfo={active} />
+ if (active) return <LiveRoom variant="teacher" classInfo={active} devPrefs={devPrefs} />
 
  const isLive = (c) => {
  const s = liveSessions[c.liveId]
@@ -168,45 +154,25 @@ export default function TLiveRoom() {
  )
  }
 
- // صفحه آماده‌سازی (چک واقعی تجهیزات با getUserMedia)
- const devBadge = (label, ok, pending) => (
-   <div className="toggle-row" key={label}><b>{label}</b><span className={`badge ${pending ? 'b-gray' : ok ? 'b-green' : 'b-red'}`}>{pending ? 'در حال بررسی…' : ok ? '✓ آماده' : '✗ یافت نشد / دسترسی داده نشد'}</span></div>
- )
-
+ // صفحهٔ آماده‌سازی — بررسی تجهیزات با پیش‌نمایش زنده (الگوی کاویمو)
+ // پیش‌نمایش دوربین + نمایشگر صدای میکروفون + انتخاب دستگاه‌ها + ضبط خودکار
  return (
- <div className="card pad" style={{ maxWidth: 560, margin: '40px auto', textAlign: 'center' }}>
- <div className="sc-icon teal" style={{ width: 64, height: 64, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
- <Icon name="video" size={30} />
- </div>
- <h2 style={{ fontSize: 19, marginBottom: 6 }}>آماده‌سازی کلاس زنده</h2>
- <p className="muted small mb24">{preparing.title} — تجهیزات خود را بررسی کنید و سپس کلاس را شروع کنید</p>
- <div style={{ textAlign: 'right' }}>
- {devBadge('میکروفون', devCheck?.mic, devCheck === null)}
- {devBadge('دوربین', devCheck?.cam, devCheck === null)}
- {devBadge('اشتراک صفحه', true, false)}
- </div>
- {devCheck === 'denied' && (
-   <p className="muted small mt12" style={{ color: 'var(--red)' }}>
-   دسترسی دوربین/میکروفون داده نشد — از تنظیمات مرورگر مجوز بدهید (می‌توانید بدون دوربین هم کلاس را برگزار کنید).
-   </p>
- )}
- <p className="muted small mt16" style={{ background: 'var(--card)', border: '1px dashed var(--line)', borderRadius: 10, padding: '10px 14px' }}>
- با زدن دکمه زیر، جلسه برای {faNum(preparing.students)} دانشجوی این کلاس زنده می‌شود و دکمه ورود در پنل آن‌ها فعال خواهد شد.
- </p>
- <div className="row g12 mt24" style={{ justifyContent: 'center' }}>
- <button className="btn btn-primary btn-lg" onClick={() => {
-   /* [فیکس F38] باگ بحرانی گزارش کاربر: «کلاس برای دانش‌آموز شروع نمی‌شود و روی
-      زمان‌بندی می‌ماند». ریشه: این دکمه فقط اتاق را باز می‌کرد (setActive) و
-      startLive هرگز به سرور نمی‌رفت → status در DB همان 'scheduled' می‌ماند،
-      /api/live/overview هیچ‌وقت 'live' نمی‌داد و دانش‌آموز در اتاق انتظار گیر می‌کرد.
-      حالا با همین کلیک جلسه واقعاً روی سرور زنده می‌شود (POST /classes/:id/start). */
-   startLive(preparing.liveId || preparing.id)
-   setActive(preparing)
- }}>
- <Icon name="play" filled size={17} /> شروع کلاس زنده
- </button>
- <button className="btn btn-ghost" onClick={() => setPreparing(null)}>انصراف</button>
- </div>
- </div>
+ <LivePreJoin
+   role="teacher"
+   classTitle={preparing.title}
+   teacher={user?.name}
+   onJoin={(p) => {
+     /* [فیکس F38] با همین کلیک جلسه واقعاً روی سرور زنده می‌شود (POST /classes/:id/start) */
+     startLive(preparing.liveId || preparing.id)
+     setDevPrefs(p)
+     setActive(preparing)
+   }}
+   onCancel={() => setPreparing(null)}
+   onSkip={(p) => {
+     startLive(preparing.liveId || preparing.id)
+     setDevPrefs({ ...p, hasVideo: false, hasAudio: false })
+     setActive(preparing)
+   }}
+ />
  )
 }

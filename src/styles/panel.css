@@ -692,3 +692,78 @@ body.fs-lock { overflow: hidden; }
 .tx-actions { margin-top: 10px; }
 .tx-editor { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line2); }
 .badge.b-teal { background: rgba(45, 212, 191, 0.12); color: var(--teal); }
+
+/* =====================================================================
+ * اتاق کلاس زنده — به‌روزرسانی نهم (الگوی کاویمو)
+ *  • صفحهٔ پیش‌تست تجهیزات (پیش‌نمایش دوربین + نمایشگر صدا + انتخاب دستگاه)
+ *  • مودال تنظیمات دستگاه (تعویض زندهٔ دوربین/میکروفون/اسپیکر)
+ *  • نوار کنترل شیشه‌ای + کاشی‌های بزرگ‌تر + موبایل بهتر
+ * ===================================================================== */
+
+/* ---------- صفحهٔ پیش‌تست تجهیزات ---------- */
+.pj-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.78); backdrop-filter: blur(8px); z-index: 90; display: flex; align-items: center; justify-content: center; padding: 18px; overflow-y: auto; }
+.pj-card { width: min(880px, 100%); background: var(--card); border: 1px solid var(--line2); border-radius: 22px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); overflow: hidden; animation: pj-in 0.25s ease; }
+@keyframes pj-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+.pj-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 18px 22px; border-bottom: 1px solid var(--line2); background: linear-gradient(135deg, rgba(45,212,191,0.08), rgba(56,189,248,0.06)); }
+.pj-head > div { display: flex; flex-direction: column; gap: 3px; }
+.pj-title { font-size: 15.5px; display: flex; align-items: center; gap: 8px; }
+.pj-autorec { display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 99px; font-size: 12px; font-weight: 800; border: 1px dashed var(--line); color: var(--muted); background: transparent; transition: 0.2s; }
+.pj-autorec.on { border: 1px solid rgba(45,212,191,0.5); background: rgba(45,212,191,0.12); color: var(--teal); }
+.pj-body { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; padding: 20px 22px; }
+.pj-preview { position: relative; border-radius: 16px; overflow: hidden; background: linear-gradient(160deg, #0b1220, #101b31); min-height: 250px; border: 1px solid var(--line2); }
+.pj-video { width: 100%; height: 100%; min-height: 250px; object-fit: cover; display: block; }
+.pj-preview.err .pj-video { display: none; }
+.pj-preview-fallback { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; text-align: center; }
+.pj-mirror-hint { position: absolute; bottom: 10px; inset-inline-start: 10px; background: var(--stage-glass); backdrop-filter: blur(6px); border: 1px solid var(--line2); border-radius: 8px; padding: 4px 10px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.pj-controls { display: flex; flex-direction: column; gap: 11px; }
+.pj-field { display: flex; flex-direction: column; gap: 5px; }
+.pj-lb { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--text-2); }
+.pj-select { height: 42px; font-size: 12px; }
+.pj-select option { background: #0f172a; color: #e2e8f0; }
+.pj-meter-wrap { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line2); border-radius: 14px; background: rgba(148,163,184,0.05); }
+.pj-meter { height: 8px; border-radius: 99px; background: rgba(148,163,184,0.16); overflow: hidden; }
+.pj-meter i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #10b981, #2dd4bf, #38bdf8); transition: width 0.12s linear; }
+.pj-note { display: flex; gap: 9px; align-items: flex-start; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 12px; color: var(--teal); }
+.pj-note span { color: var(--muted); }
+
+/* ---------- مودال تنظیمات دستگاه ---------- */
+.dev-modal-overlay { position: absolute; inset: 0; background: rgba(2, 6, 23, 0.62); backdrop-filter: blur(5px); z-index: 40; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dev-modal { width: min(460px, 100%); background: var(--card); border: 1px solid var(--line2); border-radius: 18px; padding: 18px 20px; box-shadow: 0 24px 60px rgba(0,0,0,0.5); animation: pj-in 0.2s ease; max-height: 88%; overflow-y: auto; }
+.dev-field { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+.dev-field > span { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--text-2); }
+.dev-field select { height: 44px; font-size: 12px; }
+.dev-field option { background: #0f172a; color: #e2e8f0; }
+.dev-autorec { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 11px 13px; border-radius: 13px; border: 1px dashed var(--line); background: transparent; color: var(--muted); font-size: 11.5px; text-align: start; transition: 0.2s; line-height: 1.8; }
+.dev-autorec b { margin-inline-start: auto; flex-shrink: 0; font-size: 12px; }
+.dev-autorec.on { border: 1px solid rgba(45,212,191,0.5); background: rgba(45,212,191,0.1); color: var(--teal); }
+.dev-autorec.on b { color: var(--teal); }
+
+/* ---------- نوار کنترل شیشه‌ای ---------- */
+.live-controls {
+ display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 16px;
+ border-top: 1px solid var(--line2); flex-wrap: wrap;
+ background: linear-gradient(180deg, rgba(148,163,184,0.03), rgba(15,23,42,0.35));
+}
+.ctl {
+ width: 52px; height: 52px; border-radius: 15px; border: 1px solid var(--line); background: rgba(148,163,184,0.07);
+ display: flex; align-items: center; justify-content: center; color: var(--muted); transition: 0.2s; position: relative;
+ box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+}
+.ctl:hover { color: var(--text); border-color: rgba(148,163,184,0.4); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+.ctl:active { transform: translateY(0) scale(0.96); }
+
+/* کاشی‌های نوار پایین صحنه — بزرگ‌تر و خواناتر (قبلاً 128px خیلی کوچک بود) */
+.cam-strip { padding: 10px 12px; gap: 10px; }
+.cam-strip > div { width: 176px !important; }
+
+/* موبایل — پیش‌تست تک‌ستونه + نوار کنترل در دسترس انگشت */
+@media (max-width: 900px) {
+ .pj-body { grid-template-columns: 1fr; padding: 14px; gap: 14px; }
+ .pj-preview { min-height: 200px; }
+ .pj-video { min-height: 200px; }
+ .pj-card { border-radius: 18px; }
+ .pj-head { padding: 14px 16px; }
+ .live-controls { position: sticky; bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+ .cam-strip > div { width: 132px !important; }
+ .dev-modal-overlay { z-index: 60; }
+}
