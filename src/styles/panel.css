@@ -767,3 +767,27 @@ body.fs-lock { overflow: hidden; }
  .cam-strip > div { width: 132px !important; }
  .dev-modal-overlay { z-index: 60; }
 }
+
+/* ---------- [نوبت ۱۰] کیفیت ارسال دستی + تشخیص دوربین مجازی OBS ---------- */
+.dev-quality { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.dev-q-btn {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: start;
+  padding: 9px 10px; border-radius: 12px; border: 1.5px solid var(--line); background: rgba(148,163,184,0.05);
+  color: var(--text); transition: 0.18s; cursor: pointer;
+}
+.dev-q-btn b { font-size: 11.5px; }
+.dev-q-btn:hover { border-color: rgba(45,212,191,0.5); transform: translateY(-1px); }
+.dev-q-btn.on { border-color: var(--teal); background: rgba(45,212,191,0.12); }
+.dev-q-btn.on b { color: var(--teal); }
+.vcam-badge {
+  display: inline-flex; align-items: center; gap: 5px; margin-inline-start: 8px;
+  padding: 3px 10px; border-radius: 99px; font-size: 10.5px; font-weight: 800;
+  background: rgba(45,212,191,0.14); color: var(--teal); border: 1px solid rgba(45,212,191,0.4);
+}
+.dev-obs-note {
+  display: block; font-size: 11px; line-height: 1.9; color: var(--muted);
+  background: rgba(56,189,248,0.07); border: 1px dashed rgba(56,189,248,0.35);
+  border-radius: 11px; padding: 9px 12px; margin-top: 10px;
+}
+.dev-obs-note b { color: var(--text); }
+@media (max-width: 560px) { .dev-quality { grid-template-columns: 1fr; } }

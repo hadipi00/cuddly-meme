@@ -51,24 +51,32 @@ export const openCamera = async ({ deviceId, facing, wantAudio = true, w = 1280,
     try {
       return await navigator.mediaDevices.getUserMedia({
         video,
-        audio: wantAudio ? { echoCancellation: true, noiseSuppression: true } : false,
+        audio: wantAudio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false,
       })
     } catch (e) { lastErr = e }
   }
   throw lastErr
 }
 
-/** باز کردن فقط میکروفون با deviceId دقیق (+fallback بدون محدودیت) */
+/** باز کردن فقط میکروفون با deviceId دقیق (+fallback بدون محدودیت) — با AGC
+ *  autoGainControl: بلندی صدای مدرس ثابت می‌ماند هرچقدر از میکروفون دور شود */
 export const openMic = async ({ deviceId } = {}) => {
+  const AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   const tries = []
-  if (deviceId) tries.push({ audio: { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true }, video: false })
-  tries.push({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
+  if (deviceId) tries.push({ audio: { deviceId: { exact: deviceId }, ...AUDIO }, video: false })
+  tries.push({ audio: AUDIO, video: false })
   let lastErr = null
   for (const t of tries) {
     try { return await navigator.mediaDevices.getUserMedia(t) } catch (e) { lastErr = e }
   }
   throw lastErr
 }
+
+/** تشخیص «دوربین مجازی» (OBS/Camo/DroidCam/Iriun/EpocCam/ManyCam) — راه اتصال
+ *  دوربین خارجی به کلاس: صحنهٔ OBS ساخته می‌شود و خروجی Virtual Camera همین‌جا
+ *  انتخاب می‌شود؛ تصویر ترکیبی (دوربین+اسلاید) به‌عنوان یک دوربین ارسال می‌شود */
+export const isVirtualCam = (label) =>
+  /obs|virtual|camo|epoccam|droidcam|iriun|vcam|manycam/i.test(String(label || ''))
 
 /**
  * نمایشگر سطح صدای میکروفون (مثل کاویمو) — AudioContext + AnalyserNode

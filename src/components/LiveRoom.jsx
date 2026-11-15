@@ -6,7 +6,7 @@ import { Avatar } from './ui'
 import { useApp } from '../store/AppContext'
 import { faNum } from '../utils/format'
 import { req, authedFetch, getToken } from '../services/http'
-import { openCamera, openMic, listMediaDevices, applySink, loadDevPrefs, saveDevPrefs } from '../lib/devices'
+import { openCamera, openMic, listMediaDevices, applySink, loadDevPrefs, saveDevPrefs, isVirtualCam } from '../lib/devices'
 
 /**
  * اتاق کلاس زنده — رله رسانه با «دو کانال مستقل» (بدون WebRTC)
@@ -39,6 +39,16 @@ const WB_W = 1600
 const WB_H = 900
 const PEN_COLORS = ['#0f172a', '#dc2626', '#2563eb', '#16a34a', '#d97706']
 const PEN_SIZES = [3, 6, 12]
+
+/* [کیفیت ارسال دستی — الگوی «کنترل کیفیت» LiveKit ولی ساده‌شده روی رله HTTP]
+ * cap = سقف پلهٔ نردبان بیت‌ریت خودکار (BR_STEPS) • w/h = رزولوشن دوربین.
+ * روی آپلود ضعیف ایران، «سبک» صدای پایدار + تصویر روان می‌دهد؛
+ * «بالا» = رفتار خودکار قبلی بدون محدودیت اضافه */
+const SEND_QUALITY = {
+  high: { key: 'high', label: 'بالا (پیش‌فرض)', cap: 0, w: 1280, h: 720, hint: '۱۲۸۰×۷۲۰ — بیت‌ریت خودکار تا ۸۵۰k' },
+  med: { key: 'med', label: 'متوسط', cap: 1, w: 960, h: 540, hint: '۹۶۰×۵۴۰ — حداکثر ۶۰۰k • برای آپلود متوسط' },
+  low: { key: 'low', label: 'سبک (اینترنت ضعیف)', cap: 2, w: 640, h: 360, hint: '۶۴۰×۳۶۰ — حداکثر ۴۲۰k • پایدار روی 4G ضعیف' },
+}
 
 /* ================= ابزارهای رله رسانه ================= */
 
@@ -794,9 +804,13 @@ function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, on
  * مودال «تنظیمات دستگاه» — الگوی کاویمو: تعویض زندهٔ دوربین، میکروفون و اسپیکر
  * در میانهٔ کلاس، بدون خروج از اتاق. تعویض دستگاه با همان زنجیرهٔ fallback امن
  * تعویض دوربین/میکروفون انجام می‌شود؛ خروجی صدا با setSinkId لحظه‌ای اعمال می‌شود.
+ * [جدید] ردیف «کیفیت ارسال» (بالا/متوسط/سبک) برای مدرس + تشخیص دوربین مجازی OBS
  */
 function DevModal({ onClose, camDevices, camDeviceId, micDevices, micDeviceId, spkrs, spkId,
-  onSwitchCam, onSwitchMic, onSwitchSpk, autoRec, onToggleAutoRec, isTeacher, counts }) {
+  onSwitchCam, onSwitchMic, onSwitchSpk, autoRec, onToggleAutoRec, isTeacher, counts,
+  sendQuality, onQuality }) {
+  const camObj = camDevices.find((d) => d.deviceId === camDeviceId)
+  const vcam = isVirtualCam(camObj?.label)
   return (
     <div className="dev-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="dev-modal">
@@ -810,12 +824,37 @@ function DevModal({ onClose, camDevices, camDeviceId, micDevices, micDeviceId, s
         </p>
 
         <label className="dev-field">
-          <span><Icon name="camera" size={14} /> دوربین</span>
+          <span><Icon name="camera" size={14} /> دوربین {vcam && <span className="vcam-badge"><Icon name="sparkles" size={10} /> دوربین مجازی (OBS) شناسایی شد ✓</span>}</span>
           <select className="input" value={camDeviceId} onChange={(e) => onSwitchCam(e.target.value)} dir="ltr">
             {!camDeviceId && <option value="">— انتخاب نشده —</option>}
             {camDevices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `دوربین ${faNum(i + 1)}`}</option>)}
           </select>
         </label>
+        {vcam && (
+          <p className="dev-obs-note">
+            <b>راه اتصال دوربین خارجی:</b> در OBS صحنهٔ خود را بسازید (دوربین + اسلاید/تصویر)، دکمهٔ <b dir="ltr">Start Virtual Camera</b> را بزنید — خروجی ترکیبی همین‌جا به‌عنوان دوربین انتخاب شده و برای کلاس ارسال می‌شود.
+          </p>
+        )}
+
+        {isTeacher && (
+          <div className="dev-field">
+            <span><Icon name="zap" size={14} /> کیفیت ارسال (برای آپلود اینترنت شما)</span>
+            <div className="dev-quality">
+              {Object.values(SEND_QUALITY).map((q) => (
+                <button
+                  key={q.key}
+                  type="button"
+                  className={`dev-q-btn ${sendQuality === q.key ? 'on' : ''}`}
+                  onClick={() => onQuality(q.key)}
+                  title={q.hint}
+                >
+                  <b>{q.label}</b>
+                  <span className="muted" style={{ fontSize: 10 }}>{q.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <label className="dev-field">
           <span><Icon name="mic" size={14} /> میکروفون</span>
@@ -909,6 +948,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  const recAutoDoneRef = useRef(false)
  /* آپلود ضبط به سرور — { active, prog, err, done: {url, size} } */
  const [recUpload, setRecUpload] = useState({ active: false, prog: 0, err: null, done: null })
+ /* کیفیت ارسال دستی (مدرس) — سقف نردبان بیت‌ریت + رزولوشن دوربین؛ از ذخیرهٔ قبلی */
+ const [sendQuality, setSendQuality] = useState(SEND_QUALITY[pref.current.quality]?.key || 'high')
+ const sendQRef = useRef(SEND_QUALITY[pref.current.quality] || SEND_QUALITY.high)
 
  /* ---------- رله رسانه — فرستنده (دو کانال مستقل: دوربین + صفحه) ---------- */
  /* [فیکس F36-c] کانال‌ها: cam = دوربین+میکروفون، scr = اشتراک صفحه (+صدای تب).
@@ -1125,9 +1167,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    if (!isTeacher) return
    if (!navigator.mediaDevices?.getUserMedia) { setMediaErr('insecure'); return }
    navigator.mediaDevices.getUserMedia({
-     /* دستگاه انتخابی کاربر در پیش‌تست تجهیزات — دقیق؛ با شکست، fallback در rebuildOutgoing */
-     video: { deviceId: prefCamId() ? { exact: prefCamId() } : undefined, facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-     audio: { echoCancellation: true, noiseSuppression: true },
+     /* دستگاه انتخابی کاربر در پیش‌تست تجهیزات — دقیق؛ با شکست، fallback در rebuildOutgoing
+      * صدا با AGC (تنظیم خودکار گین) — بلندی ثابت صدای مدرس */
+     video: { deviceId: prefCamId() ? { exact: prefCamId() } : undefined, facingMode: 'user', width: { ideal: sendQRef.current.w }, height: { ideal: sendQRef.current.h } },
+     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
    }).then((s) => {
      if (cancelled) { s.getTracks().forEach((t) => t.stop()); return }
      const vt = s.getVideoTracks()[0]
@@ -1141,7 +1184,7 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
      if (cancelled) return
      /* deviceId دقیق نپذیرفته شد (دستگاه جابه‌جا شده) → یک بار بدون محدودیت */
      try {
-       const s2 = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: { echoCancellation: true, noiseSuppression: true } })
+       const s2 = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: sendQRef.current.w }, height: { ideal: sendQRef.current.h } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
        if (cancelled) { s2.getTracks().forEach((t) => t.stop()); return }
        localStreamRef.current = s2
        setLocalStream(s2)
@@ -1361,8 +1404,10 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    try {
      rec = new MediaRecorder(new MediaStream(tracks), {
        mimeType: recMime.mime,
-       videoBitsPerSecond: (ch.screen ? SCREEN_BR_STEPS : BR_STEPS)[ch.brIdx],
-       audioBitsPerSecond: 48_000,
+       /* [کیفیت ارسال دستی] نردبان خودکار با «سقف کیفیت» مدرس ترکیب می‌شود —
+        * انتخاب «سبک» یعنی حتی وقتی شبکه خوب شد، بیت‌ریت از سقف بالاتر نمی‌رود */
+       videoBitsPerSecond: (ch.screen ? SCREEN_BR_STEPS : BR_STEPS)[ch.screen ? ch.brIdx : Math.max(ch.brIdx, sendQRef.current.cap || 0)],
+       audioBitsPerSecond: 64_000, // [بهبود صدا] از 48k به 64k — شفافیت صدای کلاس
      })
    } catch { return }
    ch.rec = rec
@@ -1844,6 +1889,40 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  }
 
   /* ---------- عملیات رسانه ---------- */
+
+ /* [کیفیت ارسال دستی] تعویض زنده: دوربین با رزولوشن جدید باز و رکوردر با سقف
+  * بیت‌ریت جدید دوباره ساخته می‌شود — گیرنده‌ها با init خودترمیم می‌شوند */
+ const applySendQuality = async (qk) => {
+   const q = SEND_QUALITY[qk] || SEND_QUALITY.high
+   if (sendQuality === q.key) return
+   sendQRef.current = q
+   setSendQuality(q.key)
+   pref.current.quality = q.key
+   saveDevPrefs({ quality: q.key })
+   if (!isTeacher) return
+   camChRef.current.brIdx = q.cap
+   try {
+     if (localStreamRef.current?.getVideoTracks().length) {
+       const s = await openCamera({ deviceId: prefCamId(), w: q.w, h: q.h, wantAudio: false })
+       const nv = s.getVideoTracks()[0]
+       if (nv) {
+         nv.enabled = camRef.current
+         const old = localStreamRef.current.getVideoTracks()[0]
+         try { old?.stop() } catch { /* noop */ }
+         try { localStreamRef.current.removeTrack(old) } catch { /* noop */ }
+         localStreamRef.current.addTrack(nv)
+         camDeviceIdRef.current = nv.getSettings?.().deviceId || ''
+         setCamDeviceId(camDeviceIdRef.current)
+         rememberDevices()
+       } else { try { s.getTracks().forEach((t) => t.stop()) } catch { /* noop */ } }
+     }
+     rebuildOutgoing()
+     toast(`کیفیت ارسال: «${q.label}» — ${q.hint}`, 'success')
+   } catch {
+     rebuildOutgoing() // حداقل سقف بیت‌ریت اعمال شد
+     toast(`کیفیت ارسال روی «${q.label}» ثبت شد — دوربین همان رزولوشن قبلی ادامه می‌دهد`, 'info')
+   }
+ }
 
  /* تغییر وضعیت «ضبط خودکار جلسه» — از مودال تنظیمات دستگاه؛ اگر کلاس زنده است
   * و ضبط هنوز شروع نشده، همین لحظه هم شروع می‌شود */
@@ -2991,6 +3070,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    onSwitchCam={(id) => switchCam(id)}
    onSwitchMic={(id) => switchMic(id)}
    onSwitchSpk={(id) => { setSpkId(id); saveDevPrefs({ spk: id }) }}
+   sendQuality={sendQuality}
+   onQuality={applySendQuality}
    autoRec={autoRecRef.current}
    onToggleAutoRec={toggleAutoRecPref}
    isTeacher={isTeacher}

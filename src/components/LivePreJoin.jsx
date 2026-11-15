@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
 import { faNum } from '../utils/format'
-import { listMediaDevices, openCamera, openMic, startMicMeter, applySink, loadDevPrefs, saveDevPrefs } from '../lib/devices'
+import { listMediaDevices, openCamera, openMic, startMicMeter, applySink, loadDevPrefs, saveDevPrefs, isVirtualCam } from '../lib/devices'
 
 /**
  * صفحهٔ بررسی تجهیزات قبل از ورود به کلاس زنده — الگو از کاویمو
@@ -238,6 +238,14 @@ export default function LivePreJoin({ role = 'teacher', classTitle, teacher, onJ
             </div>
 
             {sel(camId, (v) => switchCam(v), cams, 'دوربین', 'camera', 'دوربین')}
+            {isVirtualCam(cams.find((d) => d.deviceId === camId)?.label) && (
+              <>
+                <span className="vcam-badge"><Icon name="sparkles" size={10} /> دوربین مجازی (OBS/Camo/DroidCam) شناسایی شد ✓</span>
+                <p className="dev-obs-note" style={{ marginTop: -4 }}>
+                  <b>ترکیب حرفه‌ای:</b> در OBS صحنه بسازید (دوربین + اسلاید)، <b dir="ltr">Start Virtual Camera</b> بزنید و همین دوربین را انتخاب کنید — خروجی ترکیبی به کلاس ارسال می‌شود.
+                </p>
+              </>
+            )}
             <div className="row g8">
               <button className="btn btn-ghost btn-sm" disabled={busySwitch} onClick={() => switchCam('', null)} title="جابه‌جایی دوربین جلو/عقب">
                 <Icon name="camFlip" size={14} /> جلو/عقب
