@@ -1870,6 +1870,38 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  }
  const dismissPoll = () => setPoll(null)
 
+ /* ---------- خروجی تخته: اسنپ‌شات + PDF ---------- */
+ /* عکس لحظه‌ای بوم تخته → ذخیره در «مواد کلاس» (دانش‌آموزان با تیکت ۵دقیقه‌ای دانلود می‌کنند) */
+ const boardSnapshot = async () => {
+   const cv = canvasRef.current
+   if (!cv) return
+   try {
+     const r = await req(`/classes/${classId}/board/export`, { method: 'POST', body: { img: cv.toDataURL('image/png') } })
+     if (r?.ok) toast('عکس تخته در «مواد کلاس» ذخیره شد — دانش‌آموزان از پنل کلاس دانلود می‌کنند ✓', 'success')
+     else toast(r?.error || 'ذخیره عکس تخته ناموفق بود', 'error')
+   } catch (e) { if (!e.serverDown) toast(e.message || 'ذخیره عکس تخته ناموفق بود', 'error') }
+ }
+ /* PDF تخته — بوم به JPEG و ساخت PDF روی سرور؛ دانلود مستقیم روی دستگاه معلم */
+ const boardPdf = async () => {
+   const cv = canvasRef.current
+   if (!cv) return
+   try {
+     const res = await authedFetch(`/api/classes/${classId}/board/pdf`, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ img: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height }),
+     })
+     if (!res.ok) throw new Error('ساخت PDF ناموفق بود')
+     const blob = await res.blob()
+     const a = document.createElement('a')
+     a.href = URL.createObjectURL(blob)
+     a.download = `takhte-${classId}.pdf`
+     a.click()
+     setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+     toast('PDF تخته دانلود شد ✓', 'success')
+   } catch (e) { toast(e.message || 'ساخت PDF تخته ناموفق بود', 'error') }
+ }
+
  /* ---------- وایت‌برد زنده — polling مستقل از SSE (۶۵۰ms وقتی باز است) ---------- */
  useEffect(() => {
    if (!classId || !user?.id) return
@@ -3170,6 +3202,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
            <>
              <button className="wb-tool" title={boardLocked ? 'باز کردن تخته برای دانش‌آموزان' : 'قفل کردن تخته'} onClick={toggleBoardLock}><Icon name={boardLocked ? 'lock' : 'unlock'} size={15} /></button>
              <button className="wb-tool danger" title="پاک کردن همه" onClick={clearBoard}><Icon name="trash" size={15} /></button>
+             <button className="wb-tool" title="عکس لحظه‌ای تخته — ذخیره در مواد کلاس" onClick={boardSnapshot}><Icon name="camera" size={15} /></button>
+             <button className="wb-tool" title="خروجی PDF تخته — دانلود روی دستگاه" onClick={boardPdf}><Icon name="printer" size={15} /></button>
            </>
          )}
        </div>

@@ -22,7 +22,7 @@ import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
 import { registerPayRoutes, startZarinPayment, payMode, reqOrigin } from './pay.js'
-import { existsSync, mkdirSync, appendFileSync, renameSync, unlinkSync, statSync, readdirSync, createReadStream } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync, renameSync, unlinkSync, statSync, readdirSync, createReadStream, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
@@ -447,6 +447,13 @@ app.delete('/api/classes/:id', requireRole('teacher', 'admin'), (req, res) => {
       try { unlinkSync(join(RECORDINGS_DIR, r.rec_file)); console.log(`[recordings] class deleted → file removed: ${r.rec_file}`) } catch { /* نیست */ }
     }
   } catch { /* noop */ }
+  /* فایل‌های عکس تختهٔ این کلاس هم پاک شوند */
+  try {
+    const pre = `board-${c.id}-`
+    for (const f of readdirSync(EXPORTS_DIR)) {
+      if (f.startsWith(pre)) { try { unlinkSync(join(EXPORTS_DIR, f)) } catch { /* noop */ } }
+    }
+  } catch { /* نیست */ }
   db.prepare('DELETE FROM board_strokes WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM class_sessions WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM class_materials WHERE class_id = ?').run(c.id)
@@ -1109,6 +1116,99 @@ app.post('/api/classes/:id/poll/close', requireRole('teacher', 'admin'), (req, r
   const { counts, total } = pollCounts(p)
   broadcast(c.id, { type: 'poll-closed', counts, total })
   res.json({ ok: true, counts, total })
+})
+
+/* ---------------- خروجی تخته: اسنپ‌شات + PDF ----------------
+ * عکس لحظه‌ای بوم تخته → «مواد کلاس» ذخیره می‌شود و دانش‌آموزان (حتی بعد از کلاس)
+ * با تیکت ۵دقیقه‌ای دانلود می‌کنند؛ PDF هم بدون وابستگی خارجی روی سرور ساخته می‌شود */
+const EXPORTS_DIR = join(__dirname, 'uploads', 'exports')
+try { mkdirSync(EXPORTS_DIR, { recursive: true }) } catch { /* هست */ }
+const boardFileOk = (f, classId) => new RegExp(`^board-${classId}-\\d{13}\\.png$`, 'i').test(f)
+
+/* اسنپ‌شات تخته — معلم؛ ذخیرهٔ PNG + ثبت در مواد کلاس */
+app.post('/api/classes/:id/board/export', requireRole('teacher', 'admin'), express.json({ limit: '10mb' }), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند عکس تخته بگیرد' })
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.img || ''))
+  if (!m) return res.status(400).json({ error: 'تصویر PNG نامعتبر است' })
+  const buf = Buffer.from(m[1], 'base64')
+  if (buf.length < 1000 || buf.length > 8 * 1024 * 1024) return res.status(400).json({ error: 'حجم تصویر نامعتبر است' })
+  const file = `board-${c.id}-${Date.now()}.png`
+  writeFileSync(join(EXPORTS_DIR, file), buf)
+  const title = `تخته کلاس — ${new Date().toLocaleDateString('fa-IR')}`
+  const info = db.prepare('INSERT INTO class_materials (class_id, session_id, title, url, created_at) VALUES (?,?,?,?,?)')
+    .run(c.id, null, title, `/api/classes/${c.id}/board/export/${file}`, now())
+  const mat = db.prepare('SELECT id, title, url, created_at AS createdAt FROM class_materials WHERE id = ?').get(info.lastInsertRowid)
+  res.json({ ok: true, material: mat })
+})
+
+/* تیکت دانلود ۵دقیقه‌ای برای اعضای کلاس (الگوی تیکت ضبط‌ها) */
+app.get('/api/classes/:id/board/export/:file/ticket', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'دسترسی ندارید' })
+  const f = String(req.params.file || '')
+  if (!boardFileOk(f, c.id)) return res.status(404).json({ error: 'فایل پیدا نشد' })
+  const exp = now() + 5 * 60_000
+  res.json({ st: `${exp}.${req.user.id}.${sseTicketSign(exp, req.user.id)}`, exp })
+})
+
+/* سرو فایل تخته — فقط با تیکت معتبر (JWT در URL نمی‌ماند) */
+app.get('/api/classes/:id/board/export/:file', (req, res) => {
+  const c = db.prepare('SELECT id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).end()
+  const f = String(req.params.file || '')
+  if (!boardFileOk(f, c.id) || !sseTicketUser(req.query?.st)) return res.status(401).end()
+  const p = join(EXPORTS_DIR, f)
+  if (!existsSync(p)) return res.status(404).end()
+  res.setHeader('Content-Type', 'image/png')
+  res.setHeader('Content-Disposition', `attachment; filename="${f}"`)
+  createReadStream(p).pipe(res)
+})
+
+/* [PDF سبک] JPEG بوم → PDF تک‌صفحه‌ای — نوشتن دستی ساختار PDF (بدون وابستگی خارجی):
+ * کاتالوگ + صفحه + XObject تصویر با فیلتر DCTDecode + xref با آفست دقیق بایت */
+const buildImagePdf = (jpeg, wPx, hPx) => {
+  const W = Math.round(wPx * 0.75)
+  const H = Math.round(hPx * 0.75)
+  const content = `q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`
+  const enc = (s) => Buffer.from(s, 'latin1')
+  const chunks = [enc('%PDF-1.4\n')]
+  const offsets = new Array(6).fill(0)
+  const push = (num, buf) => {
+    offsets[num] = chunks.reduce((a, c) => a + c.length, 0)
+    chunks.push(buf)
+  }
+  push(1, enc('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'))
+  push(2, enc('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'))
+  push(3, enc(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 4 0 R >> /ProcSet [/PDF /ImageC] >> /Contents 5 0 R >>\nendobj\n`))
+  push(5, enc(`5 0 obj\n<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream\nendobj\n`))
+  push(4, Buffer.concat([
+    enc(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`),
+    jpeg,
+    enc('\nendstream\nendobj\n'),
+  ]))
+  const xrefAt = chunks.reduce((a, c) => a + c.length, 0)
+  let xref = `xref\n0 6\n0000000000 65535 f \n`
+  for (let i = 1; i <= 5; i++) xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`
+  chunks.push(enc(`${xref}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`))
+  return Buffer.concat(chunks)
+}
+
+app.post('/api/classes/:id/board/pdf', requireRole('teacher', 'admin'), express.json({ limit: '10mb' }), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند PDF بگیرد' })
+  const m = /^data:image\/jpe?g;base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.img || ''))
+  if (!m) return res.status(400).json({ error: 'تصویر JPEG نامعتبر است' })
+  const buf = Buffer.from(m[1], 'base64')
+  if (buf.length < 1000 || buf.length > 8 * 1024 * 1024) return res.status(400).json({ error: 'حجم تصویر نامعتبر است' })
+  const w = Math.max(200, Math.min(4000, Math.round(Number(req.body?.w) || 1600)))
+  const h = Math.max(200, Math.min(4000, Math.round(Number(req.body?.h) || 900)))
+  res.setHeader('Content-Type', 'application/pdf')
+  res.setHeader('Content-Disposition', `attachment; filename="takhte-${c.id}.pdf"`)
+  res.send(buildImagePdf(buf, w, h))
 })
 
 /* ---------------- چت زنده کلاس ---------------- */
