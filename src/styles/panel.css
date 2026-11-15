@@ -791,3 +791,38 @@ body.fs-lock { overflow: hidden; }
 }
 .dev-obs-note b { color: var(--text); }
 @media (max-width: 560px) { .dev-quality { grid-template-columns: 1fr; } }
+
+/* ---------- [نوبت ۱۱] کوئیز/نظرسنجی زندهٔ کلاس ---------- */
+.poll-panel {
+  margin: 10px 14px; padding: 12px 14px; border-radius: 14px;
+  background: rgba(56,189,248,0.06); border: 1px solid rgba(56,189,248,0.35);
+}
+.poll-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.poll-badge {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800;
+  color: var(--teal); background: rgba(45,212,191,0.12); border: 1px solid rgba(45,212,191,0.4);
+  padding: 3px 10px; border-radius: 99px;
+}
+.poll-x { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 8px; }
+.poll-x:hover { color: var(--text); background: rgba(148,163,184,0.15); }
+.poll-q { display: block; font-size: 14px; margin-bottom: 10px; }
+.poll-opts { display: grid; gap: 8px; }
+.poll-opt-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: start;
+  padding: 9px 12px; border-radius: 11px; border: 1.5px solid var(--line);
+  background: rgba(148,163,184,0.06); color: var(--text); font-size: 13px; cursor: pointer; transition: 0.15s;
+}
+.poll-opt-btn:hover { border-color: rgba(45,212,191,0.55); background: rgba(45,212,191,0.08); transform: translateY(-1px); }
+.poll-key {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; border-radius: 8px; font-size: 11px; font-weight: 800;
+  background: rgba(45,212,191,0.15); color: var(--teal);
+}
+.poll-res { padding: 2px 0; }
+.poll-bar-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; margin-bottom: 4px; }
+.poll-opt.mine .poll-opt-name, .poll-opt.mine .poll-pct { color: var(--teal); font-weight: 800; }
+.poll-pct { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.poll-bar { height: 7px; border-radius: 99px; background: rgba(148,163,184,0.18); overflow: hidden; }
+.poll-bar span { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--teal), #38bdf8); transition: width 0.4s; }
+.poll-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.poll-opt-input { margin-bottom: 6px; }

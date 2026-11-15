@@ -688,6 +688,98 @@ function RelayVideo({ player, name, color, camOff, screen, big, sink }) {
   )
 }
 
+/** [کوئیز/نظرسنجی زنده] پنل مشترک معلم/دانش‌آموز — سوال، گزینه‌ها، نوارهای نتیجهٔ زنده.
+ *  پیش از رأی: دکمه‌های گزینه • پس از رأی/پایان: درصد و تعداد تجمیعی */
+function PollPanel({ poll, isTeacher, onVote, onClose, onDismiss }) {
+  const max1 = Math.max(1, ...((poll.counts || []).map((c) => c || 0)))
+  return (
+    <div className="poll-panel" role="region" aria-label="نظرسنجی زنده کلاس">
+      <div className="poll-head">
+        <span className="poll-badge"><Icon name="chart" size={13} /> نظرسنجی زنده{poll.closed ? ' — پایان‌یافته' : ''}</span>
+        <button className="poll-x" onClick={onDismiss} aria-label="بستن پنل نظرسنجی"><Icon name="x" size={14} /></button>
+      </div>
+      <b className="poll-q">{poll.q}</b>
+      <div className="poll-opts">
+        {(poll.options || []).map((o, i) => {
+          const c = poll.counts?.[i] || 0
+          const pct = poll.total ? Math.round((c / poll.total) * 100) : 0
+          const mine = poll.myVote === i
+          /* معلم همیشه نتیجهٔ تجمیعی زنده را می‌بیند (خودش رأی نمی‌دهد)؛
+           * دانش‌آموز تا وقتی رأی نداده دکمه‌های گزینه را می‌بیند */
+          const showBars = poll.closed || poll.myVote != null || isTeacher
+          return (
+            <div key={i} className={`poll-opt ${mine ? 'mine' : ''}`}>
+              {showBars ? (
+                <div className="poll-res">
+                  <div className="poll-bar-row">
+                    <span className="poll-opt-name">{mine ? '✓ ' : ''}{o}</span>
+                    <span className="poll-pct">{faNum(pct)}٪ — {faNum(c)} رأی</span>
+                  </div>
+                  {/* عرض نوار نسبت به پررأی‌ترین گزینه مقیاس می‌شود تا مقایسه راحت باشد */}
+                  <div className="poll-bar"><span style={{ width: `${Math.round((c / max1) * 100)}%` }} /></div>
+                </div>
+              ) : (
+                <button className="poll-opt-btn" onClick={() => onVote(i)}>
+                  <span className="poll-key">{faNum(i + 1)}</span> {o}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div className="poll-foot">
+        <span className="muted small">
+          {poll.closed ? 'نتیجهٔ نهایی' : poll.myVote != null ? 'رأی شما ثبت شد — نتایج زنده به‌روز می‌شود' : 'یک گزینه انتخاب کنید'}
+          {' '}• مجموع رأی‌ها: {faNum(poll.total)}
+        </span>
+        {isTeacher && !poll.closed && (
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><Icon name="check" size={13} /> پایان نظرسنجی</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** مودال ساخت نظرسنجی (فقط معلم) — سوال + ۲ تا ۴ گزینه */
+function PollModal({ onClose, onCreate, busy }) {
+  const [q, setQ] = useState('')
+  const [opts, setOpts] = useState(['', ''])
+  const valid = q.trim().length > 0 && opts.filter((o) => o.trim()).length >= 2
+  return (
+    <div className="dev-modal-mask" onClick={onClose}>
+      <div className="dev-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="ساخت نظرسنجی">
+        <div className="dev-modal-head">
+          <b><Icon name="chart" size={15} /> کوئیز / نظرسنجی زنده</b>
+          <button className="icon-btn" onClick={onClose} aria-label="بستن"><Icon name="x" size={16} /></button>
+        </div>
+        <label className="dev-field">
+          <span><Icon name="edit" size={14} /> سوال</span>
+          <textarea className="input" rows={2} value={q} onChange={(e) => setQ(e.target.value)} placeholder="مثلاً: کدام موضوع سخت‌تر بود؟" />
+        </label>
+        <div className="dev-field">
+          <span><Icon name="list" size={14} /> گزینه‌ها (حداقل ۲)</span>
+          {opts.map((o, i) => (
+            <input key={i} className="input poll-opt-input" value={o} dir="auto"
+              onChange={(e) => setOpts((a) => a.map((x, j) => (j === i ? e.target.value : x)))}
+              placeholder={`گزینه ${faNum(i + 1)}`} />
+          ))}
+          {opts.length < 4 && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setOpts((a) => [...a, ''])}>
+              <Icon name="plus" size={13} /> افزودن گزینه
+            </button>
+          )}
+        </div>
+        <div className="dev-modal-foot">
+          <button className="btn btn-ghost" onClick={onClose}>انصراف</button>
+          <button className="btn btn-primary" disabled={!valid || busy} onClick={() => onCreate(q.trim(), opts.map((o) => o.trim()).filter(Boolean))}>
+            <Icon name="send" size={14} /> ارسال به کلاس
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PermissionCard({ state, permBusy, diag, onRequest, onSkip, inIframe, onOpenTab, onGoHttps, needsApproval, handSent }) {
   const dv = diag?.videoCount ?? 0
   const da = diag?.audioCount ?? 0
@@ -907,6 +999,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  const [recording, setRecording] = useState(false)
  const [recSecs, setRecSecs] = useState(0)
  const [hand, setHand] = useState(false)
+ /* [کوئیز/نظرسنجی زنده] { q, options, counts, total, closed, myVote } — از SSE زنده + GET ورود */
+ const [poll, setPoll] = useState(null)
+ const [pollModal, setPollModal] = useState(false)
  const [endedModal, setEndedModal] = useState(false) // [فیکس F39] تایید خروج/پایان — حالا داخل عنصر فول‌اسکرین رندر می‌شود
  const [tab, setTab] = useState('chat')
  const [, setTick] = useState(0)
@@ -1650,6 +1745,17 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
          }
          break
        }
+       case 'poll':
+         /* نظرسنجی جدید معلم — گزینه‌ها می‌آید، شمارنده‌ها صفر */
+         setPoll({ q: msg.q, options: msg.options || [], counts: (msg.options || []).map(() => 0), total: 0, closed: false, myVote: null })
+         if (!isTeacher) toast('نظرسنجی معلم رسید — همین‌جا پاسخ بدهید', 'info')
+         break
+       case 'poll-votes': /* فقط تعداد تجمیعی — رأی فردی هرگز broadcast نمی‌شود */
+         setPoll((p) => (p ? { ...p, counts: msg.counts || p.counts, total: msg.total ?? p.total } : p))
+         break
+       case 'poll-closed':
+         setPoll((p) => (p ? { ...p, counts: msg.counts || p.counts, total: msg.total ?? p.total, closed: true } : p))
+         break
        default: break
      }
    }
@@ -1731,6 +1837,34 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand } }).catch(() => {})
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [hand])
+
+ /* ---------- کوئیز/نظرسنجی زنده ---------- */
+ /* نظرسنجی موجود هنگام ورود/رفرش — دیرهنگام‌ها هم سوال و نتیجهٔ زنده را می‌بینند */
+ useEffect(() => {
+   if (!classId || !user) return
+   req(`/classes/${classId}/poll`).then((r) => {
+     if (r && r.q) setPoll({ q: r.q, options: r.options, counts: r.counts, total: r.total, closed: !!r.closed, myVote: r.myVote })
+   }).catch(() => {})
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [classId])
+
+ const createPoll = async (q, options) => {
+   try {
+     await req(`/classes/${classId}/poll`, { method: 'POST', body: { q, options } })
+     setPollModal(false)
+     toast('نظرسنجی ارسال شد — نتایج زنده همین‌جا می‌آید', 'success')
+   } catch (e) { if (!e.serverDown) toast(e.message || 'ارسال نظرسنجی ناموفق بود', 'error') }
+ }
+ const votePoll = async (idx) => {
+   try {
+     const r = await req(`/classes/${classId}/poll/vote`, { method: 'POST', body: { idx } })
+     setPoll((p) => (p ? { ...p, counts: r.counts, total: r.total, myVote: r.myVote } : p))
+   } catch (e) { if (!e.serverDown) toast(e.message || 'ثبت رأی ناموفق بود', 'error') }
+ }
+ const closePoll = async () => {
+   try { await req(`/classes/${classId}/poll/close`, { method: 'POST' }) } catch (e) { if (!e.serverDown) toast(e.message || 'بستن نظرسنجی ناموفق بود', 'error') }
+ }
+ const dismissPoll = () => setPoll(null)
 
  /* ---------- وایت‌برد زنده — polling مستقل از SSE (۶۵۰ms وقتی باز است) ---------- */
  useEffect(() => {
@@ -3106,6 +3240,14 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    </div>
  )}
 
+ {/* [کوئیز/نظرسنجی زنده] پنل مشترک — سوال، رأی، نتایج زنده */}
+ {poll && (
+   <PollPanel poll={poll} isTeacher={isTeacher} onVote={votePoll} onClose={closePoll} onDismiss={dismissPoll} />
+ )}
+ {isTeacher && pollModal && (
+   <PollModal onClose={() => setPollModal(false)} onCreate={createPoll} />
+ )}
+
  {/* پنل گفتگوی دانش‌آموز — بعد از اجازه مدرس، دکمه‌های میکروفون/دوربین در جای خودشان
      (مثل اسکای‌روم/میت: انتخاب می‌کنید چه چیزی روشن شود؛ قاب اصلی برای مدرس می‌ماند) */}
  {!isTeacher && canSpeak && (!mic || !cam) && (
@@ -3184,6 +3326,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  {isTeacher && (
  <button className={ctl(board)} onClick={toggleBoard} aria-pressed={board}>
  <Icon name="board" /> <span className="ctl-tip">{board ? 'بستن وایت‌برد' : 'وایت‌برد دیجیتال'}</span>
+ </button>
+ )}
+ {/* [کوئیز/نظرسنجی زنده] معلم سوال چندگزینه‌ای می‌فرستد؛ نتایج زنده برای همه */}
+ {isTeacher && (
+ <button className={ctl(pollModal || !!poll)} onClick={() => setPollModal(!pollModal)} aria-pressed={pollModal}>
+ <Icon name="chart" /> <span className="ctl-tip">{poll && !poll.closed ? 'نظرسنجی فعال — ساخت جدید' : 'کوئیز / نظرسنجی زنده'}</span>
  </button>
  )}
  <button className={ctl(fsActive || pseudoFs)} onClick={toggleFs} aria-pressed={fsActive || pseudoFs}>

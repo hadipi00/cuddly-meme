@@ -707,8 +707,9 @@ app.post('/api/classes/:id/start', requireRole('teacher', 'admin'), (req, res) =
   if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند شروع کند' })
   const startedAt = now()
   db.prepare(`UPDATE classes SET status='live', started_at=?, ended_at=NULL WHERE id=?`).run(startedAt, c.id)
-  // جلسه جدید — دست‌ها و اجازه‌های جلسه قبل پاک می‌شود
+  // جلسه جدید — دست‌ها و اجازه‌های جلسه قبل پاک می‌شود (+ نظرسنجی قبلی)
   db.prepare('UPDATE attendance SET hand=0, can_speak=0 WHERE class_id=?').run(c.id)
+  polls.delete(c.id)
   broadcast(c.id, { type: 'live', status: 'live', startedAt, at: startedAt })
   res.json({ ok: true, startedAt })
 })
@@ -724,6 +725,7 @@ app.post('/api/classes/:id/end', requireRole('teacher', 'admin'), (req, res) => 
      در حالی که سرور به کلاینت‌ها 'ended' بروداشت (ناسازگاری وضعیت) */
   db.prepare(`UPDATE classes SET status='ended', ended_at=? WHERE id=? AND status != 'ended'`).run(endedAt, c.id)
   db.prepare('UPDATE attendance SET hand=0 WHERE class_id=?').run(c.id)
+  polls.delete(c.id) // نظرسنجی زنده هم با پایان کلاس بسته شود
   // ثبت جلسه برگزارشده — برای بخش «جلسات قبلی» پنل دانش‌آموز (ضبط + فایل)
   if (wasLive && c.started_at) {
     db.prepare(`INSERT OR IGNORE INTO class_sessions (class_id, started_at, ended_at, dur, created_at)
@@ -1037,6 +1039,73 @@ app.post('/api/classes/:id/permit', requireRole('teacher', 'admin'), (req, res) 
   const u = db.prepare('SELECT name FROM users WHERE id = ?').get(userId)
   broadcast(c.id, { type: 'perm', userId, name: u?.name || '', canSpeak: !!allow, at: now() })
   res.json({ ok: true, participants: liveParticipants(c.id) })
+})
+
+/* ---------------- کوئیز/نظرسنجی زندهٔ کلاس ----------------
+ * درون-حافظه‌ای (الگوی اتاق رسانه): معلم سوال چندگزینه‌ای می‌فرستد، همه زنده
+ * نتایج را می‌بینند. فقط «تعداد تجمیعی» broadcast می‌شود — رأی فردی هرگز لو نمی‌رود */
+const polls = new Map() // classId → { q, options[], votes: {userId: idx}, closed, at }
+
+const pollCounts = (p) => {
+  const counts = p.options.map(() => 0)
+  let total = 0
+  for (const idx of Object.values(p.votes)) {
+    if (Number.isInteger(idx) && counts[idx] != null) { counts[idx]++; total++ }
+  }
+  return { counts, total }
+}
+
+/* وضعیت نظرسنجی برای ورود دیرهنگام/رفرش — رأی خود کاربر هم برمی‌گردد */
+app.get('/api/classes/:id/poll', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'دسترسی ندارید' })
+  const p = polls.get(c.id)
+  if (!p) return res.json({ active: false })
+  const { counts, total } = pollCounts(p)
+  res.json({ active: !p.closed, closed: p.closed, q: p.q, options: p.options, counts, total, myVote: p.votes[req.user.id] ?? null })
+})
+
+app.post('/api/classes/:id/poll', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس می‌تواند نظرسنجی بفرستد' })
+  const q = String(req.body?.q || '').trim().slice(0, 300)
+  const options = Array.isArray(req.body?.options)
+    ? req.body.options.map((o) => String(o || '').trim().slice(0, 100)).filter(Boolean).slice(0, 6)
+    : []
+  if (!q || options.length < 2) return res.status(400).json({ error: 'سوال و حداقل دو گزینه لازم است' })
+  const p = { q, options, votes: {}, closed: false, at: now() }
+  polls.set(c.id, p)
+  broadcast(c.id, { type: 'poll', q, options, at: p.at })
+  res.json({ ok: true })
+})
+
+app.post('/api/classes/:id/poll/vote', requireAuth, (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای رأی دادن باید عضو کلاس باشید' })
+  const p = polls.get(c.id)
+  if (!p || p.closed) return res.status(400).json({ error: 'نظرسنجی فعالی نیست' })
+  const idx = Number(req.body?.idx)
+  if (!Number.isInteger(idx) || idx < 0 || idx >= p.options.length) return res.status(400).json({ error: 'گزینه نامعتبر است' })
+  p.votes[req.user.id] = idx
+  const { counts, total } = pollCounts(p)
+  /* فقط تجمیعی — رأی فردی هرگز به کلاینت‌ها broadcast نمی‌شود */
+  broadcast(c.id, { type: 'poll-votes', counts, total })
+  res.json({ ok: true, counts, total, myVote: idx })
+})
+
+app.post('/api/classes/:id/poll/close', requireRole('teacher', 'admin'), (req, res) => {
+  const c = db.prepare('SELECT id, teacher_id FROM classes WHERE id = ?').get(req.params.id)
+  if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
+  if (!canControl(c, req.user)) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
+  const p = polls.get(c.id)
+  if (!p) return res.status(400).json({ error: 'نظرسنجی فعالی نیست' })
+  p.closed = true
+  const { counts, total } = pollCounts(p)
+  broadcast(c.id, { type: 'poll-closed', counts, total })
+  res.json({ ok: true, counts, total })
 })
 
 /* ---------------- چت زنده کلاس ---------------- */
