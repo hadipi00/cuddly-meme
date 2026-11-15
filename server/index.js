@@ -1012,18 +1012,21 @@ app.post('/api/classes/:id/heartbeat', requireAuth, (req, res) => {
   if (!c) return res.status(404).json({ error: 'کلاس پیدا نشد' })
   if (!classAccess(c, req.user)) return res.status(403).json({ error: 'برای حضور در کلاس باید ثبت‌نام کنید' })
   const hand = req.body?.hand ? 1 : 0
-  db.prepare(`INSERT INTO attendance (class_id, user_id, hand, first_seen, last_seen) VALUES (?,?,?,?,?)
-    ON CONFLICT(class_id, user_id) DO UPDATE SET last_seen=excluded.last_seen, hand=excluded.hand`)
-    .run(c.id, req.user.id, hand, now(), now())
+  /* [وضعیت اتصال] تاخیر poll خودِ دانش‌آموز هم ذخیره می‌شود (۰ = نامعلوم) */
+  const net = Math.max(0, Math.min(60_000, Math.round(Number(req.body?.net) || 0)))
+  db.prepare(`INSERT INTO attendance (class_id, user_id, hand, net, first_seen, last_seen) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(class_id, user_id) DO UPDATE SET last_seen=excluded.last_seen, hand=excluded.hand, net=excluded.net`)
+    .run(c.id, req.user.id, hand, net, now(), now())
   res.json({ ok: true, participants: liveParticipants(c.id) })
 })
 
 const ONLINE_WINDOW = 25_000 // ۲۵ ثانیه — با heartbeat هر ۸ ثانیه
 function liveParticipants(classId) {
-  return db.prepare(`SELECT a.user_id AS id, u.name, u.role, u.color, a.hand, a.can_speak, a.first_seen
+  const t = now()
+  return db.prepare(`SELECT a.user_id AS id, u.name, u.role, u.color, a.hand, a.can_speak, a.net, a.first_seen, a.last_seen
     FROM attendance a JOIN users u ON u.id = a.user_id
-    WHERE a.class_id = ? AND a.last_seen > ? ORDER BY a.first_seen`).all(classId, now() - ONLINE_WINDOW)
-    .map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, hand: !!p.hand, canSpeak: !!p.can_speak, joinedAt: p.first_seen }))
+    WHERE a.class_id = ? AND a.last_seen > ? ORDER BY a.first_seen`).all(classId, t - ONLINE_WINDOW)
+    .map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, hand: !!p.hand, canSpeak: !!p.can_speak, net: p.net || 0, age: Math.max(0, t - p.last_seen), joinedAt: p.first_seen }))
 }
 
 /** اجازه صدا/تصویر به دانش‌آموز — فقط مدرس همان کلاس (یا ادمین)

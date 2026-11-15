@@ -826,3 +826,13 @@ body.fs-lock { overflow: hidden; }
 .poll-bar span { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--teal), #38bdf8); transition: width 0.4s; }
 .poll-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
 .poll-opt-input { margin-bottom: 6px; }
+
+/* ---------- [نوبت ۱۱] وضعیت اتصال دانش‌آموز در تب حاضران معلم ---------- */
+.net-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 99px; flex-shrink: 0;
+  margin-inline-start: auto; box-shadow: 0 0 0 2px rgba(148,163,184,0.15);
+}
+.net-dot.green { background: #22c55e; }
+.net-dot.yellow { background: #eab308; }
+.net-dot.red { background: #ef4444; animation: netPulse 1.1s infinite; }
+@keyframes netPulse { 50% { opacity: 0.35; } }

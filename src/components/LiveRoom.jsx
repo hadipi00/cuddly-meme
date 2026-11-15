@@ -1804,13 +1804,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
      if (!alive || busy2) return
      busy2 = true
      try {
+       /* [وضعیت اتصال] تاخیر رفت‌وبرگشت همین poll = سنجهٔ شبکهٔ خود کاربر؛ با heartbeat به معلم */
+       const t0 = Date.now()
        const st = await req(`/classes/${classId}/state`, { timeout: 7000 })
+       netRef.current = Date.now() - t0
        if (!alive) return
        setLive({ status: st.status, startedAt: st.startedAt, participants: st.participants || [] })
        if (!isTeacher && st.boardOpen != null && canSyncBoard()) setBoard(!!st.boardOpen)
        hbCount++
        if (hbCount % 3 === 0) {
-         req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: handRef.current } }).catch(() => {})
+         req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand: handRef.current, net: netRef.current } }).catch(() => {})
        }
        const r = await req(`/classes/${classId}/messages?after=${lastIdRef.current}`)
        if (!alive || !r.messages?.length) return
@@ -1830,11 +1833,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  }, [classId])
 
  const handRef = useRef(false); handRef.current = hand
+ const netRef = useRef(0) // [وضعیت اتصال] آخرین تاخیر poll (ms) — با heartbeat گزارش می‌شود
 
  /* دست بلند شده — بلافاصله به سرور */
  useEffect(() => {
    if (!classId || !user) return
-   req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand } }).catch(() => {})
+   req(`/classes/${classId}/heartbeat`, { method: 'POST', body: { hand, net: netRef.current } }).catch(() => {})
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [hand])
 
@@ -2000,6 +2004,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
 
  const participants = live?.participants || []
  const handsUp = participants.filter((p) => p.hand).length
+ /* [وضعیت اتصال] رنگ نقطهٔ شبکهٔ هر دانش‌آموز: سبز <۷۰۰ms • زرد ۷۰۰-۲۰۰۰ •
+  * قرمز ≥۲۰۰۰ یا دیرآمده (بیش از ۱۵ ثانیه بی‌heartbeat) */
+ const netClass = (p) => (((p.age || 0) > 15_000 || (p.net || 0) >= 2000) ? 'red' : ((p.net || 0) >= 700 ? 'yellow' : 'green'))
  const classEnded = live?.status === 'ended'
 
  /* [فیکس F4] با پایان کلاس، وضعیت UI میکروفون/دوربین ریست می‌شود — قبلاً ترک‌ها
@@ -3470,6 +3477,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    ) : p.hand ? (
      <button className="btn btn-primary btn-sm" style={{ padding: '3px 10px', fontSize: 11, flexShrink: 0 }} onClick={() => grantPerm(p.id, true)}>✋ اجازه دادن</button>
    ) : null
+ )}
+ {isTeacher && p.role === 'student' && (
+   <span className={`net-dot ${netClass(p)}`} title={`وضعیت شبکهٔ این دانش‌آموز — تاخیر: ${faNum(p.net || 0)} میلی‌ثانیه`} aria-label="وضعیت اتصال" />
  )}
  <div className="pr-icons">
  <Icon name="mic" className={p.id === user?.id ? (mic ? '' : 'muted-off') : ''} size={15} />

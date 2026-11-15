@@ -128,6 +128,8 @@ try { db.exec('ALTER TABLE classes ADD COLUMN board_locked INTEGER NOT NULL DEFA
 try { db.exec('ALTER TABLE classes ADD COLUMN board_open INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE classes ADD COLUMN board_bg TEXT DEFAULT \'\'') } catch { /* ستون هست */ }
 try { db.exec('ALTER TABLE attendance ADD COLUMN can_speak INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
+/* [وضعیت اتصال] آخرین تاخیر poll دانش‌آموز (میلی‌ثانیه) — معلم وضعیت شبکه هر حاضر را می‌بیند */
+try { db.exec('ALTER TABLE attendance ADD COLUMN net INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 /* [فیکس B26-UI] پرچم «اجبار تغییر رمز اولین ورود» برای اکانت‌های دموی با رمز عمومی */
 try { db.exec('ALTER TABLE users ADD COLUMN must_change_pw INTEGER NOT NULL DEFAULT 0') } catch { /* ستون هست */ }
 
