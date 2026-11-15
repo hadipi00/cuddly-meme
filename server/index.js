@@ -22,7 +22,7 @@ import { searchIndex, buildIndex } from './contentIndex.mjs'
 import { registerExamRoutes } from './exams.js'
 import { registerContentRoutes } from './content.js'
 import { registerPayRoutes, startZarinPayment, payMode, reqOrigin } from './pay.js'
-import { existsSync, mkdirSync, appendFileSync, renameSync, unlinkSync, statSync, createReadStream } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync, renameSync, unlinkSync, statSync, readdirSync, createReadStream } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
@@ -438,6 +438,15 @@ app.delete('/api/classes/:id', requireRole('teacher', 'admin'), (req, res) => {
   if (req.user.role !== 'admin' && c.teacher_id !== req.user.id) return res.status(403).json({ error: 'فقط مدرس همان کلاس' })
   /* پاک‌سازی کامل داده‌های وابسته — قبلاً board_strokes/class_sessions/class_materials
      یتیم می‌ماندند و اتاق‌های درون‌حافظه‌ای (SSE/رسانه/تخته) هرگز آزاد نمی‌شدند */
+  /* [فیکس نشت دیسک] فایل‌های ضبط بایگانی‌شدهٔ همین کلاس هم از دیسک پاک شوند —
+     قبلاً با حذف ردیف‌های class_sessions، فایل‌های server/uploads/recordings یتیم می‌ماندند */
+  try {
+    const recs = db.prepare('SELECT rec_file FROM class_sessions WHERE class_id = ? AND rec_file IS NOT NULL AND rec_file != \'\'').all(c.id)
+    for (const r of recs) {
+      if (!/^rec-[a-z0-9-]+\.(webm|mp4)$/i.test(r.rec_file)) continue // فقط نام‌های الگوی سروری
+      try { unlinkSync(join(RECORDINGS_DIR, r.rec_file)); console.log(`[recordings] class deleted → file removed: ${r.rec_file}`) } catch { /* نیست */ }
+    }
+  } catch { /* noop */ }
   db.prepare('DELETE FROM board_strokes WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM class_sessions WHERE class_id = ?').run(c.id)
   db.prepare('DELETE FROM class_materials WHERE class_id = ?').run(c.id)
@@ -775,6 +784,34 @@ const RECORDINGS_DIR = join(__dirname, 'uploads', 'recordings')
 try { mkdirSync(RECORDINGS_DIR, { recursive: true }) } catch { /* هست */ }
 const recPending = new Map() // sessionId → { path, size, total, mime, classId }
 const recExt = (mime) => (String(mime || '').toLowerCase().includes('mp4') ? 'mp4' : 'webm')
+
+/* [پاک‌سازی یتیم‌ها] اگر سرور وسط آپلودِ ضبط ری‌استارت شود، نگاشت درون‌حافظه‌ای
+ * recPending می‌رود و فایل‌های .part ناقص یتیم می‌مانند و دیسک پر می‌شود؛
+ * در شروع سرور، هر .partِ قدیمی‌تر از ۲ ساعت پاک می‌شود (آپلود واقعی چنددقیقه‌ای است). */
+const sweepOrphanParts = () => {
+  const cutoff = Date.now() - 2 * 3600_000
+  try {
+    for (const f of readdirSync(RECORDINGS_DIR)) {
+      if (!f.endsWith('.part')) continue
+      const p = join(RECORDINGS_DIR, f)
+      try { if (statSync(p).mtimeMs < cutoff) { unlinkSync(p); console.log(`[recordings] orphan part removed: ${f}`) } } catch { /* نیست */ }
+    }
+  } catch { /* پوشه نیست */ }
+}
+sweepOrphanParts()
+
+/* آمار فضای ضبط‌ها — مانیتورینگ دیسک سرور (در /api/health گزارش می‌شود) */
+const recDirStats = () => {
+  let files = 0
+  let bytes = 0
+  try {
+    for (const f of readdirSync(RECORDINGS_DIR)) {
+      if (!/^rec-.*\.(webm|mp4)$/i.test(f)) continue
+      try { bytes += statSync(join(RECORDINGS_DIR, f)).size; files++ } catch { /* noop */ }
+    }
+  } catch { /* نیست */ }
+  return { files, bytes, mb: Math.round((bytes / 1048576) * 10) / 10 }
+}
 
 const getRecClass = (req) => {
   const c = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id)
@@ -1343,8 +1380,10 @@ registerContentRoutes(app)
 /* ---------------- درگاه پرداخت زرین‌پال + پیامک ملی پیامک (server/pay.js) ---------------- */
 registerPayRoutes(app)
 
-/* ---------------- سلام سرور ---------------- */
-app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now() }))
+/* ---------------- سلام سرور ----------------
+ * آمار ضبط‌ها (تعداد فایل/حجم دیسک) هم گزارش می‌شود تا پر شدن دیسک سرور
+ * دبیان پیش از گیر کردن ضبط‌های بعدی دیده شود */
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'modaresyar-api', time: now(), recordings: recDirStats() }))
 
 /* [فیکس F27] دریافت خطاهای crash فرانت‌اند (ErrorBoundary) — قبلاً خطاهای
    production کاملاً بی‌ردپا بودند. لاگ در کنسول سرور کافی است (بدون PII) */
