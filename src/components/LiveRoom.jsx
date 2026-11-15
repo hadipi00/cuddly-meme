@@ -1845,6 +1845,19 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [participantsPre])
 
+ /* [فیکس دست بلند کردن — خودترمیم] رویداد SSE «perm» دستِ محلی دانش‌آموز را صفر
+  * می‌کند، اما اگر SSE قطع باشد (پروکسی/محدودیت HTTP1.1 — رایج در ایران) رویداد
+  * نمی‌رسد و state محلی true می‌ماند؛ در نتیجه heartbeat دوره‌ای هر ~۷.۵ ثانیه
+  * دست را «دوباره» بالا می‌برد: معلم بی‌پایان «✋ دست بالا کرده» می‌دید و
+  * دانش‌آموز بعد از اجازه/لغو، هیچ راهی برای پایین آوردن دست نداشت.
+  * سرور مرجع است — participants هر ۲.۵ ثانیه از /state تازه می‌شود */
+ useEffect(() => {
+   if (isTeacher || !handRef.current) return
+   const me = participantsPre.find((p) => p.id === user?.id)
+   if (me && (!me.hand || me.canSpeak)) setHand(false)
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [participantsPre])
+
  /* ---------- محاسبه تایمر ---------- */
  const startedAt = live?.startedAt || null
  const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0
@@ -3077,8 +3090,11 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    />
  )}
 
- {/* در حال دیدن استریم مدرس ولی بدون اجازه صحبت — نوار باریک درخواست (فقط با کلیک خود دانش‌آموز) */}
- {!isTeacher && needsApproval && stageBusy && !mediaSkipped && (
+ {/* در حال دیدن استریم مدرس ولی بدون اجازه صحبت — نوار باریک درخواست (فقط با کلیک خود دانش‌آموز)
+     [فیکس دست بلند کردن] شرط stageBusy حذف شد — قبلاً تا اولین فریم ویدیو رندر نمی‌شد،
+     دکمهٔ «بلند کردن دست» اصلاً دیده نمی‌شد و دانش‌آموزی که استریمش باز نشده بود
+     هیچ راهی برای پرسیدن سوال نداشت */}
+ {!isTeacher && needsApproval && !mediaSkipped && (
    <div className="speak-req-bar">
      {(myHand || hand) ? (
        <span className="small" style={{ color: '#d97706' }}>✋ درخواست شما برای مدرس ارسال شد — منتظر تایید…</span>
