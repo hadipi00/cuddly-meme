@@ -951,6 +951,15 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  /* کیفیت ارسال دستی (مدرس) — سقف نردبان بیت‌ریت + رزولوشن دوربین؛ از ذخیرهٔ قبلی */
  const [sendQuality, setSendQuality] = useState(SEND_QUALITY[pref.current.quality]?.key || 'high')
  const sendQRef = useRef(SEND_QUALITY[pref.current.quality] || SEND_QUALITY.high)
+ /* [ترکیب تصویر — سبک OBS] صفحه + دوربین (PiP) روی یک بوم رسم و خروجی بوم به‌جای
+  * دوربین روی «کانال دوربین» ارسال می‌شود — کانال صفحه بسته و آپلود تقریباً نصف.
+  * بوم: ۱۲۸۰×۷۲۰ در ~۱۲ فریم بر ثانیه (هزینهٔ ترکیب روی خود دستگاه مدرس) */
+ const composeRef = useRef(false)
+ const [compose, setCompose] = useState(false)
+ const compCanvasRef = useRef(null)
+ const compStreamRef = useRef(null)
+ const compRAFRef = useRef(0)
+ const compVidsRef = useRef([])
 
  /* ---------- رله رسانه — فرستنده (دو کانال مستقل: دوربین + صفحه) ---------- */
  /* [فیکس F36-c] کانال‌ها: cam = دوربین+میکروفون، scr = اشتراک صفحه (+صدای تب).
@@ -1211,6 +1220,13 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    stopChannel(camChRef.current)
    stopChannel(scrChRef.current)
    try { if (recRef.current && recRef.current.state !== 'inactive') recRef.current.stop() } catch { /* noop */ }
+   /* [ترکیب تصویر] حلقهٔ رسم بوم و ترک‌های آن — قبل از قطع رسانه‌ها */
+   try {
+     composeRef.current = false
+     cancelAnimationFrame?.(compRAFRef.current)
+     compVidsRef.current?.forEach((el) => { try { el.pause?.(); el.srcObject = null } catch { /* noop */ } })
+     try { compStreamRef.current?.getTracks().forEach((t) => t.stop()) } catch { /* noop */ }
+   } catch { /* noop */ }
    localStreamRef.current?.getTracks().forEach((t) => t.stop())
    screenTrackRef.current?.stop()
    if (classId) req(`/classes/${classId}/media/stop`, { method: 'POST' }).catch(() => {})
@@ -1387,13 +1403,16 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
    } else {
      if (!isTeacher && !canSpeakRef.current) return
      const s = localStreamRef.current
-     const v = s?.getVideoTracks()[0]
+     /* [ترکیب تصویر — سبک OBS] وقتی حالت ترکیب فعال است، «بوم ترکیبی» جای ترک دوربین
+      * روی همین کانال ارسال می‌شود؛ صدای میکروفون همان می‌ماند → یک کانال واحد */
+     const comp = composeRef.current ? compStreamRef.current?.getVideoTracks()[0] : null
+     const v = comp || s?.getVideoTracks()[0]
      const a = s?.getAudioTracks()[0]
      if (!v && !a) return
      tracks = [...(v ? [v] : []), ...(a ? [a] : [])]
      micOn = !!a && micRef.current
    }
-   const v = ch.screen ? tracks[0] : localStreamRef.current?.getVideoTracks()[0]
+   const v = ch.screen ? tracks[0] : (tracks.find((t) => t.kind === 'video') || null)
    const hasA = tracks.some((t) => t.kind === 'audio')
    /* کدک‌های واقعی داخل استریم — گیرنده SourceBuffer را دقیقاً با همین‌ها می‌سازد
       (وگرنه استریمِ بدون صدا با خطای "misses expected opus track" رد می‌شد) */
@@ -2277,7 +2296,8 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  const startRecording = () => {
    if (recording) return
    if (!window.MediaRecorder) { toast('مرورگر شما از ضبط ویدیو پشتیبانی نمی‌کند — از کروم استفاده کنید', 'error'); return }
-   const vTrack = screenTrackRef.current || localStreamRef.current?.getVideoTracks()[0] || null
+   /* [ترکیب تصویر] اگر ترکیب فعال است، همان نمای ترکیبی (صفحه+دوربین) ضبط می‌شود */
+   const vTrack = compStreamRef.current?.getVideoTracks()[0] || screenTrackRef.current || localStreamRef.current?.getVideoTracks()[0] || null
    /* صدای صفحه (وقتی اشتراک صفحه با صدای تب است) + میکروفون — هر دو ضبط می‌شوند [فیکس F36-c] */
    const aTracks = [
      ...(screenStreamRef.current?.getAudioTracks?.() || []),
@@ -2366,7 +2386,118 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
   * هر روشن/خاموشی = رکوردر نو = سشن نو = ری‌بیلد همه گیرنده‌ها + وقفه در صدا.
   * حالا کانال صفحه (scr) جدا از کانال دوربین (cam) اجرا می‌شود؛ دوربین ادامه
   * دارد و دانش‌آموز هم‌زمان صفحه را بزرگ و مدرس را در نوار پایین می‌بیند */
+ /* ================= ترکیب تصویر — سبک OBS =================
+  * صفحه (تمام‌قاب) + دوربین معلم (پخش کوچک گوشه) روی یک بوم ۱۲۸۰×۷۲۰ رسم و
+  * خروجی بوم به‌جای دوربین از «کانال دوربین» ارسال می‌شود؛ کانال صفحه بسته می‌شود.
+  * نتیجه: یک نمای یکپارچه برای دانش‌آموز + حدود نصف شدن پهنای باند آپلود مدرس.
+  * کلاس ضبط‌شده هم دقیقاً همین نمای ترکیبی را می‌گیرد. */
+ const startCompose = () => {
+   if (composeRef.current) return
+   const scr = screenStreamRef.current?.getVideoTracks()[0]
+   const cam = localStreamRef.current?.getVideoTracks()[0]
+   if (!scr || !cam) { toast('برای ترکیب، اشتراک صفحه و دوربین هر دو باید فعال باشند', 'error'); return }
+   try {
+     const canvas = document.createElement('canvas')
+     canvas.width = 1280
+     canvas.height = 720
+     const ctx = canvas.getContext('2d')
+     const mkVid = (track) => {
+       const el = document.createElement('video')
+       el.srcObject = new MediaStream([track])
+       el.muted = true
+       el.playsInline = true
+       try { el.play?.() } catch { /* noop */ }
+       return el
+     }
+     const vScr = mkVid(scr)
+     const vCam = mkVid(cam)
+     compVidsRef.current = [vScr, vCam]
+     compCanvasRef.current = canvas
+     compStreamRef.current = canvas.captureStream(12)
+     composeRef.current = true
+     setCompose(true)
+     const draw = () => {
+       if (!composeRef.current) return
+       try {
+         const W = 1280
+         const H = 720
+         /* پس‌زمینه + صفحهٔ اشتراکی با حفظ نسبت (letterbox) */
+         ctx.fillStyle = '#0b1220'
+         ctx.fillRect(0, 0, W, H)
+         const sw = vScr.videoWidth || 1280
+         const sh = vScr.videoHeight || 720
+         const r = Math.min(W / sw, H / sh)
+         const dw = sw * r
+         const dh = sh * r
+         ctx.drawImage(vScr, (W - dw) / 2, (H - dh) / 2, dw, dh)
+         /* دوربین معلم — پخش گوشهٔ پایین با حاشیهٔ سبز */
+         const cw = 300
+         const chh = Math.round((cw * 9) / 16)
+         const rx = 16
+         const ry = H - chh - 16
+         ctx.save()
+         ctx.beginPath()
+         if (ctx.roundRect) ctx.roundRect(rx, ry, cw, chh, 14)
+         else ctx.rect(rx, ry, cw, chh)
+         ctx.clip()
+         ctx.fillStyle = '#101b31'
+         ctx.fillRect(rx, ry, cw, chh)
+         const vw = vCam.videoWidth || 640
+         const vh = vCam.videoHeight || 360
+         const cr = Math.max(cw / vw, chh / vh)
+         const cdw = vw * cr
+         const cdh = vh * cr
+         ctx.drawImage(vCam, rx + (cw - cdw) / 2, ry + (chh - cdh) / 2, cdw, cdh)
+         ctx.restore()
+         ctx.strokeStyle = 'rgba(45,212,191,0.85)'
+         ctx.lineWidth = 3
+         ctx.strokeRect(rx, ry, cw, chh)
+       } catch { /* فریم بعدی */ }
+       compRAFRef.current = requestAnimationFrame(draw)
+     }
+     draw()
+     /* کانال صفحه بسته می‌شود — تصویر ترکیبی از کانال دوربین می‌رود */
+     stopChannel(scrChRef.current)
+     if (classId) req(`/classes/${classId}/media/stop?k=screen`, { method: 'POST' }).catch(() => {})
+     rebuildOutgoing()
+     toast('ترکیب تصویر فعال شد — صفحه + دوربین در یک کانال؛ آپلود تقریباً نصف شد ✓', 'success')
+   } catch {
+     composeRef.current = false
+     setCompose(false)
+     toast('ترکیب تصویر ممکن نشد — ارسال دو کاناله ادامه دارد', 'error')
+   }
+ }
+
+ const stopCompose = () => {
+   if (!composeRef.current) return
+   composeRef.current = false
+   setCompose(false)
+   cancelAnimationFrame?.(compRAFRef.current)
+   compRAFRef.current = 0
+   compVidsRef.current.forEach((el) => { try { el.pause?.(); el.srcObject = null } catch { /* noop */ } })
+   compVidsRef.current = []
+   try { compStreamRef.current?.getTracks().forEach((t) => t.stop()) } catch { /* noop */ }
+   compStreamRef.current = null
+   compCanvasRef.current = null
+ }
+
+ /* کلید ترکیب: روشن ← بوم + بستن کانال صفحه؛ خاموش ← دو کاناله دوباره */
+ const toggleCompose = () => {
+   if (composeRef.current) {
+     stopCompose()
+     rebuildOutgoing()
+     if (screenStreamRef.current?.getVideoTracks().length) {
+       scrChRef.current.init = true
+       startChannel(scrChRef.current)
+     }
+     toast('ترکیب تصویر خاموش شد — صفحه و دوربین دوباره دو کاناله ارسال می‌شوند', 'info')
+   } else {
+     startCompose()
+   }
+ }
+
  const stopScreenShare = () => {
+   stopCompose() // اگر ترکیب فعال بود، بوم و حلقهٔ رسم بسته شود
    stopChannel(scrChRef.current)
    screenTrackRef.current?.stop()
    screenTrackRef.current = null
@@ -2825,6 +2956,9 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
 <span className="media-chip warn"><i className="dot" /> در انتظار پخش زندهٔ مدرس… به‌محض روشن شدن دوربین یا اشتراک صفحه، همین‌جا نمایش داده می‌شود</span>
 )
 )}
+ {isTeacher && compose && (
+   <span className="media-chip ok"><i className="dot" /> ترکیب تصویر فعال — صفحه + دوربین در یک کانال (آپلود ≈ نصف) • دانش‌آموزان نمای یکپارچه می‌بینند</span>
+ )}
  {isTeacher && recUpload.active && (
    <span className="media-chip warn live-pulse"><i className="dot" /> در حال بایگانی ضبط روی سرور — {faNum(recUpload.prog)}٪ (اتصال را قطع نکنید)</span>
  )}
@@ -3023,6 +3157,12 @@ export default function LiveRoom({ variant = 'teacher', classInfo, devPrefs }) {
  {isTeacher && canShareScreen && (
  <button className={ctl(screen)} onClick={toggleScreenShare} aria-pressed={screen}>
  <Icon name="monitor" /> <span className="ctl-tip">{screen ? 'قطع اشتراک صفحه' : 'اشتراک صفحه سیستم'}</span>
+ </button>
+ )}
+ {/* [ترکیب تصویر — سبک OBS] فقط وقتی اشتراک صفحه فعال است؛ صفحه+دوربین در یک کانال */}
+ {isTeacher && canShareScreen && screen && (
+ <button className={ctl(compose)} onClick={toggleCompose} aria-pressed={compose}>
+ <Icon name="grid" /> <span className="ctl-tip">{compose ? 'خروج از ترکیب تصویر (دو کاناله)' : 'ترکیب تصویر — صفحه+دوربین در یک کانال (نصف آپلود)'}</span>
  </button>
  )}
  {isTeacher && (
